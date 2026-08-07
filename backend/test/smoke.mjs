@@ -107,11 +107,47 @@ async function main() {
   });
   check('unknown category key is rejected', badEnum.status === 400);
 
-  // --- estimate ------------------------------------------------------------
+  // --- estimate + labor rate ----------------------------------------------
+  const rate = await call('GET', '/api/estimates/labor-rate');
+  check('shop labor rate is $185', Number(rate.body.labor_rate) === 185,
+    JSON.stringify(rate.body));
+
   const estimate = await call('POST', '/api/estimates', {
     ticket_id: tid, estimated_hours: 10, parts_cost: 250, confidence: 'high',
   });
   check('estimate created', estimate.status === 201);
+  check('estimate picks up the $185 shop rate by default',
+    Number(estimate.body.labor_rate) === 185, estimate.body.labor_rate);
+
+  // Changing the rate must not restate quotes that already went out.
+  const rateSetting = (settings.body.shop_config || []).find((s) => s.key === 'labor_rate');
+  check('labor rate is exposed as an admin setting', !!rateSetting);
+  await call('PATCH', `/api/settings/${rateSetting.id}`, {
+    meta: { ...rateSetting.meta, value: 195 },
+  });
+  const afterRateChange = await call('GET', `/api/tickets/${tid}`);
+  check('existing estimate keeps its quoted rate after a rate change',
+    Number(afterRateChange.body.estimates[0].labor_rate) === 185,
+    afterRateChange.body.estimates[0].labor_rate);
+
+  const ticket3 = await call('POST', '/api/tickets', {
+    title: 'Rate change check', category_key: 'servicing', priority_key: 'expedited',
+  });
+  const newRateEstimate = await call('POST', '/api/estimates', {
+    ticket_id: ticket3.body.id, estimated_hours: 2,
+  });
+  check('a new estimate picks up the changed rate',
+    Number(newRateEstimate.body.labor_rate) === 195, newRateEstimate.body.labor_rate);
+
+  const explicitRate = await call('POST', '/api/estimates', {
+    ticket_id: ticket3.body.id, estimated_hours: 2, labor_rate: 150,
+  });
+  check('an explicit rate overrides the shop default',
+    Number(explicitRate.body.labor_rate) === 150, explicitRate.body.labor_rate);
+
+  await call('PATCH', `/api/settings/${rateSetting.id}`, {
+    meta: { ...rateSetting.meta, value: 185 },
+  });
 
   const approve = await call('POST', `/api/estimates/${estimate.body.id}/approve`);
   check('estimate approved', approve.status === 200 && !!approve.body.approved_at);

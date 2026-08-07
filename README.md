@@ -57,16 +57,34 @@ half-typed rows that aren't data.
 Current result: 118 tickets, 102 customers, 188 instruments (70 of them the
 showroom fleet), 13 parts orders, 20 rows skipped as formatting artifacts.
 
+## Photos
+
+Uploading is meant to take no thought at all. Photos upload the moment they're
+picked — no submit button — from the camera, the photo library, drag & drop, or
+a clipboard paste. Captions are optional and added inline afterwards, so nothing
+blocks the upload.
+
+Every file is normalised in the browser first
+(`frontend/src/imagePipeline.js`): **HEIC from an iPhone is converted to JPEG**,
+EXIF rotation is baked in so photos aren't sideways, and the longest edge is
+capped at 2560px. A 5 MB phone photo uploads as roughly 400 KB and displays
+everywhere. The HEIC decoder is lazy-loaded, so it's only downloaded by someone
+who actually uploads one.
+
+Failed uploads keep their file and offer Retry rather than making you re-pick.
+
 ## Tests
 
 ```bash
-cd backend && npm test    # smoke.mjs + photos.mjs, against a running API
+cd backend  && npm test   # smoke.mjs + photos.mjs, against a running API
+cd frontend && npm test   # image pipeline unit tests, no stack needed
 ```
 
 `test/smoke.mjs` walks the whole Phase 1 loop: auth and RBAC, ticket creation,
-estimates, hours, the QC gate on invoicing, the status audit trail, and the
-settings guardrails (rename propagates, in-use values can't be deleted).
-`test/photos.mjs` covers the attachment path end to end.
+estimates, the labor-rate setting, hours, the QC gate on invoicing, the status
+audit trail, and the settings guardrails (rename propagates, in-use values can't
+be deleted). `test/photos.mjs` covers the attachment path end to end.
+`frontend/test/` covers the HEIC detection and resize/compress decisions.
 
 ## Deploying
 
@@ -98,3 +116,7 @@ means:
 QC rigor is configuration too: the Perfectionist tier ships with
 `required_rounds: 2` and `require_distinct_reviewers: true`, so PLAN §6's
 two-person sign-off is enforceable without a code change.
+
+The **shop labor rate ($185/hr)** is configuration as well, under Settings →
+Shop configuration. Each estimate copies the rate onto itself when written, so
+changing the rate never restates a quote that has already gone out.

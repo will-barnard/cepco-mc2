@@ -54,8 +54,16 @@ h3 { font-size: 15px; }
   border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 20;
 }
-.topbar .brand { font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
-.topbar .brand small { display: block; font-weight: 400; font-size: 11px; color: var(--text-dim); }
+.topbar .brand {
+  display: flex; align-items: center; gap: 10px;
+  white-space: nowrap; color: var(--text);
+}
+.topbar .brand:hover { text-decoration: none; }
+.topbar .brand-logo { height: 26px; width: auto; display: block; }
+.topbar .brand-text {
+  font-weight: 700; font-size: 14px; letter-spacing: 0.02em;
+  padding-left: 10px; border-left: 1px solid var(--border);
+}
 .topbar nav { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
 .topbar nav a {
   padding: 8px 12px; border-radius: var(--radius);
@@ -197,5 +205,7 @@ tbody tr.clickable { cursor: pointer; }
 @media (max-width: 640px) {
   .page { padding: 14px; }
   .topbar { padding: 10px 14px; gap: 10px; }
-  .topbar .brand small { display: none; }
+  /* On a phone the header has to give its width to the nav. */
+  .topbar .brand-text { display: none; }
+  .topbar .brand-logo { height: 22px; }
 }

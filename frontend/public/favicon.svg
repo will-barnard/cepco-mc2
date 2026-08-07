@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The wordmark is far too wide to read at favicon size, so the brand's
+       lightning bolt stands in for it. -->
+  <rect width="64" height="64" rx="13" fill="#16181d"/>
+  <path d="M36.5 8 L20 34 h10.5 L26 56 L45 28 H33.5 Z" fill="#f5eb00"/>
+</svg>

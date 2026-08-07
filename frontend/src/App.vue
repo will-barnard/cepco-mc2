@@ -2,6 +2,7 @@
 import { onMounted, watch } from 'vue';
 import { RouterView, RouterLink, useRouter } from 'vue-router';
 import { useAuth, useSettings, useRefData } from './stores';
+import logoUrl from './assets/cepco-logo-light.png';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -29,8 +30,8 @@ async function signOut() {
   <div class="app-shell">
     <header v-if="auth.signedIn" class="topbar">
       <RouterLink to="/" class="brand">
-        Mission Control
-        <small>Chicago Electric Piano</small>
+        <img :src="logoUrl" alt="Chicago Electric Piano Company" class="brand-logo" />
+        <span class="brand-text">Mission Control</span>
       </RouterLink>
 
       <nav>

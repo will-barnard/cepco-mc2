@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import api from '../api';
 import { useAuth } from '../stores';
 
@@ -16,9 +16,16 @@ const form = ref({
   additional_hours: '',
   additional_hours_note: '',
   parts_cost: '',
-  labor_rate: 175,
+  labor_rate: null,
   confidence: 'med',
   notes: '',
+});
+
+// The default rate is shop configuration, not a hardcoded number — an admin
+// can change it under Settings without a deploy.
+onMounted(async () => {
+  const { labor_rate: rate } = await api.get('/estimates/labor-rate');
+  form.value.labor_rate = rate;
 });
 
 const current = computed(() => props.ticket.estimates?.[0]);
@@ -38,7 +45,7 @@ async function submit() {
       additional_hours: Number(form.value.additional_hours) || 0,
       additional_hours_note: form.value.additional_hours_note || null,
       parts_cost: Number(form.value.parts_cost) || 0,
-      labor_rate: Number(form.value.labor_rate) || 175,
+      labor_rate: form.value.labor_rate,
       confidence: form.value.confidence,
       notes: form.value.notes || null,
     });

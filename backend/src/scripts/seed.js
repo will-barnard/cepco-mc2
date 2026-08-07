@@ -54,6 +54,12 @@ const SETTINGS = [
     { examples: ['grommets', 'felts', 'basic prep'] }],
   ['tech_level', 'senior', 'Senior Tech', 20,
     { examples: ['action regulation', 'tuning', 'electronics diagnostics'] }],
+
+  // Shop-wide values. Not a ticket enum — single rows the admin can change
+  // without a deploy. Each new estimate copies the rate onto itself, so
+  // changing this never restates a quote that already went out.
+  ['shop_config', 'labor_rate', 'Shop labor rate ($/hr)', 10,
+    { value: 185, unit: 'usd_per_hour' }],
 ];
 
 // ---------------------------------------------------------------------------

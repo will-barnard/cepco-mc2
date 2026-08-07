@@ -4,11 +4,18 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const settings = require('../services/settings');
 
 const router = express.Router();
 router.use(requireAuth);
 
 const CONFIDENCE = ['high', 'med', 'low'];
+const DEFAULT_LABOR_RATE = 185.00;
+
+/** The current shop rate, so the UI and the API agree on the default. */
+router.get('/labor-rate', asyncHandler(async (req, res) => {
+  res.json({ labor_rate: await settings.shopConfigNumber('labor_rate', DEFAULT_LABOR_RATE) });
+}));
 
 router.post('/', requireRole('senior'), asyncHandler(async (req, res) => {
   const b = req.body || {};
@@ -16,14 +23,22 @@ router.post('/', requireRole('senior'), asyncHandler(async (req, res) => {
   if (b.confidence && !CONFIDENCE.includes(b.confidence)) {
     throw badRequest(`confidence must be one of: ${CONFIDENCE.join(', ')}`);
   }
+
+  // Rate comes from settings unless this estimate explicitly overrides it. It
+  // is then frozen onto the row, so a later rate change never restates a quote
+  // that has already gone out.
+  const laborRate = b.labor_rate !== undefined && b.labor_rate !== null && b.labor_rate !== ''
+    ? Number(b.labor_rate)
+    : await settings.shopConfigNumber('labor_rate', DEFAULT_LABOR_RATE);
+
   const { rows } = await query(
     `INSERT INTO estimates (ticket_id, parts_cost, estimated_hours, additional_hours,
                             additional_hours_note, labor_rate, confidence, notes, created_by)
      VALUES ($1, COALESCE($2,0), COALESCE($3,0), COALESCE($4,0), $5,
-             COALESCE($6,175.00), COALESCE($7,'med'), $8, $9)
+             $6, COALESCE($7,'med'), $8, $9)
      RETURNING *`,
     [b.ticket_id, b.parts_cost, b.estimated_hours, b.additional_hours,
-      b.additional_hours_note || null, b.labor_rate, b.confidence, b.notes || null, req.user.id],
+      b.additional_hours_note || null, laborRate, b.confidence, b.notes || null, req.user.id],
   );
   res.status(201).json(rows[0]);
 }));

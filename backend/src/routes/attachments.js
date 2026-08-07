@@ -149,6 +149,21 @@ router.get('/file/:key(*)', asyncHandler(async (req, res) => {
   res.send(buffer);
 }));
 
+/**
+ * Caption edit. Deliberately separate from upload so a tech can fire photos up
+ * from the shop floor first and describe them later, or never.
+ */
+router.patch('/:id', asyncHandler(async (req, res) => {
+  const caption = req.body?.caption;
+  if (caption === undefined) throw badRequest('caption is required');
+  const { rows } = await query(
+    'UPDATE ticket_attachments SET caption = $2 WHERE id = $1 RETURNING *',
+    [req.params.id, caption === '' ? null : String(caption).slice(0, 500)],
+  );
+  if (!rows[0]) throw notFound('Attachment not found');
+  res.json(rows[0]);
+}));
+
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM ticket_attachments WHERE id = $1', [req.params.id]);
   if (!rows[0]) throw notFound('Attachment not found');

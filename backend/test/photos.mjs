@@ -105,6 +105,20 @@ async function main() {
   const row = listing.body.find((t) => t.id === tid);
   check('attachment count shows in the ticket list', row.attachment_count === 2, `${row.attachment_count}`);
 
+  // --- caption editing after upload ---------------------------------------
+  const captioned = await call('PATCH', `/api/attachments/${list.body[1].id}`, {
+    caption: 'hammer tips after',
+  });
+  check('caption can be set after upload',
+    captioned.status === 200 && captioned.body.caption === 'hammer tips after',
+    JSON.stringify(captioned.body));
+
+  const cleared = await call('PATCH', `/api/attachments/${list.body[1].id}`, { caption: '' });
+  check('clearing a caption stores null', cleared.body.caption === null);
+
+  const missingCaption = await call('PATCH', `/api/attachments/${list.body[1].id}`, {});
+  check('caption patch requires a caption field', missingCaption.status === 400);
+
   // --- delete --------------------------------------------------------------
   const del = await call('DELETE', `/api/attachments/${list.body[0].id}`);
   check('photo deletes', del.status === 200);

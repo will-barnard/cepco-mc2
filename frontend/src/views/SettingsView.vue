@@ -99,6 +99,24 @@ async function remove(row) {
   }
 }
 
+async function setShopValue(row, value) {
+  error.value = '';
+  notice.value = '';
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    error.value = 'Enter a positive number.';
+    return;
+  }
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, value: num } });
+    notice.value = `${row.label} is now ${num}. Estimates already written keep the rate `
+      + 'they were quoted at.';
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function setRequiredRounds(row, value) {
   error.value = '';
   try {
@@ -164,6 +182,24 @@ onMounted(refresh);
     <div v-if="notice" class="alert ok" style="margin-bottom: 16px">{{ notice }}</div>
 
     <div class="stack">
+      <!-- ------------------------------------------------ shop-wide values -->
+      <div class="card">
+        <h2>Shop configuration</h2>
+        <p class="muted small" style="margin-top: -6px">
+          Changing the rate affects new estimates only. Estimates already written keep the
+          rate they were quoted at.
+        </p>
+        <div class="field-row">
+          <div v-for="row in settings.data.shop_config || []" :key="row.id" class="field">
+            <label>{{ row.label }}</label>
+            <input
+              type="number" step="1" min="1" :value="row.meta.value"
+              @change="setShopValue(row, $event.target.value)"
+            />
+          </div>
+        </div>
+      </div>
+
       <div v-for="[category, title] in CATEGORIES" :key="category" class="card">
         <h2>{{ title }}</h2>
 

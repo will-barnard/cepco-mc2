@@ -26,11 +26,13 @@ Extra beyond Phase 1, because they were nearly free once the schema existed:
 parts orders tracking, shipments, invoice records with the QC gate, the fleet
 view, and the estimate-vs-actual accuracy report.
 
-**Verification.** 41 API smoke assertions and 16 attachment assertions, all
-passing against real PostgreSQL 18 with the real CSVs imported:
+**Verification.** 47 API smoke assertions, 19 attachment assertions and 11
+image-pipeline unit tests, all passing against real PostgreSQL 18 with the real
+CSVs imported:
 
 ```bash
-cd backend && npm test    # needs the stack up; see README
+cd backend  && npm test   # needs the stack up; see README
+cd frontend && npm test   # pure unit tests, no stack needed
 ```
 
 ---
@@ -52,23 +54,33 @@ against real estimates for a while. That's fine — it just means Phase 2's
 "estimate confidence fed by historical hours" starts from zero rather than from
 the sheets. Worth knowing before anyone expects it to be useful on day one.
 
-### 2.2 iPhone photos are HEIC, and browsers won't render them
+### 2.2 iPhone photos — RESOLVED, converted in the browser
 
-`image/heic` and `image/heif` are in the accepted MIME list, so uploads succeed.
-But no major browser can display HEIC in an `<img>` tag, so those photos upload
-fine and then show as broken thumbnails.
+Previously flagged as a problem; now handled. `frontend/src/imagePipeline.js`
+normalises every file before it leaves the browser:
 
-Three ways out, in order of preference:
+- **HEIC → JPEG** via `heic2any`, lazily imported so only a tech who actually
+  uploads a HEIC downloads the 1.3 MB decoder. Desktop users never fetch it.
+- **EXIF orientation baked into the pixels**, so phone photos stop arriving
+  sideways.
+- **Longest edge capped at 2560px, re-encoded at JPEG q0.85.** A 5 MB phone
+  photo becomes roughly 400 KB — a real difference when uploading a dozen of
+  them over shop wifi.
+- **Passthrough for anything already small and web-safe**, and if re-encoding
+  would somehow produce a *bigger* file, the original is kept.
 
-1. Ask techs to set iOS → Settings → Camera → Formats → **Most Compatible**.
-   Free, immediate, but relies on every phone being configured.
-2. Convert on upload in the backend (`sharp` with libheif). Adds a native
-   dependency to the image.
-3. Convert client-side before upload (`heic2any`). Keeps the server simple,
-   costs phone battery on large files.
+Detection matters more than it looks: iOS frequently hands over a HEIC with an
+empty `type`, so the check tests the filename as well as the MIME type. That
+case is covered by a unit test.
 
-I'd do (1) now and (2) if it turns out to be a recurring annoyance. Nothing in
-this build blocks any of them.
+The server still accepts HEIC as a fallback, so an upload can't hard-fail if
+conversion misbehaves on some future browser — but in practice nothing HEIC
+should ever reach it.
+
+One thing genuinely untestable here: the HEIC decode itself needs a real
+WASM-capable browser, so it's stubbed in the unit tests. **Worth confirming
+with one real photo off your phone on first use.** Everything routing into it
+is tested.
 
 ### 2.3 Free-form statuses mean nonsense transitions are possible
 
@@ -124,13 +136,22 @@ on the estimate. If the intent was really "quote first, ticket on acceptance,"
 that needs either a nullable `ticket_id` or a separate `quotes` table before the
 Phase 2 quote-email work starts. Worth settling before then.
 
-### 2.8 Labor rate is stored per estimate
+### 2.8 Labor rate — RESOLVED, now $185 and admin-editable
 
-`$175/hr` from JOB QUEUE is the default on `estimates.labor_rate`, so historical
-estimates keep the rate they were quoted at when the rate changes. The cost of
-that is there's no single place to change the current rate — a new default means
-a code change. If the rate moves more than rarely, promote it to a `settings`
-row and read the default from there.
+The rate moved, which is exactly the case this was flagged for, so it became
+configuration rather than a constant. It now lives in a `shop_config` settings
+row (migration `002`) and is editable under **Settings → Shop configuration**.
+
+The important property is preserved: each estimate copies the rate onto its own
+row at write time, so **changing the shop rate never restates a quote that has
+already gone out**. That's covered by a test — the rate is changed mid-suite and
+the existing estimate is asserted to still read $185 while a new one picks up
+the new value.
+
+Historical imports are deliberately pinned to **$175**, the rate the sheets were
+quoted at (JOB QUEUE.csv's labour-rate rows). They were not backfilled.
+
+An estimate can still override the rate per job if a particular quote needs it.
 
 ### 2.9 No rate limiting on login
 
@@ -267,6 +288,20 @@ SELECT driver, count(*) FROM ticket_attachments GROUP BY driver;
 If the count under `local` is small, re-uploading through the UI is the least
 fiddly fix. If it's large, copy the volume contents to the bucket preserving
 paths and `UPDATE ticket_attachments SET driver = 'gcs' WHERE driver = 'local'`.
+
+---
+
+### 2.11 Photo uploads are capped at 2560px
+
+The pipeline caps the longest edge at 2560px before upload. That's ample for
+before/after documentation and for zooming in on a reed or a hammer tip, and it
+keeps uploads fast on shop wifi.
+
+If some job ever needs true full-resolution evidence — a cosmetic restoration
+where fine grain matters, say — that cap is one constant in
+`frontend/src/imagePipeline.js` (`MAX_EDGE`). Flagging it because it's a
+deliberate quality/speed trade, not an accident, and it's lossy: the original
+file is never uploaded.
 
 ---
 

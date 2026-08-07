@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuth } from '../stores';
+import logoUrl from '../assets/cepco-logo-light-lg.png';
 
 const auth = useAuth();
 const router = useRouter();
@@ -27,11 +28,14 @@ async function submit() {
 </script>
 
 <template>
-  <div class="page" style="max-width: 400px; padding-top: 12vh">
-    <h1>Mission Control</h1>
-    <p class="muted" style="margin-top: -6px">Chicago Electric Piano Company</p>
+  <div class="page" style="max-width: 400px; padding-top: 10vh">
+    <img
+      :src="logoUrl" alt="Chicago Electric Piano Company"
+      style="width: 100%; max-width: 340px; height: auto; display: block"
+    />
+    <h1 style="margin-top: 20px">Mission Control</h1>
 
-    <form class="card" style="margin-top: 24px" @submit.prevent="submit">
+    <form class="card" style="margin-top: 20px" @submit.prevent="submit">
       <div class="field">
         <label for="email">Email</label>
         <input id="email" v-model="email" type="email" autocomplete="username" required />

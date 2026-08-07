@@ -218,9 +218,11 @@ async function createEstimate(ticketId, hours) {
   const n = Number(hours);
   if (!Number.isFinite(n) || n <= 0) return;
   if (DRY_RUN) { report.created.estimates += 1; return; }
+  // Historical rows are pinned to the $175 rate the sheets were quoted at,
+  // not the current shop rate — see JOB QUEUE.csv's labour-rate rows.
   await query(
-    `INSERT INTO estimates (ticket_id, estimated_hours, confidence, notes)
-     VALUES ($1, $2, 'low', 'Imported from Google Sheets — Estimated Hrs column')`,
+    `INSERT INTO estimates (ticket_id, estimated_hours, labor_rate, confidence, notes)
+     VALUES ($1, $2, 175.00, 'low', 'Imported from Google Sheets — Estimated Hrs column')`,
     [ticketId, n],
   );
   report.created.estimates += 1;

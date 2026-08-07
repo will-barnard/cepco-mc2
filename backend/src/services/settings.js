@@ -18,6 +18,9 @@ const CATEGORIES = [
   'priority_tier',
   'qc_tier',
   'tech_level',
+  // Not a ticket enum — single-row shop-wide values (labor rate, etc.) that
+  // shouldn't need a deploy to change.
+  'shop_config',
 ];
 
 // Which ticket column each settings category backs — used to block deletion of
@@ -134,6 +137,16 @@ async function update(id, { label, sort_order, meta, retired }) {
   return rows[0];
 }
 
+/** Read a numeric value out of a shop_config row, with a fallback. */
+async function shopConfigNumber(key, fallback) {
+  const { rows } = await query(
+    "SELECT meta FROM settings WHERE category = 'shop_config' AND key = $1",
+    [key],
+  );
+  const value = Number(rows[0]?.meta?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 async function countUsage(category, key) {
   const column = USAGE_COLUMN[category];
   if (!column) return 0;
@@ -172,5 +185,6 @@ module.exports = {
   update,
   remove,
   countUsage,
+  shopConfigNumber,
   slugify,
 };
