@@ -1,0 +1,35 @@
+Date,Status,Client,Instrument,Multi Inst.,Notes & Parts,Estimated Hrs,Shop Contact,Shipping,Painting,Key Tops,Woodshop,Plastics,Metal Fab,Other Vendor
+Quick Setup (3-6hr) & Expedited,,,,,,,,,,,,,,
+Date,Status,Client,Instrument,Multi Inst.,Notes & Parts,Estimated Hrs,Shop Contact,Shipping,Painting,Key Tops,Woodshop,Plastics,Metal Fab,Other Vendor
+,Not Started,Brendan Kane,Selmer Clavioline & Elka String Machine,TRUE,Trading amplifiers and other stuff for store credit,,,None,None,None,None,None,None,None
+,DONE,Krista,Teisco Checkmate,FALSE,"finish previously started recap, vibrato, quick job in June",,,None,None,None,None,None,None,None
+,Not Started,Bryan Lewis,Micro Moog,TRUE,"evaluate, calibrate",,,,,,,,,
+,e,,ic,FALSE,,,,None,None,None,None,None,None,None
+,,m,,FALSE,on,,,None,None,None,None,None,None,None
+Standard Setup (7-15hr),,,,,,,,,,,,,,
+Date,Status,Client,Instrument,Multi Inst.,Notes & Parts,Estimated Hrs,Shop Contact,Shipping,Painting,Key Tops,Woodshop,Plastics,Metal Fab,Other Vendor
+,ON HOLD,Craig Mollenkamp,Oberheim Matrix 12,FALSE,Encoder replacement kit installation ,,,None,None,None,None,None,None,None
+,ON HOLD,Jarin Ficner,Farfisa VIP 255,FALSE,"EST 8-10 hrs, mostly bushings",,,None,None,None,None,None,None,None
+12/11,Reservation,Ryan Wiese,Vox Continental ,FALSE,Full Service - Detroit Reservation,,,None,None,None,None,None,None,None
+4/19/2025,Reservation,Mark Gamber,Acetone Top 5,FALSE,Casual Reservation (no down payment),,,None,None,None,None,None,None,None
+,Not Started,Scott Szczurek,Ondioline,FALSE,,,,,,,,,,
+,INVOICE SENT,Jacob Croegaert,RMI 300B ,TRUE,,,,None,None,None,None,None,None,None
+1/7/2026,INVOICE SENT,Keith Nelson,RMI 300B ,TRUE,Harpsi voice isn't working. All notes sound.,,,None,None,None,None,None,None,None
+4/24,Reservation,Cliff Ulsberger,Vox Continental,FALSE,Casual Reservation (no deposit),,,None,None,None,None,None,None,None
+4/28,QC,Steve Masters,RMIx 368 - inventory sale,FALSE,shipping to UK - change mains xformer,,,None,None,None,None,None,None,None
+,Not Started,Andrew Stump,Gibson G101,FALSE,"Recapping power supply main voice sustain, ignoring bass and other circuit recap.  Needs case repairs, mounting hardware missing, key cleaning, two keys have broken keyframe hooks.  New power cable, fuse, redo volume pedal cabling",,,None,None,None,None,None,None,None
+,Select Status,,,FALSE,,,,None,None,None,None,None,None,None
+,Select Status,,,FALSE,,,,None,None,None,None,None,None,None
+Custom Shop & Deep Dive,,,,,,,,,,,,,,
+Date,Status,Client,Instrument,Multi Inst.,Notes & Parts,Estimated Hrs,Shop Contact,Shipping,Painting,Key Tops,Woodshop,Plastics,Metal Fab,Other Vendor
+,DONE,Connor Schon,Streetly Mellotron,FALSE,matching plexi; assess for servicing,,,None,None,None,None,In Progress,None,None
+,Not Started,Benny Lozano,Farf Accordian ,FALSE,,,,None,None,None,None,None,None,None
+,,Keith Nelson,RMI (and CP-80),TRUE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
+,,,,FALSE,,,,None,None,None,None,None,None,None
