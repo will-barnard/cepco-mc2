@@ -267,6 +267,34 @@ async function main() {
 
   const juniorReads = await call('GET', '/api/tickets');
   check('junior tech can read tickets', juniorReads.status === 200);
+
+  // --- self-service password change -----------------------------------
+  const wrongCurrent = await call('POST', '/api/auth/change-password', {
+    current_password: 'not-the-real-password', new_password: 'junior-password-2',
+  });
+  check('change-password rejects wrong current password', wrongCurrent.status === 401);
+
+  const tooShort = await call('POST', '/api/auth/change-password', {
+    current_password: 'junior-password-1', new_password: 'short',
+  });
+  check('change-password rejects a too-short new password', tooShort.status === 400);
+
+  const changed = await call('POST', '/api/auth/change-password', {
+    current_password: 'junior-password-1', new_password: 'junior-password-2',
+  });
+  check('junior tech can change their own password', changed.status === 200);
+
+  cookie = '';
+  const oldPasswordLogin = await call('POST', '/api/auth/login', {
+    email: 'junior.smoke@example.com', password: 'junior-password-1',
+  });
+  check('old password no longer works after change', oldPasswordLogin.status === 401);
+
+  const newPasswordLogin = await call('POST', '/api/auth/login', {
+    email: 'junior.smoke@example.com', password: 'junior-password-2',
+  });
+  check('new password logs in', newPasswordLogin.status === 200);
+
   cookie = adminCookie;
 
   const noAuth = await fetch(`${BASE}/api/tickets`);

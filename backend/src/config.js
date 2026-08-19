@@ -15,7 +15,9 @@ const config = {
   },
 
   jwtSecret: process.env.JWT_SECRET || 'dev-only-insecure-secret',
-  jwtTtlSeconds: int(process.env.JWT_TTL_SECONDS, 60 * 60 * 12),
+  // Long-lived on purpose: internal tool on a private domain, techs shouldn't
+  // have to re-login on the shop floor. Overridable via JWT_TTL_SECONDS.
+  jwtTtlSeconds: int(process.env.JWT_TTL_SECONDS, 60 * 60 * 24 * 365 * 2),
 
   storage: {
     driver: (process.env.STORAGE_DRIVER || 'local').toLowerCase(),

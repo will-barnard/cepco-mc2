@@ -45,7 +45,7 @@ async function signOut() {
       </nav>
 
       <div class="row nowrap">
-        <span class="muted small">{{ auth.user.name }}</span>
+        <RouterLink to="/account" class="muted small">{{ auth.user.name }}</RouterLink>
         <button class="small" @click="signOut">Sign out</button>
       </div>
     </header>

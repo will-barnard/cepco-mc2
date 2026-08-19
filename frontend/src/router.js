@@ -11,6 +11,7 @@ const routes = [
   { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
   { path: '/parts', name: 'parts', component: () => import('./views/PartsView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
+  { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
