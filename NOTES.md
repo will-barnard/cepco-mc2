@@ -752,9 +752,124 @@ without touching code.
   corrupt history either way, but retiring keeps the option to bring an old
   checklist back without retyping it.
 
+### 2.24 Standard procedures + customer estimates — resolving §2.7
+
+The ask: a price/hours catalog per instrument type ("standard procedures"),
+an Estimates page for building a customer quote from it across one or more
+instruments, emailing it with a confirm/decline link, and having a
+confirmation create the ticket(s) if the shop hasn't already made them by
+hand. This is PLAN §5 in full — and it's also, almost word for word, the
+exact gap §2.7 flagged: "PLAN §5 says confirming an estimate should
+auto-generate the associated ticket(s). §12 defines `estimates.ticket_id`
+as required — an estimate belongs to a ticket. Both can't be true at once
+... worth settling before [Phase 2's quote-email work] starts." This is
+that settling.
+
+**One table, two kinds of row, not two tables.** `estimates` already meant
+something — a tech's post-intake hours/parts estimate, logged against a
+ticket that already exists, feeding the actual-vs-estimate reporting in
+`routes/estimates.js`'s `/reference`. That's real and stays exactly as it
+was: `routes/estimates.js` is untouched, byte for byte. A customer quote is
+a genuinely different shape (a customer, no ticket yet, a list of
+instrument+procedure line items, an email/confirm lifecycle) but it's still
+legitimately "an estimate" in the shop's own vocabulary, so migration 011
+adds a `kind` column (`'ticket_estimate'` — the untouched default every
+existing row keeps — or `'customer_quote'`) plus the columns the new kind
+needs, rather than standing up a same-meaning `quotes` table next to it.
+`ticket_id` becomes nullable: a `ticket_estimate` row always has one
+(enforced in application code, same as most cross-field rules in this app,
+not a DB constraint); a `customer_quote` row never does, even after
+conversion — see below. `routes/quotes.js` is a new, separate route file
+even though it shares the table: the two payload shapes have nothing in
+common, so one file branching on `kind` everywhere would be worse than two
+small files that each only ever touch their own kind.
+
+**Why a quote can produce more than one ticket.** Confirming/converting a
+multi-instrument quote makes one ticket per distinct instrument — not one
+combined ticket — because that's what the existing ticket model actually
+supports: `tickets.instrument_id` is singular, and `multi_instrument` is
+just an acknowledgement flag on a single-instrument ticket, not a real list
+(see §2.18's neighbor comment and TicketNewView.vue). Building real
+multi-instrument tickets would be a bigger structural change than this ask
+called for, and one ticket per instrument keeps every existing per-ticket
+mechanism (status, assignee, QC, invoicing) working unmodified for
+estimate-born tickets exactly as it does for any other. Consequence: a
+single `estimates.ticket_id` column couldn't represent "the ticket(s) this
+quote produced" even if it were being reused, so a `customer_quote` row
+never populates its own `ticket_id` — the link runs the other way, via a
+new `tickets.source_estimate_id` (same shape as `source_ticket_id`,
+migration 008, §2.22's sub-tickets). `estimate_items.ticket_id` tracks
+which specific ticket each line item ended up on (several items can share
+one, when they're for the same instrument).
+
+**Everything is snapshotted at add-time.** `estimate_items` copies the
+procedure's name/pricing and the instrument's family/model onto the row
+the moment it's added — same reasoning as `qc_checks` snapshotting
+`qc_templates.items` (§2.23) and tickets snapshotting settings labels: a
+later rename or re-price of a standard procedure, or a change to an
+instrument's record, must never rewrite a quote that's already gone out to
+a customer. The estimate itself freezes the shop's labor rate at creation
+(`estimates.labor_rate`, the same column `routes/estimates.js` already used
+for this exact purpose) so a rate change afterward doesn't restate a quote
+either.
+
+**One shared conversion path, called from three places.**
+`routes/quotes.js` exports `createTicketsForEstimate()`; it's called by
+staff clicking "Create ticket manually" on the estimate (`POST
+/quotes/:id/create-tickets`), by the customer clicking confirm on the
+public page (`POST /public/quotes/:token/confirm`), and by nothing else.
+It runs under `SELECT ... FOR UPDATE`, so whichever of "staff converts it
+first" and "customer confirms first" happens first wins outright — the
+loser sees `status = 'ticket_created'` already set and returns the
+tickets that exist instead of erroring or double-creating. This is what
+lets the button and the email both say "this creates the ticket" without
+either one needing to know whether the other already ran.
+
+**The public link is a page, not an action.** The confirm/decline buttons
+in `templates/quoteEmail.js`'s email both point at the same URL — a public,
+token-looked-up frontend route (`/quote/:token`, `router.js`'s new
+`alwaysPublic` flag so a signed-in employee previewing their own link
+doesn't get bounced to the dashboard the way every other `meta.public`
+route would). Confirming or declining only ever happens from a real button
+click on that page (`POST /public/quotes/:token/confirm` or `.../decline`),
+never from the page's own GET load — a GET link that changes state is
+unsafe in email, since mail security scanners and some clients prefetch
+every link in a message body, which would silently "confirm" or "decline"
+an estimate nobody actually looked at. `backend/src/routes/publicQuotes.js`
+has no `requireAuth` and looks estimates up only by the random
+`confirm_token` (24 random bytes, migration 011), never by the numeric id,
+so a link can't be guessed the way a sequential id could.
+
+**Decline exists but does nothing beyond recording itself** (no
+notification, no ticket-side effect) — that's deliberately as far as this
+first version goes. A declined quote can still be confirmed later (the
+public page offers "Actually, let's proceed" instead of the normal
+confirm/decline pair) — confirm always wins over an earlier decline. The
+one thing decline can't undo is a quote that's already `ticket_created`;
+work has started by then.
+
+**New settings screen, same shape as §2.23's.** `ProceduresView.vue`
+(Settings -> Standard procedures) manages `standard_procedures` — name,
+instrument type (nullable = "every type," same convention as
+`qc_templates.family`), and pricing as either an hours range (billed at the
+shop's labor rate) or a flat cost, never both (enforced by a DB CHECK,
+migration 010, and by the form only ever showing the fields for whichever
+type is selected). Same admin screen conventions as QC templates: inline
+autosave, `include_inactive=true` for the admin view only, Retire/Restore
+instead of delete.
+
+**Not built, worth knowing:** no quote expiration; no line-item quantities
+(each procedure is a flat one-off per instrument, matching what was asked
+for); no notification back to staff when a customer confirms or declines
+(the Estimates list is the way to notice — a future version could email
+the shop, too); `APP_BASE_URL` must be set (`.env.example`) for "Email
+estimate" to work at all — same "fails clearly instead of sending
+something broken" posture as the missing-Resend-keys case it already had.
+
 ---
 
 ## 4. Suggested first moves after deploy
+
 
 1. Set `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, deploy, log in, change the
    password immediately (`POST /api/auth/change-password`).

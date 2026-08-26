@@ -1,0 +1,469 @@
+'use strict';
+
+/**
+ * Customer-facing quotes — the "Estimates" page. Lives on the same
+ * `estimates`/`estimate_items` tables as routes/estimates.js's internal,
+ * post-ticket hours estimates (migration 011 added `kind` to tell them
+ * apart), but as its own route file: the two payload shapes (a handful of
+ * numbers on an existing ticket, vs. a customer + a list of
+ * instrument/procedure line items with no ticket yet) have nothing in
+ * common, so sharing handlers would just mean branching on `kind`
+ * everywhere. Every route here hardcodes kind = 'customer_quote' and never
+ * touches a 'ticket_estimate' row. See NOTES.md for the full writeup.
+ */
+
+const express = require('express');
+const crypto = require('crypto');
+const { query, withTransaction } = require('../db');
+const { requireAuth } = require('../middleware/auth');
+const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
+const settings = require('../services/settings');
+const config = require('../config');
+const { sendEmail } = require('../mailer');
+const { buildQuoteEmail } = require('../templates/quoteEmail');
+const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
+
+const router = express.Router();
+router.use(requireAuth);
+
+const DEFAULT_LABOR_RATE = 185.00;
+const DEFAULT_CATEGORY_KEY = 'servicing';
+const DEFAULT_PRIORITY_KEY = 'standard_setup';
+
+const QUOTE_SELECT = `
+  SELECT e.*, c.name AS customer_name, c.email AS customer_email
+    FROM estimates e
+    LEFT JOIN customers c ON c.id = e.customer_id
+`;
+
+/** Dollar range across an estimate's items, using its own frozen labor_rate
+ * (never the live shop_config value — see comment on `labor_rate` below). */
+function totalsFor(items, laborRate) {
+  let minCost = 0;
+  let maxCost = 0;
+  let minHours = 0;
+  let maxHours = 0;
+  for (const item of items) {
+    if (item.pricing_type === 'flat') {
+      minCost += Number(item.flat_cost);
+      maxCost += Number(item.flat_cost);
+    } else {
+      minCost += Number(item.min_hours) * laborRate;
+      maxCost += Number(item.max_hours) * laborRate;
+      minHours += Number(item.min_hours);
+      maxHours += Number(item.max_hours);
+    }
+  }
+  return {
+    min_cost: Math.round(minCost * 100) / 100,
+    max_cost: Math.round(maxCost * 100) / 100,
+    min_hours: minHours,
+    max_hours: maxHours,
+  };
+}
+
+async function loadItems(estimateId) {
+  const { rows } = await query(
+    'SELECT * FROM estimate_items WHERE estimate_id = $1 ORDER BY sort_order, id',
+    [estimateId],
+  );
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// List — the Estimates page. Defaults to "ongoing" (everything short of a
+// finished conversion); ?status=all or an explicit ?status= overrides that.
+// ---------------------------------------------------------------------------
+router.get('/', asyncHandler(async (req, res) => {
+  const clauses = ["e.kind = 'customer_quote'"];
+  const params = [];
+  if (req.query.status && req.query.status !== 'all') {
+    params.push(req.query.status);
+    clauses.push(`e.status = $${params.length}`);
+  } else if (!req.query.status) {
+    clauses.push("e.status != 'ticket_created'");
+  }
+  const { rows } = await query(
+    `SELECT e.*, c.name AS customer_name, c.email AS customer_email,
+            COALESCE(agg.item_count, 0) AS item_count,
+            COALESCE(agg.min_cost, 0)   AS min_cost,
+            COALESCE(agg.max_cost, 0)   AS max_cost
+       FROM estimates e
+       LEFT JOIN customers c ON c.id = e.customer_id
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS item_count,
+                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost ELSE min_hours * e.labor_rate END) AS min_cost,
+                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost ELSE max_hours * e.labor_rate END) AS max_cost
+           FROM estimate_items WHERE estimate_id = e.id
+       ) agg ON TRUE
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY e.created_at DESC`,
+    params,
+  );
+  res.json(rows);
+}));
+
+// ---------------------------------------------------------------------------
+// Detail — the estimate plus its items and whatever tickets it has already
+// produced (empty until status = 'ticket_created').
+// ---------------------------------------------------------------------------
+router.get('/:id', asyncHandler(async (req, res) => {
+  const { rows } = await query(`${QUOTE_SELECT} WHERE e.id = $1 AND e.kind = 'customer_quote'`, [req.params.id]);
+  const estimate = rows[0];
+  if (!estimate) throw notFound('Estimate not found');
+
+  const [items, tickets] = await Promise.all([
+    loadItems(estimate.id),
+    query(
+      `SELECT t.id, t.title, t.instrument_id, t.category_label_snapshot,
+              t.status_key, t.status_label_snapshot
+         FROM tickets t WHERE t.source_estimate_id = $1 ORDER BY t.created_at`,
+      [estimate.id],
+    ),
+  ]);
+
+  res.json({
+    ...estimate,
+    items,
+    tickets: tickets.rows,
+    ...totalsFor(items, Number(estimate.labor_rate)),
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// Create — customer + a list of {instrument_id, procedure_id} pairs.
+// Creating the customer or an instrument that doesn't exist yet happens
+// through the normal POST /customers / POST /instruments first (same as
+// TicketNewView.vue already does) — this route only ever links ids that
+// already exist, same division of labor as POST /tickets.
+// ---------------------------------------------------------------------------
+router.post('/', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  if (!b.customer_id) throw badRequest('customer_id is required');
+  if (!Array.isArray(b.items) || !b.items.length) throw badRequest('At least one line item is required');
+
+  const { rows: customerRows } = await query('SELECT * FROM customers WHERE id = $1', [b.customer_id]);
+  const customer = customerRows[0];
+  if (!customer) throw badRequest(`Customer #${b.customer_id} not found`);
+
+  const categoryKey = b.category_key || DEFAULT_CATEGORY_KEY;
+  const priorityKey = b.priority_key || DEFAULT_PRIORITY_KEY;
+  await settings.resolveActive('ticket_category', categoryKey);
+  await settings.resolveActive('priority_tier', priorityKey);
+
+  const laborRate = await settings.shopConfigNumber('labor_rate', DEFAULT_LABOR_RATE);
+
+  // Resolve + snapshot every item's instrument and procedure up front, so a
+  // bad id in the middle of the list fails before anything is written.
+  const resolvedItems = [];
+  for (const item of b.items) {
+    if (!item.procedure_id) throw badRequest('Each item needs a procedure_id');
+    // eslint-disable-next-line no-await-in-loop
+    const { rows: procRows } = await query('SELECT * FROM standard_procedures WHERE id = $1', [item.procedure_id]);
+    const procedure = procRows[0];
+    if (!procedure) throw badRequest(`Procedure #${item.procedure_id} not found`);
+
+    let instrument = null;
+    if (item.instrument_id) {
+      // eslint-disable-next-line no-await-in-loop
+      const { rows: instRows } = await query('SELECT * FROM instruments WHERE id = $1', [item.instrument_id]);
+      instrument = instRows[0];
+      if (!instrument) throw badRequest(`Instrument #${item.instrument_id} not found`);
+    }
+
+    resolvedItems.push({
+      instrument_id: instrument ? instrument.id : null,
+      instrument_family: instrument ? instrument.family : null,
+      instrument_model: instrument ? instrument.model : null,
+      procedure_id: procedure.id,
+      procedure_name: procedure.name,
+      pricing_type: procedure.pricing_type,
+      min_hours: procedure.min_hours,
+      max_hours: procedure.max_hours,
+      flat_cost: procedure.flat_cost,
+    });
+  }
+
+  const estimate = await withTransaction(async (client) => {
+    const { rows: created } = await client.query(
+      `INSERT INTO estimates (kind, customer_id, title, category_key, priority_key,
+                              labor_rate, notes, created_by)
+       VALUES ('customer_quote', $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        customer.id,
+        b.title || `${customer.name} — estimate`,
+        categoryKey, priorityKey, laborRate,
+        b.notes || null, req.user.id,
+      ],
+    );
+    const row = created[0];
+
+    for (let i = 0; i < resolvedItems.length; i += 1) {
+      const item = resolvedItems[i];
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO estimate_items
+           (estimate_id, instrument_id, instrument_family, instrument_model,
+            procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          row.id, item.instrument_id, item.instrument_family, item.instrument_model,
+          item.procedure_id, item.procedure_name, item.pricing_type,
+          item.min_hours, item.max_hours, item.flat_cost, (i + 1) * 10,
+        ],
+      );
+    }
+    return row;
+  });
+
+  const items = await loadItems(estimate.id);
+  res.status(201).json({
+    ...estimate, items, tickets: [], ...totalsFor(items, Number(estimate.labor_rate)),
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// Update — title/category/priority/notes, and a wholesale items replace.
+// Only while still a draft: once it's gone out (or further), the customer
+// may already be looking at the numbers it had at send time, so changing
+// them out from under that link would be confusing at best.
+// ---------------------------------------------------------------------------
+router.patch('/:id', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const { rows: existingRows } = await query(
+    "SELECT * FROM estimates WHERE id = $1 AND kind = 'customer_quote'", [req.params.id],
+  );
+  const existing = existingRows[0];
+  if (!existing) throw notFound('Estimate not found');
+  if (existing.status !== 'draft') {
+    throw badRequest(`Cannot edit an estimate once it's been sent (current status: ${existing.status})`);
+  }
+
+  if (b.category_key) await settings.resolveActive('ticket_category', b.category_key);
+  if (b.priority_key) await settings.resolveActive('priority_tier', b.priority_key);
+
+  const estimate = await withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE estimates SET
+         title        = COALESCE($2, title),
+         category_key = COALESCE($3, category_key),
+         priority_key = COALESCE($4, priority_key),
+         notes        = COALESCE($5, notes)
+       WHERE id = $1 RETURNING *`,
+      [req.params.id, b.title || null, b.category_key || null, b.priority_key || null,
+        b.notes === undefined ? null : b.notes],
+    );
+    const row = rows[0];
+
+    if (Array.isArray(b.items)) {
+      if (!b.items.length) throw badRequest('At least one line item is required');
+      await client.query('DELETE FROM estimate_items WHERE estimate_id = $1', [row.id]);
+      for (let i = 0; i < b.items.length; i += 1) {
+        const item = b.items[i];
+        if (!item.procedure_id) throw badRequest('Each item needs a procedure_id');
+        // eslint-disable-next-line no-await-in-loop
+        const { rows: procRows } = await client.query(
+          'SELECT * FROM standard_procedures WHERE id = $1', [item.procedure_id],
+        );
+        const procedure = procRows[0];
+        if (!procedure) throw badRequest(`Procedure #${item.procedure_id} not found`);
+
+        let instrument = null;
+        if (item.instrument_id) {
+          // eslint-disable-next-line no-await-in-loop
+          const { rows: instRows } = await client.query(
+            'SELECT * FROM instruments WHERE id = $1', [item.instrument_id],
+          );
+          instrument = instRows[0];
+          if (!instrument) throw badRequest(`Instrument #${item.instrument_id} not found`);
+        }
+
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO estimate_items
+             (estimate_id, instrument_id, instrument_family, instrument_model,
+              procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [
+            row.id, instrument ? instrument.id : null,
+            instrument ? instrument.family : null, instrument ? instrument.model : null,
+            procedure.id, procedure.name, procedure.pricing_type,
+            procedure.min_hours, procedure.max_hours, procedure.flat_cost, (i + 1) * 10,
+          ],
+        );
+      }
+    }
+    return row;
+  });
+
+  const items = await loadItems(estimate.id);
+  res.json({
+    ...estimate, items, tickets: [], ...totalsFor(items, Number(estimate.labor_rate)),
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// Send — emails the itemized estimate with a link to the public
+// confirm/decline page. Re-sendable (e.g. the customer lost the email)
+// without losing whatever's already happened — it only ever moves status
+// forward from 'draft', never backward from 'confirmed'/'declined'.
+// ---------------------------------------------------------------------------
+router.post('/:id/send', asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    "SELECT * FROM estimates WHERE id = $1 AND kind = 'customer_quote'", [req.params.id],
+  );
+  const estimate = rows[0];
+  if (!estimate) throw notFound('Estimate not found');
+  if (estimate.status === 'ticket_created') {
+    throw conflict('This estimate already has a ticket created — nothing to send.');
+  }
+  if (!config.appBaseUrl) {
+    throw badRequest('APP_BASE_URL is not configured — the confirmation link would be broken.');
+  }
+
+  const { rows: customerRows } = await query('SELECT * FROM customers WHERE id = $1', [estimate.customer_id]);
+  const customer = customerRows[0];
+  if (!customer || !customer.email) {
+    throw badRequest('This customer has no email address on file.');
+  }
+
+  const items = await loadItems(estimate.id);
+  const totals = totalsFor(items, Number(estimate.labor_rate));
+
+  const confirmToken = estimate.confirm_token || crypto.randomBytes(24).toString('hex');
+  const { subject, html, attachments } = buildQuoteEmail({
+    estimate, customer, items, totals, confirmUrl: `${config.appBaseUrl}/quote/${confirmToken}`,
+  });
+
+  try {
+    await sendEmail({
+      to: customer.email, subject, html, attachments,
+    });
+    await query(
+      `INSERT INTO emails (recipient, template, subject, customer_id, status, sent_at)
+       VALUES ($1, 'customer_quote', $2, $3, 'sent', now())`,
+      [customer.email, subject, customer.id],
+    );
+  } catch (err) {
+    await query(
+      `INSERT INTO emails (recipient, template, subject, customer_id, status, error)
+       VALUES ($1, 'customer_quote', $2, $3, 'failed', $4)`,
+      [customer.email, subject, customer.id, err.message],
+    );
+    throw badRequest(`Could not send estimate: ${err.message}`);
+  }
+
+  const { rows: updated } = await query(
+    `UPDATE estimates SET
+       confirm_token = $2,
+       sent_at = now(),
+       status = CASE WHEN status = 'draft' THEN 'sent' ELSE status END
+     WHERE id = $1 RETURNING *`,
+    [estimate.id, confirmToken],
+  );
+  res.json({ ...updated[0], items, tickets: [], ...totals });
+}));
+
+// ---------------------------------------------------------------------------
+// Convert to ticket(s) — one ticket per distinct instrument on the
+// estimate (per-instrument tickets keep the same status/assignee/QC
+// tracking every other ticket gets; see NOTES.md for why this isn't one
+// combined multi-instrument ticket). Shared with the public confirm route,
+// which calls this same function so "staff clicked Create ticket first"
+// and "customer confirmed first" can never both fire — whichever happens
+// first flips status to 'ticket_created' and the other becomes a no-op.
+// ---------------------------------------------------------------------------
+async function createTicketsForEstimate(estimate, createdById) {
+  // Resolved outside the transaction, same reasoning as the
+  // create-shipping-ticket route above it in tickets.js: category/priority
+  // resolution is read-only settings lookups that don't need — and
+  // shouldn't have to compete for — a connection out of the same pool the
+  // transaction below is holding one of.
+  const resolved = await resolveNewTicketFields({
+    category_key: estimate.category_key || DEFAULT_CATEGORY_KEY,
+    priority_key: estimate.priority_key || DEFAULT_PRIORITY_KEY,
+  });
+
+  return withTransaction(async (client) => {
+    const { rows: lockedRows } = await client.query(
+      "SELECT * FROM estimates WHERE id = $1 AND kind = 'customer_quote' FOR UPDATE", [estimate.id],
+    );
+    const locked = lockedRows[0];
+    if (!locked) throw notFound('Estimate not found');
+    if (locked.status === 'ticket_created') {
+      // Already converted (the other path won the race) — return what
+      // exists instead of erroring, so both callers can treat this as success.
+      const { rows: existingTickets } = await client.query(
+        'SELECT id, title, instrument_id FROM tickets WHERE source_estimate_id = $1 ORDER BY created_at',
+        [locked.id],
+      );
+      return { estimate: locked, tickets: existingTickets };
+    }
+
+    const { rows: items } = await client.query(
+      'SELECT * FROM estimate_items WHERE estimate_id = $1 ORDER BY sort_order, id', [locked.id],
+    );
+
+    const byInstrument = new Map();
+    for (const item of items) {
+      const key = item.instrument_id || 'none';
+      if (!byInstrument.has(key)) byInstrument.set(key, []);
+      byInstrument.get(key).push(item);
+    }
+
+    const createdTickets = [];
+    for (const [, groupItems] of byInstrument) {
+      const first = groupItems[0];
+      const instrumentLabel = [first.instrument_family, first.instrument_model].filter(Boolean).join(' ')
+        || 'General';
+      const lines = groupItems.map((it) => {
+        const cost = it.pricing_type === 'flat'
+          ? `$${Number(it.flat_cost).toFixed(2)}`
+          : `${it.min_hours}-${it.max_hours} hrs`;
+        return `- ${it.procedure_name} (${cost})`;
+      }).join('\n');
+      const notes = `From Estimate #${locked.id}${locked.title ? ` — "${locked.title}"` : ''}:\n${lines}`
+        + (locked.notes ? `\n\n${locked.notes}` : '');
+
+      // eslint-disable-next-line no-await-in-loop
+      const ticket = await insertTicketRow(
+        client,
+        {
+          title: `${instrumentLabel} — ${first.procedure_name}${groupItems.length > 1 ? ' + more' : ''}`,
+          notes,
+          instrument_id: first.instrument_id,
+          customer_id: locked.customer_id,
+          source_estimate_id: locked.id,
+        },
+        resolved,
+        createdById,
+      );
+      createdTickets.push(ticket);
+
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `UPDATE estimate_items SET ticket_id = $1 WHERE id = ANY($2::int[])`,
+        [ticket.id, groupItems.map((it) => it.id)],
+      );
+    }
+
+    const { rows: updatedEstimate } = await client.query(
+      "UPDATE estimates SET status = 'ticket_created' WHERE id = $1 RETURNING *", [locked.id],
+    );
+    return { estimate: updatedEstimate[0], tickets: createdTickets };
+  });
+}
+
+router.post('/:id/create-tickets', asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    "SELECT * FROM estimates WHERE id = $1 AND kind = 'customer_quote'", [req.params.id],
+  );
+  const estimate = rows[0];
+  if (!estimate) throw notFound('Estimate not found');
+
+  const result = await createTicketsForEstimate(estimate, req.user.id);
+  res.json(result);
+}));
+
+module.exports = router;
+module.exports.createTicketsForEstimate = createTicketsForEstimate;

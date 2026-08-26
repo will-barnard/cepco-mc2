@@ -53,6 +53,13 @@ const config = {
     fromEmail: process.env.RESEND_FROM_EMAIL || '',
   },
 
+  // The frontend's own public URL, e.g. https://mc2.cepco.shop — used only
+  // to build the customer-facing confirm/decline link embedded in a quote
+  // email (routes/quotes.js's POST /:id/send). Unset by default like the
+  // Resend keys above; that route refuses to send rather than mail out a
+  // broken link.
+  appBaseUrl: (process.env.APP_BASE_URL || '').replace(/\/$/, ''),
+
   // Shopify order intake (PLAN §11). webhookSecret verifies inbound webhook
   // requests (backend/src/shopify.js); shopDomain + adminApiToken are only
   // needed to *register* those webhooks (scripts/registerShopifyWebhooks.js)

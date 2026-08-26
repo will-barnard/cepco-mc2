@@ -297,9 +297,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
        instrument_id, customer_id, assigned_tech_id, shop_contact_id,
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
-       category_queue_position, tech_queue_position, source_ticket_id
+       category_queue_position, tech_queue_position, source_ticket_id, source_estimate_id
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21,$22,$23,$24)
+               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21,$22,$23,$24,$25)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -322,6 +322,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
       categoryQueuePosition,
       techQueuePosition,
       b.source_ticket_id || null,
+      b.source_estimate_id || null,
     ],
   );
   const created = rows[0];

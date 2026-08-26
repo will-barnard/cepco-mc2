@@ -240,7 +240,10 @@ onMounted(refresh);
           retire it instead to hide it from new tickets.
         </p>
       </div>
-      <RouterLink class="btn small" :to="{ name: 'qc-templates' }">QC checklist templates →</RouterLink>
+      <div class="row">
+        <RouterLink class="btn small" :to="{ name: 'qc-templates' }">QC checklist templates →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'procedures' }">Standard procedures →</RouterLink>
+      </div>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
