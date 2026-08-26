@@ -34,6 +34,7 @@ app.use('/api/employees', require('./routes/employees'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/instruments', require('./routes/instruments'));
 app.use('/api/rentals', require('./routes/rentals'));
+app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/estimates', require('./routes/estimates'));
 app.use('/api/hours', require('./routes/hours'));

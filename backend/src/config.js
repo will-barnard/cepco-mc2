@@ -44,6 +44,14 @@ const config = {
     email: process.env.SEED_ADMIN_EMAIL || '',
     password: process.env.SEED_ADMIN_PASSWORD || '',
   },
+
+  // Purchase-receipt email (PLAN's Resend integration, brought forward from
+  // Phase 2 just far enough for this one transactional email). Both unset
+  // by default — see backend/src/mailer.js for what happens then.
+  resend: {
+    apiKey: process.env.RESEND_API_KEY || '',
+    fromEmail: process.env.RESEND_FROM_EMAIL || '',
+  },
 };
 
 if (config.env === 'production' && config.jwtSecret === 'dev-only-insecure-secret') {

@@ -24,7 +24,10 @@ const TICKET_SELECT = `
          COALESCE(h.actual_hours, 0)  AS actual_hours,
          e.estimated_hours,
          e.confidence AS estimate_confidence,
-         COALESCE(a.attachment_count, 0) AS attachment_count
+         COALESCE(a.attachment_count, 0) AS attachment_count,
+         ip.id AS purchase_id, ip.seller_name, ip.seller_email, ip.seller_phone,
+         ip.seller_address, ip.price AS purchase_price, ip.purchase_date,
+         ip.notes AS purchase_notes, ip.receipt_sent_at
     FROM tickets t
     LEFT JOIN customers   c   ON c.id = t.customer_id
     LEFT JOIN instruments i   ON i.id = t.instrument_id
@@ -44,6 +47,7 @@ const TICKET_SELECT = `
     LEFT JOIN LATERAL (
       SELECT count(*)::int AS attachment_count FROM ticket_attachments WHERE ticket_id = t.id
     ) a ON TRUE
+    LEFT JOIN instrument_purchases ip ON ip.ticket_id = t.id
 `;
 
 // ---------------------------------------------------------------------------
@@ -154,9 +158,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
-router.post('/', asyncHandler(async (req, res) => {
-  const b = req.body || {};
-  if (!b.title || !String(b.title).trim()) throw badRequest('title is required');
+// Resolve category/priority/status/tech-level for a *new* ticket (status
+// defaults to the first non-retired one by sort order). Named distinctly
+// from PATCH's local `resolved` below — that one is partial/optional and
+// unrelated to this.
+async function resolveNewTicketFields(b) {
   if (!b.category_key) throw badRequest('category_key is required');
   if (!b.priority_key) throw badRequest('priority_key is required');
 
@@ -165,7 +171,6 @@ router.post('/', asyncHandler(async (req, res) => {
     settings.resolveActive('priority_tier', b.priority_key),
   ]);
 
-  // Default to the first non-retired status by sort order.
   let statusKey = b.status_key;
   if (!statusKey) {
     const { rows } = await query(
@@ -180,48 +185,69 @@ router.post('/', asyncHandler(async (req, res) => {
   let techLevel = null;
   if (b.tech_level_key) techLevel = await settings.resolveActive('tech_level', b.tech_level_key);
 
-  const ticket = await withTransaction(async (client) => {
-    const { rows } = await client.query(
-      `INSERT INTO tickets (
-         title, category_key, category_label_snapshot,
-         priority_key, priority_label_snapshot,
-         status_key, status_label_snapshot,
-         tech_level_key, tech_level_label_snapshot,
-         instrument_id, customer_id, assigned_tech_id, shop_contact_id,
-         notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
-         shopify_order_id, qc_required, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-                 COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21)
-       RETURNING *`,
-      [
-        String(b.title).trim(),
-        category.key, category.label,
-        priority.key, priority.label,
-        status.key, status.label,
-        techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
-        b.instrument_id || null,
-        b.customer_id || null,
-        b.assigned_tech_id || null,
-        b.shop_contact_id || null,
-        b.notes || null,
-        b.drop_off_date || null,
-        b.due_date || null,
-        b.multi_instrument === true,
-        b.vendor_tracks ? JSON.stringify(b.vendor_tracks) : null,
-        b.shopify_order_id || null,
-        b.qc_required,
-        req.user.id,
-      ],
-    );
-    const created = rows[0];
+  return {
+    category, priority, status, techLevel,
+  };
+}
 
-    await client.query(
-      `INSERT INTO status_change_log (ticket_id, old_status, new_status, old_label, new_label, changed_by, note)
-       VALUES ($1, NULL, $2, NULL, $3, $4, 'Ticket created')`,
-      [created.id, status.key, status.label, req.user.id],
-    );
-    return created;
-  });
+// Insert the ticket + its creation status_change_log entry on an
+// already-open client, given fields already resolved by the function
+// above. Callers own the transaction: the POST / route wraps this in its
+// own withTransaction; routes/purchases.js calls it inside a larger one
+// that also writes the instrument and purchase rows, so a failure partway
+// through never leaves an orphaned ticket.
+async function insertTicketRow(client, b, resolved, createdById) {
+  const {
+    category, priority, status, techLevel,
+  } = resolved;
+  const { rows } = await client.query(
+    `INSERT INTO tickets (
+       title, category_key, category_label_snapshot,
+       priority_key, priority_label_snapshot,
+       status_key, status_label_snapshot,
+       tech_level_key, tech_level_label_snapshot,
+       instrument_id, customer_id, assigned_tech_id, shop_contact_id,
+       notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
+       shopify_order_id, qc_required, created_by
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21)
+     RETURNING *`,
+    [
+      String(b.title).trim(),
+      category.key, category.label,
+      priority.key, priority.label,
+      status.key, status.label,
+      techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
+      b.instrument_id || null,
+      b.customer_id || null,
+      b.assigned_tech_id || null,
+      b.shop_contact_id || null,
+      b.notes || null,
+      b.drop_off_date || null,
+      b.due_date || null,
+      b.multi_instrument === true,
+      b.vendor_tracks ? JSON.stringify(b.vendor_tracks) : null,
+      b.shopify_order_id || null,
+      b.qc_required,
+      createdById,
+    ],
+  );
+  const created = rows[0];
+
+  await client.query(
+    `INSERT INTO status_change_log (ticket_id, old_status, new_status, old_label, new_label, changed_by, note)
+     VALUES ($1, NULL, $2, NULL, $3, $4, 'Ticket created')`,
+    [created.id, status.key, status.label, createdById],
+  );
+  return created;
+}
+
+router.post('/', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) throw badRequest('title is required');
+
+  const resolved = await resolveNewTicketFields(b);
+  const ticket = await withTransaction((client) => insertTicketRow(client, b, resolved, req.user.id));
 
   res.status(201).json(ticket);
 }));
@@ -332,3 +358,8 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }));
 
 module.exports = router;
+// Attached to the router export rather than module-level named exports, so
+// `require('./tickets')` still works unchanged as the mounted route in
+// index.js, and routes/purchases.js can additionally pull these two off it.
+module.exports.resolveNewTicketFields = resolveNewTicketFields;
+module.exports.insertTicketRow = insertTicketRow;

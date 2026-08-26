@@ -7,6 +7,7 @@ import TicketPhotos from '../components/TicketPhotos.vue';
 import TicketQc from '../components/TicketQc.vue';
 import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
+import TicketPurchase from '../components/TicketPurchase.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -220,6 +221,7 @@ const when = (ts) => new Date(ts).toLocaleString();
           </div>
         </div>
 
+        <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
         <TicketEstimate :ticket="ticket" @changed="load" />
         <TicketHours :ticket="ticket" @changed="load" />
       </div>

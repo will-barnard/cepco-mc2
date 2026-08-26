@@ -93,3 +93,4 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 
 module.exports = router;
+module.exports.FAMILIES = FAMILIES;

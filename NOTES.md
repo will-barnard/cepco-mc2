@@ -362,6 +362,40 @@ rather than just in the new feature:
 
 ---
 
+### 2.14 Instrument-purchase receipts brought Resend forward from Phase 2
+
+The "Add instrument purchase" flow (Inventory Restorations tab) needed a way
+to actually email a seller their receipt, which meant standing up real
+email sending earlier than planned:
+
+- `backend/src/mailer.js` calls Resend's HTTP API directly (`fetch`, no SDK
+  dependency added). `RESEND_API_KEY` / `RESEND_FROM_EMAIL` were already in
+  `.env.example` as "Phase 2, unused" — they're read now. Leave them blank
+  and the app still boots and the button still appears; clicking it just
+  fails with a clear "email isn't configured yet" error instead of pretending
+  to send. Every attempt — sent or failed — is logged to the existing
+  `emails` table, so there's an audit trail either way.
+- The receipt's branding is the shop logo (`assets/CEPCO-LOGO-FINAL.png`)
+  sent as an inline CID attachment, not a linked image — most mail clients
+  block remote images by default, so an inline attachment is the only way
+  that logo reliably shows up. `backend/src/templates/purchaseReceipt.js` is
+  where the HTML lives if the design ever needs to change.
+- `instrument_purchases` is its own table (migration 005), not new columns
+  on `instruments` or a reuse of `customers` for the seller — same reasoning
+  as `instrument_rentals` in §2.13's neighbor entry: `customers` means
+  "someone we service" and a fleet/inventory instrument is deliberately
+  `customer_id = NULL` (001_init.sql), so folding sellers into that table
+  would either break that convention or overload it with a second meaning.
+- Creating the instrument + the `inventory_restoration` ticket + the
+  purchase row all happen in one transaction (`routes/purchases.js`). That
+  required pulling the ticket-insert logic in `routes/tickets.js` out into
+  `resolveNewTicketFields`/`insertTicketRow` so it could run on purchases.js's
+  own transaction client instead of duplicating (and risking drifting from)
+  that logic. `POST /tickets` itself is unchanged — same validation, same
+  response shape, just calling the extracted functions now.
+
+---
+
 ## 4. Suggested first moves after deploy
 
 1. Set `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, deploy, log in, change the
