@@ -94,8 +94,17 @@ router.get('/', asyncHandler(async (req, res) => {
   // broader (browsing everything, or both filters at once — those don't
   // share a single queue) falls back to the old priority/recency sort, since
   // there's no one queue order that spans multiple categories or techs.
+  //
+  // An explicit ?sort= overrides all of the above — it's a deliberate "show
+  // me the list this way" choice, not a fallback, so it wins regardless of
+  // which filters are active. sort=status orders by the status's own
+  // sort_order (its position in the shop's workflow — Not Started before In
+  // Progress before Done, etc.), i.e. the settings-configurable progression
+  // from Settings -> Ticket statuses, not alphabetical or by-key order.
   let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
-  if (req.query.category && !req.query.assigned_tech_id) {
+  if (req.query.sort === 'status') {
+    orderBy = 'st.sort_order NULLS LAST, t.updated_at DESC';
+  } else if (req.query.category && !req.query.assigned_tech_id) {
     orderBy = 't.category_queue_position NULLS LAST, t.updated_at DESC';
   } else if (req.query.assigned_tech_id
     && req.query.assigned_tech_id !== 'unassigned' && !req.query.category) {

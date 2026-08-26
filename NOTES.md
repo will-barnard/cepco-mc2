@@ -641,6 +641,26 @@ noise. Gated by a single `isShipping` computed (`ticket.category_key ===
 the one category that needs it and a real generalization would want to
 know which *other* categories want which subset before it's worth building.
 
+### 2.21 "Sort by status" rides the same sort_order as everything else
+
+The Tickets page's new "Sort by" control adds a `status` option
+(`?sort=status`) alongside the default priority/queue order. It orders by
+`st.sort_order` — the ticket_status settings row's own position, i.e.
+whatever order they're arranged in on Settings -> Ticket statuses (which is
+already how the shop expresses "this comes before that" for every other
+enum in the app) — not alphabetical, not by key. Reservation (10) before Not
+Started (20) before In Progress (30) before QC (40)... is the out-of-the-box
+progression; reordering statuses in Settings changes this sort too, same as
+it already changes the status dropdown's option order.
+
+An explicit `?sort=` always wins over the category/tech queue-order logic
+from §2.17, even when a category or tech filter is also active — it's a
+deliberate "show me this order" choice, not a fallback. The reorder ↑/↓
+arrows hide themselves in this mode (`TicketsView.vue`'s `queueType`
+returns null whenever `sort` is set): they act on `category_queue_position`/
+`tech_queue_position`, and swapping those wouldn't visibly do anything to a
+list that's actually sorted by status.
+
 ---
 
 ## 4. Suggested first moves after deploy

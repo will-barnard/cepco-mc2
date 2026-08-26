@@ -21,6 +21,10 @@ const filters = ref({
   instrument_family: route.query.instrument_family || '',
   assigned_tech_id: route.query.assigned_tech_id || '',
   archived: route.query.archived === 'true',
+  // '' = the usual priority/queue order; 'status' = ordered by each
+  // status's own position in the shop's workflow (Settings -> Ticket
+  // statuses), i.e. status progression rather than alphabetical.
+  sort: route.query.sort || '',
 });
 
 async function load() {
@@ -47,7 +51,7 @@ watch(filters, (f) => {
 function reset() {
   filters.value = {
     q: '', status: '', category: '', priority: '',
-    instrument_family: '', assigned_tech_id: '', archived: false,
+    instrument_family: '', assigned_tech_id: '', archived: false, sort: '',
   };
 }
 
@@ -57,6 +61,10 @@ function reset() {
 // a mixed browse view with no single reorderable order, so the arrows stay
 // hidden — see TicketTable's `queue` prop and NOTES.md.
 const queueType = computed(() => {
+  // sort=status shows a different order than either queue's own position
+  // column, so the reorder arrows (which act on that position column)
+  // would silently not match what's on screen — hide them in that mode.
+  if (filters.value.sort) return null;
   const { category, assigned_tech_id: techId } = filters.value;
   if (category && !techId) return 'category';
   if (techId && techId !== 'unassigned' && !category) return 'tech';
@@ -113,6 +121,13 @@ onMounted(load);
             <option value="">Anyone</option>
             <option value="unassigned">Unassigned</option>
             <option v-for="e in refData.employees" :key="e.id" :value="e.id">{{ e.name }}</option>
+          </select>
+        </div>
+        <div>
+          <label>Sort by</label>
+          <select v-model="filters.sort">
+            <option value="">Priority / queue order</option>
+            <option value="status">Status progression</option>
           </select>
         </div>
       </div>
