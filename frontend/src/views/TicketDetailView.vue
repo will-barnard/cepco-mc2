@@ -105,6 +105,7 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
         <h1 style="margin-bottom: 4px">{{ ticket.title }}</h1>
         <div class="row muted small">
           <span>#{{ ticket.id }}</span>
+          <span>· opened {{ new Date(ticket.created_at).toLocaleDateString() }}</span>
           <span v-if="ticket.legacy_ref">· sheet ref {{ ticket.legacy_ref }}</span>
           <span v-if="ticket.source_sheet">· imported from {{ ticket.source_sheet }}</span>
           <span v-if="ticket.source_ticket_id">

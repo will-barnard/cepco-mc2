@@ -55,6 +55,7 @@ async function reorder(t, direction) {
         <tr>
           <th v-if="queue && auth.isAdmin" class="nowrap">Queue</th>
           <th>Ticket</th>
+          <th class="nowrap">Created</th>
           <th>Customer</th>
           <th>Status</th>
           <th>Priority</th>
@@ -77,6 +78,7 @@ async function reorder(t, direction) {
               </span>
             </div>
           </td>
+          <td class="nowrap small">{{ new Date(t.created_at).toLocaleDateString() }}</td>
           <td>{{ t.customer_name || (t.instrument_is_fleet ? 'CEPCo fleet' : '—') }}</td>
           <td>
             <span :class="['pill', settings.colorFor(t.status_key)]">
