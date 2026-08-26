@@ -28,6 +28,16 @@ export const useAuth = defineStore('auth', {
       await api.post('/auth/logout');
       this.user = null;
     },
+    /** Switch the active identity on this browser (kiosk mode) without a full re-login. */
+    async switchTo(employeeId, pin) {
+      const { user } = await api.post('/auth/switch', { employee_id: employeeId, pin });
+      this.user = user;
+      return user;
+    },
+    /** Set/replace the 4-digit PIN used to switch *into* this account from kiosk mode. */
+    async setPin(currentPassword, pin) {
+      await api.post('/auth/pin', { current_password: currentPassword, pin });
+    },
   },
 });
 
@@ -68,6 +78,65 @@ export const useRefData = defineStore('refdata', {
       this.employees = employees;
       this.families = families;
       this.loaded = true;
+    },
+  },
+});
+
+
+const KIOSK_STORAGE_KEY = 'cepco_kiosk_mode';
+const IDLE_MS = 5 * 60 * 1000; // 5 minutes of inactivity before the picker shows
+
+// Plain module-level (non-reactive) timer bookkeeping — a setTimeout handle
+// and a throttle timestamp have no business being Vue-reactive state.
+let idleTimer = null;
+let lastActivityAt = 0;
+
+/**
+ * Kiosk ("shared computer") mode — a per-*browser* preference, not a
+ * shop-wide setting (see NOTES.md §2.12). Deliberately localStorage-only:
+ * it describes this device, not this account, so it survives sign-out/
+ * sign-in and doesn't follow a staff member to their own laptop.
+ */
+export const useKiosk = defineStore('kiosk', {
+  state: () => ({
+    enabled: typeof localStorage !== 'undefined' && localStorage.getItem(KIOSK_STORAGE_KEY) === '1',
+    locked: false,
+  }),
+  actions: {
+    setEnabled(value) {
+      this.enabled = !!value;
+      localStorage.setItem(KIOSK_STORAGE_KEY, this.enabled ? '1' : '0');
+      if (this.enabled) this.armTimer();
+      else this.disarmTimer();
+    },
+    lock() {
+      this.disarmTimer();
+      this.locked = true;
+    },
+    unlock() {
+      this.locked = false;
+      this.armTimer();
+    },
+    /** Call on any real user interaction. Cheap to call often — throttled internally. */
+    recordActivity() {
+      if (!this.enabled || this.locked) return;
+      const now = Date.now();
+      if (now - lastActivityAt < 1000) return;
+      lastActivityAt = now;
+      this.armTimer();
+    },
+    armTimer() {
+      this.disarmTimer();
+      if (!this.enabled) return;
+      idleTimer = setTimeout(() => { this.locked = true; }, IDLE_MS);
+    },
+    disarmTimer() {
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    },
+    /** Called on sign-out — no active session means nothing to idle-lock. */
+    reset() {
+      this.disarmTimer();
+      this.locked = false;
     },
   },
 });

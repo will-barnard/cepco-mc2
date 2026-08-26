@@ -305,6 +305,33 @@ file is never uploaded.
 
 ---
 
+### 2.12 Shared-computer quick switching — the security shape of it
+
+Kiosk mode (`localStorage`-only per browser, toggled from Account by an
+admin) shows a "who's using this" picker after 5 minutes idle, or on demand
+via "Switch user" next to Sign out. Switching *into* a junior/senior account
+takes one tap, no credential. Switching into an admin account requires that
+admin's 4-digit PIN (`employees.pin_hash`, bcrypt, set by the admin
+themselves from Account).
+
+Two things worth being deliberate about, not stumbling into:
+
+- `POST /auth/switch` is gated by `requireAuth` only — any already-signed-in
+  session can call it, not just a browser that's had kiosk mode switched on.
+  The server has no reliable way to tell "the shared shop computer" from
+  "someone's laptop that's still logged in"; a client-side flag can't be
+  trusted for that. So in practice any staff member could hit the API
+  directly and switch into a *non-admin* coworker's identity from anywhere,
+  same as this endpoint's front door. Admins are still protected by the PIN
+  either way. Accepted for this build — an internal tool, low stakes, same
+  posture as §2.9.
+- The PIN has no attempt throttle, same reasoning as §2.9's login note: only
+  10,000 combinations, but bcrypt-slow per guess and there's no exposed way
+  to script rapid-fire attempts without also being an authenticated
+  employee already. Revisit both together if that stops being true.
+
+---
+
 ## 4. Suggested first moves after deploy
 
 1. Set `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, deploy, log in, change the

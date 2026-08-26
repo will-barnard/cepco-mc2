@@ -41,10 +41,15 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
 
 router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
   const {
-    name, email, role, initials, active, password,
+    name, email, role, initials, active, password, pin,
   } = req.body || {};
   if (role !== undefined && !ROLES.includes(role)) {
     throw badRequest(`role must be one of: ${ROLES.join(', ')}`);
+  }
+  // Recovery path for a forgotten kiosk-switch PIN — same shape as the
+  // password reset below.
+  if (pin !== undefined && pin !== null && !/^\d{4}$/.test(String(pin))) {
+    throw badRequest('PIN must be exactly 4 digits');
   }
 
   // Guard against locking the shop out of its own admin panel.
@@ -58,6 +63,13 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
     hash = await bcrypt.hash(password, 12);
   }
 
+  let pinHash;
+  if (pin === null) {
+    pinHash = null; // explicit clear
+  } else if (pin !== undefined) {
+    pinHash = await bcrypt.hash(String(pin), 12);
+  }
+
   const { rows } = await query(
     `UPDATE employees SET
         name          = COALESCE($2, name),
@@ -65,7 +77,8 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
         role          = COALESCE($4, role),
         initials      = COALESCE($5, initials),
         active        = COALESCE($6, active),
-        password_hash = COALESCE($7, password_hash)
+        password_hash = COALESCE($7, password_hash),
+        pin_hash      = CASE WHEN $8 THEN $9 ELSE pin_hash END
       WHERE id = $1
       RETURNING id, name, email, role, initials, active, created_at`,
     [
@@ -76,6 +89,8 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       initials === undefined ? null : initials,
       active === undefined ? null : active,
       hash,
+      pinHash !== undefined,
+      pinHash === undefined ? null : pinHash,
     ],
   );
   if (!rows[0]) throw notFound('Employee not found');

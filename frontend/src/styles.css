@@ -202,6 +202,32 @@ tbody tr.clickable { cursor: pointer; }
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
 }
 
+/* --- kiosk lock screen ----------------------------------------------------- */
+.kiosk-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.kiosk-panel { width: 100%; max-width: 640px; text-align: center; position: relative; }
+.kiosk-panel h1 { font-size: 22px; margin-bottom: 4px; }
+.kiosk-dismiss { position: absolute; top: -48px; right: 0; }
+.kiosk-grid {
+  display: grid; gap: 12px; margin-top: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+.kiosk-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 20px 12px; min-height: 120px;
+}
+.kiosk-avatar {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px;
+}
+.kiosk-name { font-size: 14px; font-weight: 600; }
+
 @media (max-width: 640px) {
   .page { padding: 14px; }
   .topbar { padding: 10px 14px; gap: 10px; }
