@@ -332,6 +332,36 @@ Two things worth being deliberate about, not stumbling into:
 
 ---
 
+### 2.13 Dates need a real timezone, not the container's default
+
+Building the rental calendar (fleet instruments going out/coming back,
+`instrument_rentals`) surfaced a latent bug worth fixing everywhere at once
+rather than just in the new feature:
+
+- node-pg's default parser for a `DATE` column builds a JS `Date` at local
+  midnight and JSON-serializes it through `.toISOString()` (a UTC
+  conversion). A `DATE` has no time component to begin with, so that
+  round-trip could silently shift `drop_off_date`, `due_date`, or a rental's
+  `start_date`/`end_date` onto the wrong calendar day depending on the
+  container's timezone. Fixed globally in `backend/src/db.js` — `DATE`
+  columns now come back as the plain `'YYYY-MM-DD'` string Postgres sent,
+  never through a `Date` object. Nothing in the frontend displayed those two
+  ticket date fields yet, so this changes no visible behavior for tickets —
+  it only matters going forward, and immediately for rentals.
+- Neither the backend container nor the Postgres container has a timezone
+  configured, so both default to UTC. "Today" for the shop is Chicago's
+  today, not UTC's — they diverge for several hours every evening. Rather
+  than set container-wide `TZ` (bigger blast radius, affects every
+  timestamp display), the rental endpoints compute shop-local "today"
+  explicitly: `(now() AT TIME ZONE 'America/Chicago')::date` in
+  `routes/rentals.js` (`config.shopTimezone`, override with `SHOP_TZ`), and
+  `Intl.DateTimeFormat(..., { timeZone: 'America/Chicago' })` on the
+  frontend (`DashboardView.vue`, `RentalCalendarView.vue`). Any future
+  "what day is it for the shop" logic should use the same pattern rather
+  than `CURRENT_DATE` or `new Date()` directly.
+
+---
+
 ## 4. Suggested first moves after deploy
 
 1. Set `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, deploy, log in, change the

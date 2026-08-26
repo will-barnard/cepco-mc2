@@ -1,7 +1,17 @@
 'use strict';
 
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const config = require('./config');
+
+// node-pg's default DATE (oid 1082) parser builds a JS Date at local
+// midnight, then JSON serializes it through .toISOString() — a UTC
+// conversion. Depending on the server's TZ that can shift a date-only value
+// (drop_off_date, due_date, and now instrument_rentals.start_date/end_date)
+// onto the wrong calendar day for a viewer who isn't in that same zone. A
+// DATE column has no time component to convert in the first place, so keep
+// the raw 'YYYY-MM-DD' string from the wire instead of round-tripping it
+// through a Date object at all.
+types.setTypeParser(types.builtins.DATE, (value) => value);
 
 const pool = new Pool({
   host: config.db.host,

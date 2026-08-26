@@ -5,7 +5,7 @@
  * Shopify storefront, so nothing here is customer-visible.
  */
 import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 
 const router = useRouter();
@@ -67,10 +67,13 @@ onMounted(load);
           CEPCo-owned instruments. Internal tracking only — customers see these on the storefront.
         </p>
       </div>
-      <select v-model="family" style="width: auto; min-width: 160px">
-        <option value="">All families</option>
-        <option v-for="f in families" :key="f" :value="f">{{ f }}</option>
-      </select>
+      <div class="row nowrap">
+        <select v-model="family" style="width: auto; min-width: 160px">
+          <option value="">All families</option>
+          <option v-for="f in families" :key="f" :value="f">{{ f }}</option>
+        </select>
+        <RouterLink :to="{ name: 'fleet-calendar' }" class="btn">Rental calendar</RouterLink>
+      </div>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>

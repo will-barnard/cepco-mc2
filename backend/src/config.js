@@ -14,6 +14,11 @@ const config = {
     password: process.env.DB_PASSWORD || 'postgres',
   },
 
+  // Chicago Electric Piano Company is, well, in Chicago — used wherever
+  // "today" needs to mean the shop's calendar day rather than the
+  // container's (typically UTC) default. See NOTES.md §2.13.
+  shopTimezone: process.env.SHOP_TZ || 'America/Chicago',
+
   jwtSecret: process.env.JWT_SECRET || 'dev-only-insecure-secret',
   // Long-lived on purpose: internal tool on a private domain, techs shouldn't
   // have to re-login on the shop floor. Overridable via JWT_TTL_SECONDS.

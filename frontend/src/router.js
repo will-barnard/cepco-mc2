@@ -9,6 +9,7 @@ const routes = [
   { path: '/tickets/:id', name: 'ticket', component: () => import('./views/TicketDetailView.vue'), props: true },
   { path: '/customers', name: 'customers', component: () => import('./views/CustomersView.vue') },
   { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
+  { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/parts', name: 'parts', component: () => import('./views/PartsView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
