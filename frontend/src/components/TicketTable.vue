@@ -1,14 +1,24 @@
 <script setup>
 import { useRouter } from 'vue-router';
-import { useSettings } from '../stores';
+import { useSettings, useAuth } from '../stores';
+import api from '../api';
 
-defineProps({
+const props = defineProps({
   tickets: { type: Array, required: true },
   emptyText: { type: String, default: 'No tickets match those filters.' },
+  // Which queue these rows represent, if any: 'category' or 'tech'. Only set
+  // this when the parent has already filtered to exactly one category or
+  // one assigned tech — reordering only makes sense within a single queue,
+  // and this prop is what decides which reorder endpoint gets called. Leave
+  // unset (default) for a mixed/unfiltered list to hide the arrows entirely.
+  queue: { type: String, default: null },
 });
+
+const emit = defineEmits(['reordered']);
 
 const router = useRouter();
 const settings = useSettings();
+const auth = useAuth();
 
 const open = (id) => router.push({ name: 'ticket', params: { id } });
 
@@ -25,6 +35,15 @@ function hoursOver(t) {
   const est = Number(t.estimated_hours || 0);
   return est > 0 && Number(t.actual_hours || 0) > est;
 }
+
+// Admin-only (Settings has the same gate on its own reorder buttons).
+// Reordering is server-side (POST /tickets/:id/reorder-category|tech, see
+// NOTES.md) — the parent reloads its own list on 'reordered' rather than
+// this component guessing at the new order itself.
+async function reorder(t, direction) {
+  await api.post(`/tickets/${t.id}/reorder-${props.queue}`, { direction });
+  emit('reordered');
+}
 </script>
 
 <template>
@@ -34,6 +53,7 @@ function hoursOver(t) {
     <table>
       <thead>
         <tr>
+          <th v-if="queue && auth.isAdmin" class="nowrap">Queue</th>
           <th>Ticket</th>
           <th>Customer</th>
           <th>Status</th>
@@ -44,6 +64,10 @@ function hoursOver(t) {
       </thead>
       <tbody>
         <tr v-for="t in tickets" :key="t.id" class="clickable" @click="open(t.id)">
+          <td v-if="queue && auth.isAdmin" class="nowrap">
+            <button class="small" @click.stop="reorder(t, 'up')">↑</button>
+            <button class="small" @click.stop="reorder(t, 'down')">↓</button>
+          </td>
           <td>
             <strong>{{ t.title }}</strong>
             <div v-if="t.instrument_family" class="muted small">

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -50,6 +50,18 @@ function reset() {
     instrument_family: '', assigned_tech_id: '', archived: false,
   };
 }
+
+// A "queue" only exists when the list is narrowed to exactly one category
+// or one tech (not both at once — those are two different queues, and a
+// ticket doesn't have a combined position across them). Anything broader is
+// a mixed browse view with no single reorderable order, so the arrows stay
+// hidden — see TicketTable's `queue` prop and NOTES.md.
+const queueType = computed(() => {
+  const { category, assigned_tech_id: techId } = filters.value;
+  if (category && !techId) return 'category';
+  if (techId && techId !== 'unassigned' && !category) return 'tech';
+  return null;
+});
 
 onMounted(load);
 </script>
@@ -117,7 +129,7 @@ onMounted(load);
 
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else class="card tight">
-      <TicketTable :tickets="tickets" />
+      <TicketTable :tickets="tickets" :queue="queueType" @reordered="load" />
     </div>
   </div>
 </template>

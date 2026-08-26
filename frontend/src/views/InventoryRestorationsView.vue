@@ -4,7 +4,8 @@
  * resell (as opposed to the rental/showroom fleet in FleetView, or work done
  * for a customer). Every row here is a ticket in the 'inventory_restoration'
  * category — this view is just that same ticket data in a purpose-built
- * order and frame, not a separate record type.
+ * order and frame, not a separate record type. Admins can reorder the queue
+ * with the ↑/↓ column (TicketTable's queue="category" mode).
  */
 import { ref, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -16,11 +17,12 @@ const loading = ref(true);
 
 async function load() {
   loading.value = true;
-  const rows = await api.get('/tickets', { category: 'inventory_restoration' });
-  // The list endpoint orders by priority/recency for the general ticket
-  // board — this page is a queue instead: oldest purchase first, newest
-  // (just added) at the bottom.
-  tickets.value = [...rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  // Filtering to a single category makes GET /tickets return this
+  // category's explicit, admin-reorderable queue order (category_queue_
+  // position — see NOTES.md), oldest-created-first by default and stable
+  // until an admin deliberately moves something, instead of the general
+  // board's priority/recency sort.
+  tickets.value = await api.get('/tickets', { category: 'inventory_restoration' });
   loading.value = false;
 }
 
@@ -44,7 +46,10 @@ onMounted(load);
 
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else class="card tight">
-      <TicketTable :tickets="tickets" empty-text="Nothing in the restoration queue yet." />
+      <TicketTable
+        :tickets="tickets" queue="category"
+        empty-text="Nothing in the restoration queue yet." @reordered="load"
+      />
     </div>
   </div>
 </template>

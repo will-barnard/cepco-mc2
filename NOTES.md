@@ -494,6 +494,52 @@ nothing to do with it.
   page from the browser's perspective) and needs no code change, only how
   the link is configured on Shopify's side.
 
+### 2.17 Job queues are now explicit and admin-reorderable
+
+Before this, "queue order" was implicit: the ticket list sorted by priority
+tier, then `updated_at DESC` as a tiebreaker — which meant touching a ticket
+at all (a note, a field edit) bumped it back toward the top of its priority
+band. That's not a queue anyone can deliberately manage, just a sort that
+happens to look queue-like most of the time.
+
+- Migration 007 adds two independent, persisted position columns on
+  `tickets`: `category_queue_position` (this job's spot among other active
+  jobs in the same category) and `tech_queue_position` (its spot among
+  other active jobs assigned to the same tech). Two columns, not one,
+  because they can legitimately disagree — an admin might want a job done
+  first in a specific tech's day even though other jobs are technically
+  "ahead" of it in that category shop-wide.
+- Every ticket-creation path (manual, inventory purchase, Shopify order —
+  all three already funnel through `insertTicketRow`, per §2.14/§2.15) drops
+  a new ticket at the bottom of both queues it participates in: bottom of
+  its category's queue always, and bottom of its assigned tech's queue too
+  if it has one at creation (explicit `assigned_tech_id` or a category's
+  default assignee). Changing a ticket's category or assignee later
+  (`PATCH /tickets/:id`) moves it to the bottom of whichever queue it just
+  joined, rather than keeping a position number that only meant something in
+  the queue it left.
+- `POST /tickets/:id/reorder-category` and `.../reorder-tech` (admin-only —
+  junior/senior techs can see the order, only admins can change it) move a
+  ticket by **swapping position values with whichever ticket is currently
+  adjacent** in that queue, not by nudging the position by a fixed delta
+  (contrast with Settings' `sort_order ± 15` — fine for a short admin list,
+  not precise enough for a queue people reorder constantly). A swap is
+  always exactly correct after one click no matter how uneven the gaps
+  between positions have become.
+- `GET /tickets` orders by `category_queue_position` when filtered to
+  exactly one category, or `tech_queue_position` when filtered to exactly
+  one tech (and neither, both at once has no single queue to show), falling
+  back to the old priority/recency sort for a mixed/unfiltered browse. The
+  Inventory Restorations page lost its client-side re-sort-by-`created_at`
+  as a result — it's just `GET /tickets?category=inventory_restoration` now,
+  same as any other single-category queue, with the same reorder arrows.
+- Known gap: reordering always operates against the *full* queue, not just
+  what's currently visible under other filters (search text, status,
+  priority). If a filter is hiding a ticket's actual neighbor, "move down"
+  still does the right thing server-side but won't visibly change the two
+  rows on screen until the filter clears. Not solved here — flagged in case
+  it's confusing in practice.
+
 ---
 
 ## 4. Suggested first moves after deploy

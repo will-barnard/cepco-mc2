@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { query, withTransaction } = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
 
@@ -80,9 +80,22 @@ router.get('/', asyncHandler(async (req, res) => {
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
 
+  // Filtered to exactly one category or one tech -> that's a real queue, so
+  // show it in its explicit, reorderable order (see migration 007). Anything
+  // broader (browsing everything, or both filters at once — those don't
+  // share a single queue) falls back to the old priority/recency sort, since
+  // there's no one queue order that spans multiple categories or techs.
+  let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
+  if (req.query.category && !req.query.assigned_tech_id) {
+    orderBy = 't.category_queue_position NULLS LAST, t.updated_at DESC';
+  } else if (req.query.assigned_tech_id
+    && req.query.assigned_tech_id !== 'unassigned' && !req.query.category) {
+    orderBy = 't.tech_queue_position NULLS LAST, t.updated_at DESC';
+  }
+
   const { rows } = await query(
     `${TICKET_SELECT} ${where}
-     ORDER BY pr.sort_order NULLS LAST, t.updated_at DESC
+     ORDER BY ${orderBy}
      LIMIT ${limit}`,
     params,
   );
@@ -213,6 +226,29 @@ async function insertTicketRow(client, b, resolved, createdById) {
   const {
     category, priority, status, techLevel, defaultAssignedTechId,
   } = resolved;
+  const assignedTechId = b.assigned_tech_id || defaultAssignedTechId || null;
+
+  // New tickets always land at the bottom of both queues they participate
+  // in — the same "back of the line" rule as the old implicit ordering, just
+  // made explicit and persisted instead of falling out of updated_at. See
+  // migration 007 for why these are two separate columns.
+  const { rows: catRows } = await client.query(
+    `SELECT COALESCE(MAX(category_queue_position), 0) + 10 AS next
+       FROM tickets WHERE category_key = $1 AND archived = FALSE`,
+    [category.key],
+  );
+  const categoryQueuePosition = catRows[0].next;
+
+  let techQueuePosition = null;
+  if (assignedTechId) {
+    const { rows: techRows } = await client.query(
+      `SELECT COALESCE(MAX(tech_queue_position), 0) + 10 AS next
+         FROM tickets WHERE assigned_tech_id = $1 AND archived = FALSE`,
+      [assignedTechId],
+    );
+    techQueuePosition = techRows[0].next;
+  }
+
   const { rows } = await client.query(
     `INSERT INTO tickets (
        title, category_key, category_label_snapshot,
@@ -221,9 +257,10 @@ async function insertTicketRow(client, b, resolved, createdById) {
        tech_level_key, tech_level_label_snapshot,
        instrument_id, customer_id, assigned_tech_id, shop_contact_id,
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
-       shopify_order_id, qc_required, created_by
+       shopify_order_id, qc_required, created_by,
+       category_queue_position, tech_queue_position
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21)
+               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21,$22,$23)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -233,7 +270,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
       techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
       b.instrument_id || null,
       b.customer_id || null,
-      b.assigned_tech_id || defaultAssignedTechId || null,
+      assignedTechId,
       b.shop_contact_id || null,
       b.notes || null,
       b.drop_off_date || null,
@@ -243,6 +280,8 @@ async function insertTicketRow(client, b, resolved, createdById) {
       b.shopify_order_id || null,
       b.qc_required,
       createdById,
+      categoryQueuePosition,
+      techQueuePosition,
     ],
   );
   const created = rows[0];
@@ -293,6 +332,37 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   }
 
   const updated = await withTransaction(async (client) => {
+    // Changing a ticket's category or assignee moves it into a different
+    // queue — it always joins that queue at the bottom (same rule as a
+    // brand-new ticket), rather than keeping a position number that was
+    // only ever meaningful in the queue it just left.
+    let newCategoryQueuePosition;
+    if (resolved.category && resolved.category.key !== existing.category_key) {
+      const { rows: catRows } = await client.query(
+        `SELECT COALESCE(MAX(category_queue_position), 0) + 10 AS next
+           FROM tickets WHERE category_key = $1 AND archived = FALSE`,
+        [resolved.category.key],
+      );
+      newCategoryQueuePosition = catRows[0].next;
+    }
+
+    let techPositionChanging = false;
+    let newTechQueuePosition = null;
+    if (b.assigned_tech_id !== undefined) {
+      const nextTechId = b.assigned_tech_id || null;
+      if (nextTechId !== existing.assigned_tech_id) {
+        techPositionChanging = true;
+        if (nextTechId) {
+          const { rows: techRows } = await client.query(
+            `SELECT COALESCE(MAX(tech_queue_position), 0) + 10 AS next
+               FROM tickets WHERE assigned_tech_id = $1 AND archived = FALSE`,
+            [nextTechId],
+          );
+          newTechQueuePosition = techRows[0].next;
+        } // else: unassigning — newTechQueuePosition stays null
+      }
+    }
+
     const { rows } = await client.query(
       `UPDATE tickets SET
          title            = COALESCE($2, title),
@@ -314,7 +384,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          multi_instrument = COALESCE($23, multi_instrument),
          vendor_tracks    = COALESCE($24, vendor_tracks),
          qc_required      = COALESCE($25, qc_required),
-         archived         = COALESCE($26, archived)
+         archived         = COALESCE($26, archived),
+         category_queue_position = CASE WHEN $27::boolean THEN $28 ELSE category_queue_position END,
+         tech_queue_position     = CASE WHEN $29::boolean THEN $30 ELSE tech_queue_position END
        WHERE id = $1
        RETURNING *`,
       [
@@ -340,6 +412,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.vendor_tracks === undefined ? null : JSON.stringify(b.vendor_tracks),
         b.qc_required === undefined ? null : b.qc_required,
         b.archived === undefined ? null : b.archived,
+        newCategoryQueuePosition !== undefined, newCategoryQueuePosition ?? null,
+        techPositionChanging, newTechQueuePosition,
       ],
     );
 
@@ -361,6 +435,86 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   });
 
   res.json(updated);
+}));
+
+// ---------------------------------------------------------------------------
+// Queue reordering (admin only, per NOTES.md). Each ticket sits in up to two
+// independent queues — its category's and its assigned tech's (migration
+// 007) — so "up"/"down" always needs to know which one it's being asked to
+// move within. Swapping position values with whichever neighbor is
+// currently adjacent (rather than a blind +/- delta) is what makes a single
+// click always land exactly where you'd expect, regardless of how uneven
+// the gaps between positions have become from past inserts/reorders.
+//
+// Known limitation: the neighbor is the next item in the *full* queue, not
+// just whatever's currently visible under other filters (search, status,
+// priority) — if a filter is hiding that neighbor, the move still happens
+// but won't visibly reorder the two rows on screen until the filter clears.
+// ---------------------------------------------------------------------------
+async function swapAdjacentQueuePosition(client, {
+  positionColumn, scopeColumn, scopeValue, ticketId, currentPosition, direction,
+}) {
+  const comparator = direction === 'up' ? '<' : '>';
+  const order = direction === 'up' ? 'DESC' : 'ASC';
+  const { rows } = await client.query(
+    `SELECT id, ${positionColumn} AS position FROM tickets
+      WHERE ${scopeColumn} = $1 AND archived = FALSE AND id != $2
+        AND ${positionColumn} ${comparator} $3
+      ORDER BY ${positionColumn} ${order} LIMIT 1`,
+    [scopeValue, ticketId, currentPosition],
+  );
+  const neighbor = rows[0];
+  if (!neighbor) return false; // already first/last in this queue
+
+  await client.query(`UPDATE tickets SET ${positionColumn} = $1 WHERE id = $2`, [neighbor.position, ticketId]);
+  await client.query(`UPDATE tickets SET ${positionColumn} = $1 WHERE id = $2`, [currentPosition, neighbor.id]);
+  return true;
+}
+
+function requireDirection(body) {
+  const direction = body && body.direction;
+  if (direction !== 'up' && direction !== 'down') throw badRequest("direction must be 'up' or 'down'");
+  return direction;
+}
+
+router.post('/:id/reorder-category', requireAdmin, asyncHandler(async (req, res) => {
+  const direction = requireDirection(req.body);
+  const { rows } = await query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
+  const ticket = rows[0];
+  if (!ticket) throw notFound('Ticket not found');
+  if (ticket.archived) throw badRequest('Cannot reorder an archived ticket');
+  if (ticket.category_queue_position === null) throw badRequest('Ticket has no category queue position');
+
+  await withTransaction((client) => swapAdjacentQueuePosition(client, {
+    positionColumn: 'category_queue_position',
+    scopeColumn: 'category_key',
+    scopeValue: ticket.category_key,
+    ticketId: ticket.id,
+    currentPosition: ticket.category_queue_position,
+    direction,
+  }));
+  const { rows: updated } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
+  res.json(updated[0]);
+}));
+
+router.post('/:id/reorder-tech', requireAdmin, asyncHandler(async (req, res) => {
+  const direction = requireDirection(req.body);
+  const { rows } = await query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
+  const ticket = rows[0];
+  if (!ticket) throw notFound('Ticket not found');
+  if (ticket.archived) throw badRequest('Cannot reorder an archived ticket');
+  if (!ticket.assigned_tech_id) throw badRequest('Ticket is not assigned to a tech');
+
+  await withTransaction((client) => swapAdjacentQueuePosition(client, {
+    positionColumn: 'tech_queue_position',
+    scopeColumn: 'assigned_tech_id',
+    scopeValue: ticket.assigned_tech_id,
+    ticketId: ticket.id,
+    currentPosition: ticket.tech_queue_position,
+    direction,
+  }));
+  const { rows: updated } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
+  res.json(updated[0]);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
