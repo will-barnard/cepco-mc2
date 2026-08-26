@@ -540,6 +540,51 @@ happens to look queue-like most of the time.
   rows on screen until the filter clears. Not solved here — flagged in case
   it's confusing in practice.
 
+### 2.18 "Ship this instrument" completes a half-built feature
+
+The ask was a button on a ticket that spins up a linked ticket to ship its
+instrument. While building it, it turned out the data model this needs was
+already there: `shipments` (method, contact info, international flag,
+scheduled date, tracking number, a packing checklist) and a full
+`routes/shipments.js` CRUD API, plus a seeded shipping-kind `qc_templates`
+row to auto-fill the checklist — all backend-only, with no frontend ever
+built to use it. PLAN §7 describes exactly this: "deeper packing jobs...
+own ticket type, reuses the existing... Shipping Checklist pattern." So
+this feature is really two things: the requested button, and finishing the
+shipments UI that was apparently always the intended destination for it.
+
+- Migration 008 adds `tickets.source_ticket_id` (self-referencing, `ON
+  DELETE SET NULL`) — a generic "created from another ticket" provenance
+  link, alongside the existing `shopify_order_id`/`legacy_ref` provenance
+  columns. First (only, so far) use is this feature, but it's written
+  generically in case something else wants to spin up a linked ticket later.
+- `routes/shipments.js`'s checklist-seeding insert logic is now
+  `createShipment(client, {...})`, exported off the router the same way
+  `routes/tickets.js` exports `resolveNewTicketFields`/`insertTicketRow` —
+  so `POST /tickets/:id/create-shipping-ticket` can create the new ticket
+  and its shipment in one transaction (`insertTicketRow` then
+  `createShipment` on the same client), rather than a second HTTP round
+  trip that could succeed on the ticket and fail on the shipment.
+- The button (`TicketDetailView.vue`) is disabled — actually replaced with a
+  link to the existing one — once a shipping ticket already exists
+  (`ticket.child_tickets.length`, from a new `source_ticket_id`-keyed query
+  added to `GET /tickets/:id`), same guard pattern as "Create invoice
+  record" hiding once `ticket.invoices.length`. Anyone signed in can click
+  it, not just admins/seniors — same permission level as creating any other
+  ticket.
+- New `TicketShipment.vue` renders the shipment: method/contact/
+  international/scheduled-date/tracking fields that PATCH individually on
+  change (mirroring `TicketDetailView`'s own Details card — no buffered
+  form, so there's nothing to go stale when `ticket` gets replaced wholesale
+  after a reload), the packing checklist (same toggle pattern as
+  `TicketQc.vue`'s round checklist, just without QC's sign-off step), and a
+  "Mark shipped" button that locks the fields afterward.
+- Priority defaults to `daily_todo`, same reasoning as the Shopify order
+  intake and inventory-purchase defaults (§2.14/§2.15) — shipping jobs are
+  usually quick; a deep-pack/international one can be re-triaged from the
+  queue like anything else. Category is hardcoded to `shipping` — this
+  button only ever means one thing.
+
 ---
 
 ## 4. Suggested first moves after deploy

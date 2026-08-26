@@ -5,12 +5,20 @@ const { query, withTransaction } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
+const { createShipment } = require('./shipments');
 
 const router = express.Router();
 router.use(requireAuth);
 
+// A ticket with no priority picker of its own — same reasoning as
+// routes/purchases.js's and routes/shopifyWebhooks.js's own defaults:
+// shipping jobs are usually quick, and anyone can re-triage from the queue
+// if a particular one (crating, international) turns out to need more time.
+const DEFAULT_SHIPPING_PRIORITY_KEY = 'daily_todo';
+
 const TICKET_SELECT = `
   SELECT t.*,
+         src.title AS source_ticket_title,
          c.name  AS customer_name,
          i.family AS instrument_family,
          i.model  AS instrument_model,
@@ -48,6 +56,7 @@ const TICKET_SELECT = `
       SELECT count(*)::int AS attachment_count FROM ticket_attachments WHERE ticket_id = t.id
     ) a ON TRUE
     LEFT JOIN instrument_purchases ip ON ip.ticket_id = t.id
+    LEFT JOIN tickets src ON src.id = t.source_ticket_id
 `;
 
 // ---------------------------------------------------------------------------
@@ -134,7 +143,9 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const ticket = rows[0];
   if (!ticket) throw notFound('Ticket not found');
 
-  const [estimates, hours, qc, attachments, history, shipmentRows, invoiceRows] = await Promise.all([
+  const [
+    estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows,
+  ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
             WHERE e.ticket_id = $1 ORDER BY e.created_at DESC`, [req.params.id]),
@@ -154,6 +165,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
             WHERE l.ticket_id = $1 ORDER BY l.changed_at DESC`, [req.params.id]),
     query('SELECT * FROM shipments WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
     query('SELECT * FROM invoices WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
+    // Tickets created *from* this one (currently just "Create shipping
+    // ticket" below) — lets the originating ticket link forward instead of
+    // only the new one linking back via source_ticket_id/source_ticket_title.
+    query(`SELECT id, title, status_key, status_label_snapshot FROM tickets
+            WHERE source_ticket_id = $1 AND archived = FALSE ORDER BY created_at`, [req.params.id]),
   ]);
 
   res.json({
@@ -165,6 +181,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     status_history: history.rows,
     shipments: shipmentRows.rows,
     invoices: invoiceRows.rows,
+    child_tickets: childRows.rows,
   });
 }));
 
@@ -258,9 +275,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
        instrument_id, customer_id, assigned_tech_id, shop_contact_id,
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
-       category_queue_position, tech_queue_position
+       category_queue_position, tech_queue_position, source_ticket_id
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21,$22,$23)
+               COALESCE($18,'{}'::jsonb),$19,COALESCE($20,TRUE),$21,$22,$23,$24)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -282,6 +299,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
       createdById,
       categoryQueuePosition,
       techQueuePosition,
+      b.source_ticket_id || null,
     ],
   );
   const created = rows[0];
@@ -515,6 +533,50 @@ router.post('/:id/reorder-tech', requireAdmin, asyncHandler(async (req, res) => 
   }));
   const { rows: updated } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
   res.json(updated[0]);
+}));
+
+// ---------------------------------------------------------------------------
+// "Create shipping ticket" — spins up a linked ticket in the Shipping
+// category for this ticket's instrument, plus its shipments record (PLAN §7:
+// deeper packing jobs get "own ticket type, reuses the existing... Shipping
+// Checklist pattern"). Both are created in one transaction so a failure
+// partway through can't leave a shipping ticket with no shipment behind it,
+// same principle as routes/purchases.js's instrument+ticket+purchase insert.
+// ---------------------------------------------------------------------------
+router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
+  const { rows } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
+  const source = rows[0];
+  if (!source) throw notFound('Ticket not found');
+  if (!source.instrument_id) throw badRequest('This ticket has no instrument to ship');
+
+  const resolved = await resolveNewTicketFields({
+    category_key: 'shipping',
+    priority_key: DEFAULT_SHIPPING_PRIORITY_KEY,
+  });
+
+  const title = `Ship — ${source.instrument_family}`
+    + `${source.instrument_model ? ` ${source.instrument_model}` : ''}`;
+  const notes = `Ship this instrument${source.customer_name ? ` to ${source.customer_name}` : ''}. `
+    + `Created from ticket #${source.id} — "${source.title}".`;
+
+  const created = await withTransaction(async (client) => {
+    const ticket = await insertTicketRow(
+      client,
+      {
+        title,
+        notes,
+        instrument_id: source.instrument_id,
+        customer_id: source.customer_id,
+        source_ticket_id: source.id,
+      },
+      resolved,
+      req.user.id,
+    );
+    const shipment = await createShipment(client, { ticketId: ticket.id });
+    return { ...ticket, shipments: [shipment] };
+  });
+
+  res.status(201).json(created);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {

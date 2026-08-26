@@ -8,6 +8,7 @@ import TicketQc from '../components/TicketQc.vue';
 import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
+import TicketShipment from '../components/TicketShipment.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -67,6 +68,20 @@ async function createInvoice() {
   }
 }
 
+// "Ship this instrument" — spins up a linked Shipping-category ticket (plus
+// its shipments record) via routes/tickets.js's create-shipping-ticket
+// route, then navigates straight to it, same as TicketNewView does after a
+// normal ticket create.
+async function createShippingTicket() {
+  error.value = '';
+  try {
+    const created = await api.post(`/tickets/${ticket.value.id}/create-shipping-ticket`);
+    router.push({ name: 'ticket', params: { id: created.id } });
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function archive() {
   if (!confirm('Archive this ticket? It stays searchable under "Show archived".')) return;
   await patch({ archived: true });
@@ -87,12 +102,28 @@ const when = (ts) => new Date(ts).toLocaleString();
           <span>#{{ ticket.id }}</span>
           <span v-if="ticket.legacy_ref">· sheet ref {{ ticket.legacy_ref }}</span>
           <span v-if="ticket.source_sheet">· imported from {{ ticket.source_sheet }}</span>
+          <span v-if="ticket.source_ticket_id">
+            · created from
+            <RouterLink :to="{ name: 'ticket', params: { id: ticket.source_ticket_id } }">
+              #{{ ticket.source_ticket_id }} — {{ ticket.source_ticket_title }}
+            </RouterLink>
+          </span>
         </div>
       </div>
       <div class="row">
         <span :class="['pill', settings.colorFor(ticket.status_key)]">
           {{ ticket.status_label }}
         </span>
+        <RouterLink
+          v-if="ticket.child_tickets?.length"
+          class="btn small" :to="{ name: 'ticket', params: { id: ticket.child_tickets[0].id } }"
+        >
+          Shipping ticket: #{{ ticket.child_tickets[0].id }} →
+        </RouterLink>
+        <button
+          v-else-if="ticket.instrument_id" class="small"
+          @click="createShippingTicket"
+        >Ship this instrument</button>
         <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
       </div>
     </div>
@@ -222,6 +253,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         </div>
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
+        <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
         <TicketEstimate :ticket="ticket" @changed="load" />
         <TicketHours :ticket="ticket" @changed="load" />
       </div>
