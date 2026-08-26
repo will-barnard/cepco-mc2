@@ -33,6 +33,10 @@ const form = ref({
 // screen first is friction nobody will tolerate at intake.
 const newInstrument = ref({ enabled: false, family: 'rhodes', model: '', year: '', serial_no: '' });
 
+// Creating a customer inline, same reasoning as the instrument above: a walk-in
+// customer shouldn't need a trip to the Customers page before we can open their ticket.
+const newCustomer = ref({ enabled: false, name: '', email: '', phone: '', source: 'direct' });
+
 async function loadCustomerInstruments() {
   form.value.instrument_id = '';
   if (!form.value.customer_id) { instruments.value = []; return; }
@@ -50,13 +54,23 @@ async function submit() {
   try {
     const payload = { ...form.value };
 
+    if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
+      const created = await api.post('/customers', {
+        name: newCustomer.value.name.trim(),
+        email: newCustomer.value.email || null,
+        phone: newCustomer.value.phone || null,
+        source: newCustomer.value.source || null,
+      });
+      payload.customer_id = created.id;
+    }
+
     if (newInstrument.value.enabled && newInstrument.value.model) {
       const created = await api.post('/instruments', {
         family: newInstrument.value.family,
         model: newInstrument.value.model,
         year: newInstrument.value.year || null,
         serial_no: newInstrument.value.serial_no || null,
-        customer_id: form.value.customer_id || null,
+        customer_id: payload.customer_id || null,
       });
       payload.instrument_id = created.id;
     }
@@ -117,7 +131,7 @@ async function submit() {
       <div class="field-row">
         <div class="field">
           <label>Customer</label>
-          <select v-model="form.customer_id" @change="loadCustomerInstruments">
+          <select v-model="form.customer_id" :disabled="newCustomer.enabled" @change="loadCustomerInstruments">
             <option value="">— none (internal / fleet) —</option>
             <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
@@ -130,6 +144,38 @@ async function submit() {
               {{ i.family }} · {{ i.model }}
             </option>
           </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox">
+          <input v-model="newCustomer.enabled" type="checkbox" />
+          <span>Add a new customer instead</span>
+        </label>
+      </div>
+
+      <div v-if="newCustomer.enabled" class="card tight" style="margin-bottom: 14px">
+        <div class="field-row">
+          <div class="field">
+            <label>Name *</label>
+            <input v-model="newCustomer.name" required placeholder="Steve Dawson" />
+          </div>
+          <div class="field">
+            <label>Email</label>
+            <input v-model="newCustomer.email" type="email" />
+          </div>
+          <div class="field">
+            <label>Phone</label>
+            <input v-model="newCustomer.phone" />
+          </div>
+          <div class="field">
+            <label>Source</label>
+            <select v-model="newCustomer.source">
+              <option value="direct">Direct</option>
+              <option value="email">Email</option>
+              <option value="shopify">Shopify</option>
+            </select>
+          </div>
         </div>
       </div>
 
