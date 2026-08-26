@@ -585,6 +585,62 @@ shipments UI that was apparently always the intended destination for it.
   queue like anything else. Category is hardcoded to `shipping` — this
   button only ever means one thing.
 
+### 2.19 Statuses are now category-aware, not just one shared list
+
+Shipping tickets only need Not Started / In Progress / Done — Reservation,
+QC, Invoice Sent, Invoice Paid, and On Hold don't mean anything on a job
+that's just packing and sending an already-serviced instrument. Rather than
+forking a second status enum for Shipping (which would mean a parallel set
+of settings rows, and every piece of code that reads `ticket_status` having
+to know which enum applies where), each `ticket_status` row's `meta` gets an
+`applicable_categories` list:
+
+- Empty or absent -> the status applies to every category. This is the
+  default every pre-existing status keeps (Not Started, In Progress, Done
+  included), so this is opt-in *restriction*, not opt-in availability —
+  nothing that worked before this change stops working.
+- Non-empty -> only the listed `ticket_category` keys. Migration 009
+  backfills this onto the five statuses Shipping shouldn't offer, listing
+  every *other* current category explicitly (rather than "all except
+  shipping" as a special case anywhere) — so adding a sixth category later
+  is a Settings edit, not a code change.
+- `services/settings.js` adds `statusAppliesToCategory` (the plain
+  predicate), `resolveStatusForCategory` (like `resolveActive` but also
+  checks the category), and `defaultStatusForCategory` (first non-retired,
+  applicable status by sort order — replaces the old category-blind "first
+  non-retired status" query used when a new ticket doesn't specify one).
+  `routes/tickets.js` uses these in both ticket creation and `PATCH
+  /tickets/:id`.
+- Changing a ticket's category can strand its current status (e.g. a
+  Servicing ticket sitting at "QC" gets moved to Shipping, which doesn't
+  have a QC status). `PATCH /tickets/:id` checks for this whenever category
+  changes without an explicit new status, and re-homes it to the new
+  category's default — logged to `status_change_log` with an explanatory
+  note so it doesn't look like an unexplained status jump later.
+- Settings UI: the Ticket statuses table gets an "Applies to" column — one
+  checkbox per active ticket category. Unchecking one writes an explicit
+  list; checking every box collapses back to an empty list rather than an
+  explicit full one, so a category added later automatically inherits every
+  status that was never deliberately restricted.
+- The ticket detail page's status dropdown uses a new
+  `settings.statusesForCategory(categoryKey)` store getter instead of
+  `settings.active('ticket_status')`, filtering client-side against the
+  already-loaded settings data — no new endpoint needed.
+
+### 2.20 Shipping tickets drop the sections that don't apply to them
+
+Beyond status, a Shipping ticket's page now shows only Details, the
+Shipment card, Photos, and Status history — no Quality control, Estimate,
+Hours logging, or Invoicing cards. Those are real work-tracking tools for
+billable repair/restoration jobs; a shipping ticket is packing and sending
+something that was (usually) already billed on its original ticket, so
+showing an empty QC/estimate/invoice section on every one would just be
+noise. Gated by a single `isShipping` computed (`ticket.category_key ===
+'shipping'`) in `TicketDetailView.vue` — deliberately not a generalized
+"which sections does this category show" settings mechanism, since this is
+the one category that needs it and a real generalization would want to
+know which *other* categories want which subset before it's worth building.
+
 ---
 
 ## 4. Suggested first moves after deploy

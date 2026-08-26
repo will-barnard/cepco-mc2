@@ -175,6 +175,35 @@ async function toggleDistinct(row) {
   }
 }
 
+// Which ticket categories a status applies to (empty/absent meta means
+// "every category" — see NOTES.md and services/settings.js). Returns null
+// for "every category" rather than expanding it, so the checkbox render
+// below can treat null as "show every box checked" without needing to know
+// the full category list up front.
+function categoriesForStatusRow(row) {
+  const allowed = row.meta?.applicable_categories;
+  return Array.isArray(allowed) && allowed.length ? allowed : null;
+}
+
+async function toggleStatusCategory(row, categoryKey, checked) {
+  error.value = '';
+  const allKeys = (settings.data.ticket_category || []).map((c) => c.key);
+  const current = categoriesForStatusRow(row) ?? allKeys;
+  let next = checked
+    ? Array.from(new Set([...current, categoryKey]))
+    : current.filter((k) => k !== categoryKey);
+  // Every box checked -> collapse back to "applies to all" (empty array) so
+  // a category added later automatically gets this status too, instead of
+  // needing every status edited by hand.
+  if (allKeys.length && allKeys.every((k) => next.includes(k))) next = [];
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, applicable_categories: next } });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function createEmployee() {
   error.value = '';
   try {
@@ -258,6 +287,7 @@ onMounted(refresh);
                 <th v-if="category === 'qc_tier'">Rounds required</th>
                 <th v-if="category === 'qc_tier'">Two reviewers</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
+                <th v-if="category === 'ticket_status'">Applies to</th>
                 <th>Order</th><th>State</th><th />
               </tr>
             </thead>
@@ -300,6 +330,22 @@ onMounted(refresh);
                       {{ e.name }}
                     </option>
                   </select>
+                </td>
+
+                <td v-if="category === 'ticket_status'">
+                  <div class="row" style="flex-wrap: wrap; gap: 2px 10px; max-width: 260px">
+                    <label
+                      v-for="cat in settings.active('ticket_category')" :key="cat.key"
+                      class="checkbox"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="!categoriesForStatusRow(row) || categoriesForStatusRow(row).includes(cat.key)"
+                        @change="toggleStatusCategory(row, cat.key, $event.target.checked)"
+                      />
+                      <span class="small">{{ cat.label }}</span>
+                    </label>
+                  </div>
                 </td>
 
                 <td class="nowrap">

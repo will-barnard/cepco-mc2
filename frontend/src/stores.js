@@ -54,6 +54,15 @@ export const useSettings = defineStore('settings', {
     qcTiers: (s) => s.data.qc_tier || [],
     techLevels: (s) => s.data.tech_level || [],
     active: (s) => (category) => (s.data[category] || []).filter((r) => !r.retired),
+    // Ticket statuses, narrowed to whichever ones a given ticket_category is
+    // allowed to use (meta.applicable_categories — empty/absent means every
+    // category, e.g. Not Started/In Progress/Done; Shipping's the first
+    // category that's actually restricted — see NOTES.md).
+    statusesForCategory: (s) => (categoryKey) => (s.data.ticket_status || []).filter((r) => {
+      if (r.retired) return false;
+      const allowed = r.meta?.applicable_categories;
+      return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(categoryKey);
+    }),
     labelFor: (s) => (category, key) => (s.data[category] || []).find((r) => r.key === key)?.label || key,
     colorFor: (s) => (key) => (s.data.ticket_status || []).find((r) => r.key === key)?.meta?.color || 'slate',
   },

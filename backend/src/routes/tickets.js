@@ -201,16 +201,12 @@ async function resolveNewTicketFields(b) {
     settings.resolveActive('priority_tier', b.priority_key),
   ]);
 
-  let statusKey = b.status_key;
-  if (!statusKey) {
-    const { rows } = await query(
-      `SELECT key FROM settings WHERE category = 'ticket_status' AND retired = FALSE
-        ORDER BY sort_order, id LIMIT 1`,
-    );
-    if (!rows[0]) throw badRequest('No ticket statuses are configured');
-    statusKey = rows[0].key;
-  }
-  const status = await settings.resolveActive('ticket_status', statusKey);
+  // Status options are category-aware (e.g. Shipping only offers Not
+  // Started/In Progress/Done — see NOTES.md) — resolve/default against this
+  // ticket's actual category rather than the raw settings list.
+  const status = b.status_key
+    ? await settings.resolveStatusForCategory(b.status_key, category.key)
+    : await settings.defaultStatusForCategory(category.key);
 
   let techLevel = null;
   if (b.tech_level_key) techLevel = await settings.resolveActive('tech_level', b.tech_level_key);
@@ -340,8 +336,21 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.priority_key && b.priority_key !== existing.priority_key) {
     resolved.priority = await settings.resolveActive('priority_tier', b.priority_key);
   }
+  const effectiveCategoryKey = resolved.category ? resolved.category.key : existing.category_key;
+  let statusAutoReset = false;
   if (b.status_key && b.status_key !== existing.status_key) {
-    resolved.status = await settings.resolveActive('ticket_status', b.status_key);
+    resolved.status = await settings.resolveStatusForCategory(b.status_key, effectiveCategoryKey);
+  } else if (resolved.category) {
+    // Category is changing but no explicit new status was given — if the
+    // ticket's current status isn't valid for the new category (e.g. a
+    // Servicing ticket sitting at "QC" moving into Shipping, which doesn't
+    // have a QC status), re-home it to that category's default rather than
+    // silently leaving it stuck on a status the new category can't display.
+    const currentStatus = await settings.resolve('ticket_status', existing.status_key);
+    if (!settings.statusAppliesToCategory(currentStatus, effectiveCategoryKey)) {
+      resolved.status = await settings.defaultStatusForCategory(effectiveCategoryKey);
+      statusAutoReset = true;
+    }
   }
   if (b.tech_level_key !== undefined && b.tech_level_key !== existing.tech_level_key) {
     resolved.techLevel = b.tech_level_key
@@ -445,7 +454,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
           existing.status_key, resolved.status.key,
           existing.status_label_snapshot, resolved.status.label,
           req.user.id,
-          b.status_note || null,
+          b.status_note || (statusAutoReset
+            ? `Status reset automatically — '${existing.status_label_snapshot}' isn't valid for `
+              + `the new category (${resolved.category.label}).`
+            : null),
         ],
       );
     }

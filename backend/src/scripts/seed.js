@@ -26,14 +26,19 @@ const SETTINGS = [
   ['ticket_category', 'shipping', 'Shipping', 50, {}],
 
   // Statuses, seeded from the values actually present in the sheets.
-  ['ticket_status', 'reservation', 'Reservation', 10, { color: 'slate' }],
+  ['ticket_status', 'reservation', 'Reservation', 10,
+    { color: 'slate', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
   ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate' }],
   ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue' }],
-  ['ticket_status', 'qc', 'QC', 40, { color: 'violet' }],
-  ['ticket_status', 'invoice_sent', 'Invoice Sent', 50, { color: 'amber' }],
-  ['ticket_status', 'invoice_paid', 'Invoice Paid', 60, { color: 'green' }],
+  ['ticket_status', 'qc', 'QC', 40,
+    { color: 'violet', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+  ['ticket_status', 'invoice_sent', 'Invoice Sent', 50,
+    { color: 'amber', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+  ['ticket_status', 'invoice_paid', 'Invoice Paid', 60,
+    { color: 'green', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
   ['ticket_status', 'done', 'Done', 70, { color: 'green', terminal: true }],
-  ['ticket_status', 'on_hold', 'On Hold', 80, { color: 'red' }],
+  ['ticket_status', 'on_hold', 'On Hold', 80,
+    { color: 'red', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
 
   // Priority tiers, with the hour ranges from the sheet section headers.
   ['priority_tier', 'daily_todo', 'Daily To-Do', 10, { min_hours: 0, max_hours: 1 }],

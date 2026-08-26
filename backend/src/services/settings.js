@@ -71,6 +71,39 @@ async function resolveActive(category, key) {
   return row;
 }
 
+/**
+ * True if a ticket_status row is usable by the given ticket_category.
+ * `meta.applicable_categories` empty/absent means "every category" — the
+ * default every pre-existing status keeps, so this is opt-in restriction,
+ * not opt-in availability. Shipping (§ NOTES.md) is the first user: the
+ * other statuses list every category except shipping, while Not
+ * Started/In Progress/Done stay unrestricted.
+ */
+function statusAppliesToCategory(statusRow, categoryKey) {
+  const allowed = statusRow.meta && statusRow.meta.applicable_categories;
+  return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(categoryKey);
+}
+
+/** resolveActive('ticket_status', key), also enforced against the ticket's
+ * category — e.g. a Shipping ticket can't be set to QC or On Hold. */
+async function resolveStatusForCategory(key, categoryKey) {
+  const status = await resolveActive('ticket_status', key);
+  if (!statusAppliesToCategory(status, categoryKey)) {
+    throw badRequest(`'${status.label}' isn't a valid status for this ticket's category`);
+  }
+  return status;
+}
+
+/** The first non-retired status usable by this category, in sort order —
+ * used to default a new ticket's status, and to re-home a ticket whose
+ * status stops being valid after its category changes. */
+async function defaultStatusForCategory(categoryKey) {
+  const rows = await listCategory('ticket_status');
+  const match = rows.find((r) => !r.retired && statusAppliesToCategory(r, categoryKey));
+  if (!match) throw badRequest('No ticket statuses are configured for this category');
+  return match;
+}
+
 const slugify = (s) => String(s)
   .toLowerCase()
   .trim()
@@ -191,6 +224,9 @@ module.exports = {
   listCategory,
   resolve,
   resolveActive,
+  statusAppliesToCategory,
+  resolveStatusForCategory,
+  defaultStatusForCategory,
   create,
   update,
   remove,

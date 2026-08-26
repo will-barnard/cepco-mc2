@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings, useRefData } from '../stores';
@@ -89,6 +89,11 @@ async function archive() {
 }
 
 const when = (ts) => new Date(ts).toLocaleString();
+
+// Shipping tickets are pack-and-send jobs, not billable repair work — no QC
+// round, no labor estimate, no hours logging, no invoice. Just the shared
+// Details card plus the Shipment card (TicketShipment.vue). See NOTES.md.
+const isShipping = computed(() => ticket.value?.category_key === 'shipping');
 </script>
 
 <template>
@@ -139,7 +144,10 @@ const when = (ts) => new Date(ts).toLocaleString();
             <div class="field">
               <label>Status</label>
               <select :value="ticket.status_key" @change="changeStatus">
-                <option v-for="s in settings.active('ticket_status')" :key="s.key" :value="s.key">
+                <option
+                  v-for="s in settings.statusesForCategory(ticket.category_key)"
+                  :key="s.key" :value="s.key"
+                >
                   {{ s.label }}
                 </option>
               </select>
@@ -254,16 +262,16 @@ const when = (ts) => new Date(ts).toLocaleString();
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
-        <TicketEstimate :ticket="ticket" @changed="load" />
-        <TicketHours :ticket="ticket" @changed="load" />
+        <TicketEstimate v-if="!isShipping" :ticket="ticket" @changed="load" />
+        <TicketHours v-if="!isShipping" :ticket="ticket" @changed="load" />
       </div>
 
       <!-- --------------------------------------- right: QC, photos, log -->
       <div class="stack">
-        <TicketQc :ticket="ticket" @changed="load" />
+        <TicketQc v-if="!isShipping" :ticket="ticket" @changed="load" />
         <TicketPhotos :ticket-id="ticket.id" />
 
-        <div class="card">
+        <div v-if="!isShipping" class="card">
           <div class="row" style="margin-bottom: 12px">
             <h2 style="margin: 0">Invoicing</h2>
             <div class="spacer" />
