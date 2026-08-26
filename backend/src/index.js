@@ -13,7 +13,13 @@ const { seed } = require('./scripts/seed');
 const app = express();
 
 app.set('trust proxy', 1); // behind Beachhead's nginx-proxy
-app.use(express.json({ limit: '2mb' }));
+// Shopify webhook HMAC verification needs the exact raw bytes Shopify
+// signed — capture them alongside the normal parse rather than adding a
+// second body-parsing path just for that one route.
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(cors({ origin: true, credentials: true }));
@@ -35,6 +41,7 @@ app.use('/api/customers', require('./routes/customers'));
 app.use('/api/instruments', require('./routes/instruments'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/purchases', require('./routes/purchases'));
+app.use('/api/shopify', require('./routes/shopifyWebhooks'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/estimates', require('./routes/estimates'));
 app.use('/api/hours', require('./routes/hours'));

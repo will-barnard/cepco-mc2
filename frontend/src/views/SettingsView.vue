@@ -117,6 +117,40 @@ async function setShopValue(row, value) {
   }
 }
 
+// Which ticket_category a new Shopify order is filed under (Settings ->
+// Shop configuration). Stored as a shop_config row whose meta.value is the
+// category key, same slot as labor_rate but string-valued instead of
+// numeric, hence its own handler instead of reusing setShopValue.
+async function setShopifyCategory(row, categoryKey) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, value: categoryKey } });
+    notice.value = 'Incoming Shopify orders will now be filed under this category.';
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+// Per-category auto-assignment (e.g. every Shipping ticket goes straight to
+// the shipping manager). Stored on the ticket_category row's own meta so no
+// new table is needed; resolveNewTicketFields (backend) reads it whenever a
+// ticket is created without an explicit assignee — manual, Shopify-order,
+// and inventory-purchase tickets alike.
+async function setDefaultAssignee(row, employeeId) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, default_assignee_id: employeeId ? Number(employeeId) : null },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function setRequiredRounds(row, value) {
   error.value = '';
   try {
@@ -192,7 +226,20 @@ onMounted(refresh);
         <div class="field-row">
           <div v-for="row in settings.data.shop_config || []" :key="row.id" class="field">
             <label>{{ row.label }}</label>
+            <select
+              v-if="row.key === 'shopify_default_category'"
+              :value="row.meta.value"
+              @change="setShopifyCategory(row, $event.target.value)"
+            >
+              <option
+                v-for="cat in (settings.data.ticket_category || []).filter((c) => !c.retired)"
+                :key="cat.key" :value="cat.key"
+              >
+                {{ cat.label }}
+              </option>
+            </select>
             <input
+              v-else
               type="number" step="1" min="1" :value="row.meta.value"
               @change="setShopValue(row, $event.target.value)"
             />
@@ -210,6 +257,7 @@ onMounted(refresh);
                 <th>Label</th><th>Key</th>
                 <th v-if="category === 'qc_tier'">Rounds required</th>
                 <th v-if="category === 'qc_tier'">Two reviewers</th>
+                <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th>Order</th><th>State</th><th />
               </tr>
             </thead>
@@ -237,6 +285,21 @@ onMounted(refresh);
                       @change="toggleDistinct(row)"
                     />
                   </label>
+                </td>
+
+                <td v-if="category === 'ticket_category'">
+                  <select
+                    :value="row.meta.default_assignee_id || ''"
+                    @change="setDefaultAssignee(row, $event.target.value)"
+                  >
+                    <option value="">— none —</option>
+                    <option
+                      v-for="e in refData.employees.filter((emp) => emp.active)"
+                      :key="e.id" :value="e.id"
+                    >
+                      {{ e.name }}
+                    </option>
+                  </select>
                 </td>
 
                 <td class="nowrap">

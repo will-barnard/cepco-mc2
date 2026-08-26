@@ -9,6 +9,27 @@ const config = require('../config');
 
 const router = express.Router();
 
+// Sets the session cookie for both /login and /switch (kiosk identity
+// switching). SameSite=None is what lets the cookie survive when MC2 is
+// loaded inside a third-party iframe (e.g. embedded in Shopify admin) —
+// browsers refuse to send a Lax cookie in that cross-site context, which is
+// why login and every subsequent /api call used to 401 there. None without
+// Secure is rejected outright by Chrome though, so this only applies when
+// we're actually on HTTPS (production); local dev falls back to Lax, which
+// is all a same-origin dev server needs. Kiosk mode (/auth/switch) uses this
+// same helper and isn't affected either way — None is strictly more
+// permissive than Lax, never less, so nothing that worked before stops
+// working now.
+function setAuthCookie(res, token) {
+  const secure = config.env === 'production';
+  res.cookie('cepco_token', token, {
+    httpOnly: true,
+    sameSite: secure ? 'none' : 'lax',
+    secure,
+    maxAge: config.jwtTtlSeconds * 1000,
+  });
+}
+
 router.post('/login', asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) throw badRequest('Email and password are required');
@@ -26,12 +47,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
 
   const token = signToken(employee);
-  res.cookie('cepco_token', token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: config.env === 'production',
-    maxAge: config.jwtTtlSeconds * 1000,
-  });
+  setAuthCookie(res, token);
 
   return res.json({
     token,
@@ -94,12 +110,7 @@ router.post('/switch', requireAuth, asyncHandler(async (req, res) => {
   }
 
   const token = signToken(target);
-  res.cookie('cepco_token', token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: config.env === 'production',
-    maxAge: config.jwtTtlSeconds * 1000,
-  });
+  setAuthCookie(res, token);
 
   return res.json({
     user: {

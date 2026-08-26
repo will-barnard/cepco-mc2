@@ -10,6 +10,7 @@
     "migrate": "node src/scripts/migrate.js",
     "seed": "node src/scripts/seed.js",
     "import:csv": "node src/scripts/importCsv.js",
+    "shopify:register-webhooks": "node src/scripts/registerShopifyWebhooks.js",
     "test": "node test/smoke.mjs && node test/photos.mjs"
   },
   "dependencies": {

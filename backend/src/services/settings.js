@@ -147,6 +147,16 @@ async function shopConfigNumber(key, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+/** Read a string value out of a shop_config row, with a fallback. */
+async function shopConfigString(key, fallback) {
+  const { rows } = await query(
+    "SELECT meta FROM settings WHERE category = 'shop_config' AND key = $1",
+    [key],
+  );
+  const value = rows[0]?.meta?.value;
+  return typeof value === 'string' && value ? value : fallback;
+}
+
 async function countUsage(category, key) {
   const column = USAGE_COLUMN[category];
   if (!column) return 0;
@@ -186,5 +196,6 @@ module.exports = {
   remove,
   countUsage,
   shopConfigNumber,
+  shopConfigString,
   slugify,
 };

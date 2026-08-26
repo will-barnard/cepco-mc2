@@ -394,6 +394,106 @@ email sending earlier than planned:
   that logic. `POST /tickets` itself is unchanged — same validation, same
   response shape, just calling the extracted functions now.
 
+### 2.15 Shopify order intake — webhook receiver, not a poller
+
+An order placed in Shopify now becomes a ticket in MC2 automatically,
+without anyone touching Shopify's admin:
+
+- `backend/src/routes/shopifyWebhooks.js` is a webhook *receiver*
+  (`orders/create`, `orders/cancelled`), not a polling job — Shopify pushes
+  to us the moment an order is placed, which is both simpler and far lower
+  latency than scanning the Orders API on a timer. It has no `requireAuth`;
+  instead `backend/src/shopify.js#verifyWebhookHmac` checks the
+  `X-Shopify-Hmac-Sha256` header against an HMAC-SHA256 of the *raw* request
+  body using `SHOPIFY_WEBHOOK_SECRET`. That's why `index.js` now captures
+  `req.rawBody` in the global `express.json({ verify })` call instead of
+  parsing Shopify's route separately — Express's JSON parser normally
+  discards the exact bytes, and a signature computed over the re-serialized
+  body wouldn't reliably match Shopify's.
+- Idempotency against webhook redelivery (Shopify retries on anything but a
+  fast 200) is a unique partial index, `tickets_shopify_order_id_idx`
+  (migration 006), not just an in-code check. The route does check-then-insert
+  for the common case (skip the transaction entirely if a ticket already
+  exists for that order id), but the index is what actually prevents a
+  duplicate ticket if two deliveries race each other — the insert's `23505`
+  is caught and treated as "already handled," not an error.
+- New-ticket creation goes through the same `resolveNewTicketFields` /
+  `insertTicketRow` pair introduced for inventory purchases (§2.14) — the
+  webhook route doesn't call `POST /tickets` over HTTP, it calls those
+  functions directly on its own transaction, same pattern as
+  `routes/purchases.js`. `created_by` is `null` (no staff member created it).
+- Two admin-editable settings drive where an order-ticket lands, both stored
+  on existing rows so no new schema was needed: which category it's filed
+  under is a `shop_config` row (`shopify_default_category`, alongside
+  `labor_rate`) whose `meta.value` is a `ticket_category` key, editable from
+  Settings -> Shop configuration; who it's assigned to is
+  `meta.default_assignee_id` on that *category's own* settings row, editable
+  from the "Default assignee" column on the Ticket categories table. That
+  second one isn't Shopify-specific — `resolveNewTicketFields` reads it for
+  every ticket creation path (manual, inventory purchase, Shopify order)
+  whenever nobody named an assignee explicitly, so setting a shipping
+  manager as Shipping's default assignee auto-assigns tickets from all three
+  sources, not just orders. If the configured category is ever missing or
+  retired, the route falls back to `orders_shipping` rather than failing the
+  webhook.
+- The customer on an order-ticket is matched by email against `customers`
+  first, falling back to creating one with `source = 'shopify'` — the same
+  `source` enum already used to distinguish direct/email/shopify customers,
+  now actually populated by something.
+- `orders/updated` is deliberately *not* wired to do anything yet, even
+  though `registerShopifyWebhooks.js` subscribes to it (so re-registering
+  later, once it is acted on, doesn't require touching Shopify's admin
+  again). Syncing line-item/fulfillment changes back onto an in-progress
+  ticket is a real design question (what happens if a tech already started
+  the work?) that wasn't part of what was asked for — the route acknowledges
+  the webhook with 200 and stops there.
+- Registering the webhook subscriptions with Shopify is a separate one-off
+  step from the receiver going live: `npm run shopify:register-webhooks`
+  (`backend/src/scripts/registerShopifyWebhooks.js`) hits the Admin REST API
+  with `SHOPIFY_ADMIN_API_TOKEN` and points the subscriptions at
+  `${PUBLIC_BASE_URL}/api/shopify/webhooks`. It's safe to re-run — it skips
+  any topic already registered to that exact address. `SHOPIFY_SHOP_DOMAIN`
+  is a new env var (the receiving endpoint itself doesn't need it — only
+  this registration script and any future outbound Admin API call do).
+
+### 2.16 The login cookie needed SameSite=None for Shopify's iframe
+
+Opening MC2 embedded inside Shopify admin (a link that loads it in an
+iframe) 401'd on every request, including login itself. Cause: `cepco_token`
+was `SameSite=Lax`, and browsers refuse to send (and, in Chrome's case,
+refuse to even store) a Lax cookie in a third-party/cross-site iframe
+context. That's a browser-level restriction, not a bug in our CORS config —
+`cors({ origin: true, credentials: true })` was already correct and had
+nothing to do with it.
+
+- `backend/src/routes/auth.js` now sets the cookie through one
+  `setAuthCookie()` helper shared by `/login` and `/switch` (kiosk identity
+  switching), with `sameSite: 'none'` whenever `secure` is true (production).
+  `SameSite=None` requires `Secure`, and Chrome rejects the cookie outright
+  if that pairing isn't right — so local dev (plain HTTP) still gets `Lax`,
+  which is all a same-origin dev server ever needed.
+- This doesn't touch kiosk mode's behavior: `None` is strictly *more*
+  permissive than `Lax` (send everywhere vs. send almost everywhere), so
+  nothing that worked on the shop-floor kiosk browser stops working — the
+  switch endpoint uses the exact same helper and cookie.
+- What this does **not** fully solve: Safari's ITP, and Chrome's own
+  ongoing move to block third-party cookies by default, can still refuse a
+  `SameSite=None` cookie purely because it's a *third-party* cookie, no
+  matter how it's attributed. `SameSite=None` fixes today's Chrome-default
+  behavior; it isn't a permanent guarantee against browsers tightening
+  further. The actually robust fix for a real embedded-in-Shopify surface is
+  Shopify's own pattern — App Bridge session tokens sent as an
+  `Authorization` header instead of a cookie — which is a real scope
+  increase (new frontend auth wiring, a second verification path in the
+  backend) and wasn't undertaken here since the ask was to stop the 401s,
+  not to make MC2 a permanent embedded Shopify surface. If MC2 ever needs to
+  live inside Shopify's admin as a first-class embedded app, revisit this.
+- Recommended alongside this: don't actually embed MC2 in an iframe at all —
+  point the Shopify-side link at MC2's URL opening in a new tab. That sidesteps
+  third-party-cookie restrictions entirely (MC2 becomes a normal same-site
+  page from the browser's perspective) and needs no code change, only how
+  the link is configured on Shopify's side.
+
 ---
 
 ## 4. Suggested first moves after deploy

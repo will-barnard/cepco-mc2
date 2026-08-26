@@ -60,6 +60,13 @@ const SETTINGS = [
   // changing this never restates a quote that already went out.
   ['shop_config', 'labor_rate', 'Shop labor rate ($/hr)', 10,
     { value: 185, unit: 'usd_per_hour' }],
+
+  // Which ticket category a new Shopify order lands in (§ NOTES.md "Shopify
+  // order intake"). Admin-editable from Settings -> Shop configuration;
+  // routes/shopifyWebhooks.js falls back to 'orders_shipping' if this ever
+  // points at a retired/missing category.
+  ['shop_config', 'shopify_default_category', 'Default category for Shopify orders', 20,
+    { value: 'orders_shipping' }],
 ];
 
 // ---------------------------------------------------------------------------

@@ -52,6 +52,17 @@ const config = {
     apiKey: process.env.RESEND_API_KEY || '',
     fromEmail: process.env.RESEND_FROM_EMAIL || '',
   },
+
+  // Shopify order intake (PLAN §11). webhookSecret verifies inbound webhook
+  // requests (backend/src/shopify.js); shopDomain + adminApiToken are only
+  // needed to *register* those webhooks (scripts/registerShopifyWebhooks.js)
+  // — the receiving endpoint itself never calls back out to Shopify.
+  shopify: {
+    webhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || '',
+    adminApiToken: process.env.SHOPIFY_ADMIN_API_TOKEN || '',
+    shopDomain: process.env.SHOPIFY_SHOP_DOMAIN || '',
+    apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07',
+  },
 };
 
 if (config.env === 'production' && config.jwtSecret === 'dev-only-insecure-secret') {

@@ -185,8 +185,21 @@ async function resolveNewTicketFields(b) {
   let techLevel = null;
   if (b.tech_level_key) techLevel = await settings.resolveActive('tech_level', b.tech_level_key);
 
+  // Default assignment (Settings -> a category's "Default assignee"): only
+  // kicks in when nobody named an assignee explicitly, and only if that
+  // employee is still active — a departed shipping manager should never
+  // silently keep collecting new tickets.
+  let defaultAssignedTechId = null;
+  if (!b.assigned_tech_id && category.meta && category.meta.default_assignee_id) {
+    const { rows } = await query(
+      'SELECT id FROM employees WHERE id = $1 AND active = TRUE',
+      [category.meta.default_assignee_id],
+    );
+    if (rows[0]) defaultAssignedTechId = rows[0].id;
+  }
+
   return {
-    category, priority, status, techLevel,
+    category, priority, status, techLevel, defaultAssignedTechId,
   };
 }
 
@@ -198,7 +211,7 @@ async function resolveNewTicketFields(b) {
 // through never leaves an orphaned ticket.
 async function insertTicketRow(client, b, resolved, createdById) {
   const {
-    category, priority, status, techLevel,
+    category, priority, status, techLevel, defaultAssignedTechId,
   } = resolved;
   const { rows } = await client.query(
     `INSERT INTO tickets (
@@ -220,7 +233,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
       techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
       b.instrument_id || null,
       b.customer_id || null,
-      b.assigned_tech_id || null,
+      b.assigned_tech_id || defaultAssignedTechId || null,
       b.shop_contact_id || null,
       b.notes || null,
       b.drop_off_date || null,
