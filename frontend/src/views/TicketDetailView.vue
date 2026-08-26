@@ -9,6 +9,7 @@ import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
+import TicketSubTickets from '../components/TicketSubTickets.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -68,20 +69,6 @@ async function createInvoice() {
   }
 }
 
-// "Ship this instrument" — spins up a linked Shipping-category ticket (plus
-// its shipments record) via routes/tickets.js's create-shipping-ticket
-// route, then navigates straight to it, same as TicketNewView does after a
-// normal ticket create.
-async function createShippingTicket() {
-  error.value = '';
-  try {
-    const created = await api.post(`/tickets/${ticket.value.id}/create-shipping-ticket`);
-    router.push({ name: 'ticket', params: { id: created.id } });
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
 async function archive() {
   if (!confirm('Archive this ticket? It stays searchable under "Show archived".')) return;
   await patch({ archived: true });
@@ -120,16 +107,6 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
         <span :class="['pill', settings.colorFor(ticket.status_key)]">
           {{ ticket.status_label }}
         </span>
-        <RouterLink
-          v-if="ticket.child_tickets?.length"
-          class="btn small" :to="{ name: 'ticket', params: { id: ticket.child_tickets[0].id } }"
-        >
-          Shipping ticket: #{{ ticket.child_tickets[0].id }} →
-        </RouterLink>
-        <button
-          v-else-if="ticket.instrument_id" class="small"
-          @click="createShippingTicket"
-        >Ship this instrument</button>
         <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
       </div>
     </div>
@@ -260,6 +237,8 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
             </button>
           </div>
         </div>
+
+        <TicketSubTickets :ticket="ticket" @changed="load" />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />

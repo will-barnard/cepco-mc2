@@ -16,6 +16,7 @@ const routes = [
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { admin: true } },
+  { path: '/settings/qc-templates', name: 'qc-templates', component: () => import('./views/QcTemplatesView.vue'), meta: { admin: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
 

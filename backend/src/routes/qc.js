@@ -21,16 +21,22 @@ const router = express.Router();
 router.use(requireAuth);
 
 // --- templates -------------------------------------------------------------
+// `include_inactive=true` is for the Settings -> QC templates admin screen,
+// which needs to see (and reactivate) retired templates. Every other caller
+// (TicketQc.vue's round-start dropdown) omits it and keeps getting only the
+// active rows it always got.
 router.get('/templates', asyncHandler(async (req, res) => {
-  const clauses = ['active = TRUE'];
+  const clauses = [];
   const params = [];
+  if (req.query.include_inactive !== 'true') clauses.push('active = TRUE');
   if (req.query.family) {
     params.push(req.query.family);
     clauses.push(`(family = $${params.length} OR family IS NULL)`);
   }
   if (req.query.kind) { params.push(req.query.kind); clauses.push(`kind = $${params.length}`); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await query(
-    `SELECT * FROM qc_templates WHERE ${clauses.join(' AND ')} ORDER BY family NULLS LAST, name`,
+    `SELECT * FROM qc_templates ${where} ORDER BY family NULLS LAST, name`,
     params,
   );
   res.json(rows);

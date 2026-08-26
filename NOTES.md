@@ -661,6 +661,97 @@ returns null whenever `sort` is set): they act on `category_queue_position`/
 `tech_queue_position`, and swapping those wouldn't visibly do anything to a
 list that's actually sorted by status.
 
+### 2.22 Sub-tickets — assigning a custom shop task to someone else
+
+The ask: custom shop tasks (e.g. metal fabrication for a specific
+instrument) need to be spun off as their own assignable, trackable ticket
+without losing the connection to the job they came from. Rather than a new
+parent/child concept, this reuses the `source_ticket_id` link migration 008
+added for "Ship this instrument" (§2.18) — a sub-ticket *is* a normal
+ticket row with `source_ticket_id` pointing at the one it came from, so
+shipping tickets turn out to be one specific case of sub-tickets rather
+than a separate mechanism sub-tickets now sit alongside.
+
+Three product decisions, asked and answered up front rather than guessed:
+
+- **No enforcement blocking the parent.** A shop lead can move the parent
+  ticket to Done/Invoicing while a sub-ticket is still open — the child's
+  status is visible on the parent (`TicketSubTickets.vue`'s list), not
+  gated. Revisit only if it turns out people are shipping instruments with
+  fabrication work still outstanding by mistake.
+- **New sub-ticket defaults to its parent's category**, since the common
+  case (a fabrication task off a Servicing job) is itself servicing-ish
+  work — but the category select stays editable in the form, since that
+  default is wrong often enough (a Shipping ticket spinning off a
+  Servicing sub-ticket) to not hardcode.
+- **Any ticket can spawn sub-tickets**, including sub-tickets themselves —
+  no category allowlist. `TicketSubTickets.vue` is rendered unconditionally
+  in `TicketDetailView.vue`, so nesting happens naturally rather than
+  needing to be special-cased away later.
+
+Implementation:
+
+- `GET /tickets/:id`'s child-tickets query (previously scoped implicitly to
+  shipping tickets by the fact that nothing else set `source_ticket_id`)
+  now selects category/status/assignee for every child, ordered by
+  creation — `routes/tickets.js`. No migration needed; the column and its
+  index already existed.
+- `resolveNewTicketFields` validates `source_ticket_id` up front (parent
+  must exist) so a bad id fails as a 400 instead of surfacing the
+  `tickets_source_ticket_id_fkey` constraint as a raw 500.
+- New `TicketSubTickets.vue` replaces the old header-level "Ship this
+  instrument" button/link in `TicketDetailView.vue`: it lists existing
+  children (title, category, status, assignee), has a "+ Add sub-ticket"
+  form (title/category/priority/assignee/notes, posting a normal `POST
+  /tickets` with `source_ticket_id` set plus the parent's
+  `instrument_id`/`customer_id` carried over), and folds "Ship this
+  instrument" in as a quick-action button that pre-fills the same
+  create-shipping-ticket call — it's just a sub-ticket creation shortcut,
+  not a different feature. The button now hides based on whether a
+  *shipping-category* child exists (`hasShippingChild`), not "any child
+  exists" — the old guard would have hidden it forever after the first
+  unrelated sub-ticket.
+- No depth cap and no cycle check on `source_ticket_id` — a ticket could in
+  principle chain sub-tickets arbitrarily deep. Not worth guarding against
+  until someone actually does it; the UI only ever renders one level (a
+  ticket's direct children), so a deep chain would just mean clicking
+  through several tickets to see the whole thread, not a crash.
+
+### 2.23 QC checklist templates finally have a screen
+
+`qc_templates` (migration 001) already had everything this needed — `family`
+(nullable — a specific instrument type, or NULL for "every type"), `kind`
+(`qc`/`shipping`/`evaluation`), a `tier_key`, and the `items` JSONB array of
+`{label, note}` rows that become a ticket's actual checklist — plus a full
+admin CRUD API in `routes/qc.js`. None of it had a frontend. The only way to
+add or change a checklist was editing `seed.js`'s `QC_TEMPLATES` array and
+redeploying, which is what prompted this: a "different checklist per
+instrument type" ask that the data model already supported end-to-end
+(`TicketQc.vue`'s template dropdown already requests `?family=<the ticket's
+instrument family>`, and the route already returns that family's templates
+plus the family-NULL ones together) but that nobody could actually act on
+without touching code.
+
+- New `QcTemplatesView.vue` at `/settings/qc-templates`, linked from the top
+  of `SettingsView.vue` (`meta: { admin: true }` on the route, same guard as
+  `/settings` itself — it doesn't sit in the top nav, only reachable through
+  Settings). Filter by instrument type and kind, inline-editable name/type/
+  kind/tier per template (autosaves on change, same pattern as the rest of
+  Settings), and an "Edit checklist" panel per template for the `items`
+  array — add/remove/reorder rows, buffered locally until "Save checklist"
+  rather than a PATCH per keystroke, since it's a whole array rewrite.
+- `GET /qc/templates` gained `?include_inactive=true`, additive only — every
+  existing caller (just `TicketQc.vue`'s round-start dropdown) keeps getting
+  active-only results by omitting it. The admin screen always fetches with
+  it set and filters "Show retired" client-side, so toggling it doesn't
+  need a re-fetch.
+- No hard delete — "Retire"/"Restore" toggles `qc_templates.active`, same
+  as every other Settings table, and the same reasoning: `qc_checks` rows
+  already snapshot the items they were started with (`results`, `template_id
+  ON DELETE SET NULL`), so a retired or even hard-deleted template can't
+  corrupt history either way, but retiring keeps the option to bring an old
+  checklist back without retyping it.
+
 ---
 
 ## 4. Suggested first moves after deploy

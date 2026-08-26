@@ -174,11 +174,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
             WHERE l.ticket_id = $1 ORDER BY l.changed_at DESC`, [req.params.id]),
     query('SELECT * FROM shipments WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
     query('SELECT * FROM invoices WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
-    // Tickets created *from* this one (currently just "Create shipping
-    // ticket" below) — lets the originating ticket link forward instead of
-    // only the new one linking back via source_ticket_id/source_ticket_title.
-    query(`SELECT id, title, status_key, status_label_snapshot FROM tickets
-            WHERE source_ticket_id = $1 AND archived = FALSE ORDER BY created_at`, [req.params.id]),
+    // Sub-tickets: any ticket created *from* this one (the "Create shipping
+    // ticket" button, or the general "Add sub-ticket" form — both just set
+    // source_ticket_id on a normal POST /tickets). Lets the parent link
+    // forward to all of its children, not just each child linking back via
+    // source_ticket_id/source_ticket_title.
+    query(`SELECT c.id, c.title, c.category_key, c.category_label_snapshot,
+                  c.status_key, c.status_label_snapshot, c.assigned_tech_id,
+                  tech.name AS assigned_tech_name
+             FROM tickets c
+             LEFT JOIN employees tech ON tech.id = c.assigned_tech_id
+            WHERE c.source_ticket_id = $1 AND c.archived = FALSE
+            ORDER BY c.created_at`, [req.params.id]),
   ]);
 
   res.json({
@@ -204,6 +211,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
 async function resolveNewTicketFields(b) {
   if (!b.category_key) throw badRequest('category_key is required');
   if (!b.priority_key) throw badRequest('priority_key is required');
+
+  // A sub-ticket ("Add sub-ticket" on any ticket, or the "Create shipping
+  // ticket" button) is just a normal ticket with source_ticket_id set —
+  // checked here so a bad/deleted parent id fails with a clear message
+  // instead of surfacing the tickets_source_ticket_id_fkey constraint as a
+  // raw 500.
+  if (b.source_ticket_id) {
+    const { rows } = await query('SELECT id FROM tickets WHERE id = $1', [b.source_ticket_id]);
+    if (!rows[0]) throw badRequest(`Parent ticket #${b.source_ticket_id} not found`);
+  }
 
   const [category, priority] = await Promise.all([
     settings.resolveActive('ticket_category', b.category_key),

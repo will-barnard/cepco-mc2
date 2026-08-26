@@ -8,6 +8,7 @@
  * still carries the key; retiring hides it from new tickets instead.
  */
 import { ref, onMounted } from 'vue';
+import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
 
@@ -239,6 +240,7 @@ onMounted(refresh);
           retire it instead to hide it from new tickets.
         </p>
       </div>
+      <RouterLink class="btn small" :to="{ name: 'qc-templates' }">QC checklist templates →</RouterLink>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
