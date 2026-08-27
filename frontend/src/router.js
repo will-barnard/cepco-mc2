@@ -21,6 +21,10 @@ const routes = [
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { admin: true } },
   { path: '/settings/qc-templates', name: 'qc-templates', component: () => import('./views/QcTemplatesView.vue'), meta: { admin: true } },
   { path: '/settings/procedures', name: 'procedures', component: () => import('./views/ProceduresView.vue'), meta: { admin: true } },
+  {
+    path: '/settings/instrument-defaults', name: 'instrument-defaults',
+    component: () => import('./views/InstrumentDefaultsView.vue'), meta: { admin: true },
+  },
   // Public: opened from the confirm/decline link in a customer-quote
   // email (backend/src/templates/quoteEmail.js). `alwaysPublic` keeps the
   // guard below from bouncing a *signed-in* employee previewing their own

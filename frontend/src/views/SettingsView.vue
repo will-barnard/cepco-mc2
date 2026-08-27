@@ -277,6 +277,9 @@ onMounted(refresh);
       <div class="row">
         <RouterLink class="btn small" :to="{ name: 'qc-templates' }">QC checklist templates →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'procedures' }">Standard procedures →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'instrument-defaults' }">
+          Default instrument assignments →
+        </RouterLink>
       </div>
     </div>
 

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -13,6 +13,11 @@ const customers = ref([]);
 const instruments = ref([]);
 const error = ref('');
 const busy = ref(false);
+
+// Family -> default technician ids (Settings -> Default instrument
+// assignments). Pre-fills the picker below the moment an instrument type
+// is chosen; still just a starting point, edited same as any other field.
+const defaultTechsByFamily = ref({});
 
 const form = ref({
   title: '',
@@ -44,8 +49,31 @@ async function loadCustomerInstruments() {
   instruments.value = await api.get('/instruments', { customer_id: form.value.customer_id });
 }
 
+// Whichever instrument type is currently selected, however it got picked —
+// an existing instrument from the customer's list, or the family chosen
+// while adding a new one inline. '' means "nothing selected yet."
+const selectedFamily = computed(() => {
+  if (newInstrument.value.enabled) return newInstrument.value.family || '';
+  const inst = instruments.value.find((i) => i.id === form.value.instrument_id);
+  return inst ? inst.family : '';
+});
+
+// Auto-fill on every *change* of instrument type — not on every keystroke
+// elsewhere in the form, and not a one-time default, so switching types
+// mid-form updates the picker again rather than leaving it stuck on the
+// first type's techs.
+watch(selectedFamily, (family) => {
+  if (!family) return;
+  form.value.technician_ids = [...(defaultTechsByFamily.value[family] || [])];
+});
+
 onMounted(async () => {
-  customers.value = await api.get('/customers');
+  const [custs, techDefaults] = await Promise.all([
+    api.get('/customers'),
+    api.get('/instruments/default-technicians'),
+  ]);
+  customers.value = custs;
+  defaultTechsByFamily.value = techDefaults;
   form.value.status_key = settings.statuses.find((s) => !s.retired)?.key || '';
 });
 

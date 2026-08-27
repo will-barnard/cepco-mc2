@@ -1,8 +1,8 @@
 'use strict';
 
 const express = require('express');
-const { query } = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { query, withTransaction } = require('../db');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 
 const router = express.Router();
@@ -12,6 +12,124 @@ router.use(requireAuth);
 const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'organ', 'amp', 'rarity'];
 
 router.get('/families', (req, res) => res.json(FAMILIES));
+
+// ---------------------------------------------------------------------------
+// Default technicians per instrument family (migration 014). Registered
+// ahead of GET/PATCH '/:id' below, same reasoning as '/families' above —
+// these are literal sub-paths, not an instrument id, and Express matches
+// route registration order.
+// ---------------------------------------------------------------------------
+
+// Every family gets a (possibly empty) entry, not just the ones an admin
+// has actually configured — callers (this route's own consumers: the
+// Default instrument assignments page, and TicketNewView's auto-fill)
+// shouldn't have to know FAMILIES themselves just to render "no defaults
+// set yet" for the rest.
+router.get('/default-technicians', asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    'SELECT family, employee_id FROM instrument_default_technicians ORDER BY family',
+  );
+  const byFamily = Object.fromEntries(FAMILIES.map((f) => [f, []]));
+  for (const row of rows) {
+    if (!byFamily[row.family]) byFamily[row.family] = [];
+    byFamily[row.family].push(row.employee_id);
+  }
+  res.json(byFamily);
+}));
+
+// Replaces the full default set for one family — same "here's the whole
+// list now" contract as PATCH /tickets/:id's technician_ids, just without
+// needing a diff (there's no per-row state like queue_position to preserve
+// here, so a delete-then-insert is simplest and correct). PATCH rather than
+// PUT to match the rest of this API — nothing here uses PUT.
+router.patch('/default-technicians/:family', requireAdmin, asyncHandler(async (req, res) => {
+  const { family } = req.params;
+  if (!FAMILIES.includes(family)) throw badRequest(`family must be one of: ${FAMILIES.join(', ')}`);
+  const ids = [...new Set(
+    (Array.isArray(req.body?.technician_ids) ? req.body.technician_ids : [])
+      .map(Number)
+      .filter((n) => Number.isFinite(n)),
+  )];
+
+  await withTransaction(async (client) => {
+    await client.query('DELETE FROM instrument_default_technicians WHERE family = $1', [family]);
+    for (const employeeId of ids) {
+      await client.query(
+        'INSERT INTO instrument_default_technicians (family, employee_id) VALUES ($1, $2)',
+        [family, employeeId],
+      );
+    }
+  });
+  res.json({ family, technician_ids: ids });
+}));
+
+// One-time (or occasional) catch-up: assign each instrument-bearing,
+// non-archived ticket that currently has nobody on it to its instrument
+// family's configured defaults. Tickets with no instrument are skipped
+// outright (there's no family to look defaults up by), archived tickets
+// are skipped (they're done — nothing to route to a queue), and a family
+// with no defaults configured is left alone rather than guessed at.
+router.post('/default-technicians/backfill', requireAdmin, asyncHandler(async (req, res) => {
+  const result = await withTransaction(async (client) => {
+    const { rows: candidates } = await client.query(`
+      SELECT t.id, i.family
+        FROM tickets t
+        JOIN instruments i ON i.id = t.instrument_id
+       WHERE t.instrument_id IS NOT NULL
+         AND t.archived = FALSE
+         AND NOT EXISTS (SELECT 1 FROM ticket_technicians tt WHERE tt.ticket_id = t.id)
+       ORDER BY t.id
+    `);
+
+    const { rows: defaultRows } = await client.query(
+      'SELECT family, employee_id FROM instrument_default_technicians',
+    );
+    const defaultsByFamily = {};
+    for (const row of defaultRows) {
+      if (!defaultsByFamily[row.family]) defaultsByFamily[row.family] = [];
+      defaultsByFamily[row.family].push(row.employee_id);
+    }
+
+    let ticketsAssigned = 0;
+    let ticketsSkipped = 0;
+    const perFamily = {};
+
+    for (const candidate of candidates) {
+      const employeeIds = defaultsByFamily[candidate.family] || [];
+      if (!employeeIds.length) { ticketsSkipped += 1; continue; }
+
+      // Same "back of the line" queue-position rule as a brand-new ticket
+      // (insertTicketRow in routes/tickets.js) — computed one at a time per
+      // employee so a tech picked up by several backfilled tickets in this
+      // same run still gets sequential, non-colliding positions.
+      for (const employeeId of employeeIds) {
+        const { rows: techRows } = await client.query(
+          `SELECT COALESCE(MAX(tt.queue_position), 0) + 10 AS next
+             FROM ticket_technicians tt
+             JOIN tickets t2 ON t2.id = tt.ticket_id
+            WHERE tt.employee_id = $1 AND t2.archived = FALSE`,
+          [employeeId],
+        );
+        await client.query(
+          `INSERT INTO ticket_technicians (ticket_id, employee_id, queue_position, assigned_by)
+           VALUES ($1, $2, $3, $4)`,
+          [candidate.id, employeeId, techRows[0].next, req.user.id],
+        );
+      }
+      ticketsAssigned += 1;
+      perFamily[candidate.family] = (perFamily[candidate.family] || 0) + 1;
+    }
+
+    return {
+      tickets_considered: candidates.length,
+      tickets_assigned: ticketsAssigned,
+      tickets_skipped_no_defaults: ticketsSkipped,
+      per_family: perFamily,
+    };
+  });
+
+  res.json(result);
+}));
 
 router.get('/', asyncHandler(async (req, res) => {
   const clauses = [];
