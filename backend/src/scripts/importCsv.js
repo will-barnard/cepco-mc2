@@ -449,7 +449,12 @@ async function importPartsOrders(file) {
 // ---------------------------------------------------------------------------
 async function resetImported() {
   console.log('[import] --reset: removing previously imported rows');
-  await query('DELETE FROM tickets WHERE source_sheet IS NOT NULL');
+  // Only rows *this script* created — source_sheet is always a CSV filename
+  // here (see importInstrumentSheet/importJobQueue above). Data added later
+  // by a hand-authored migration (e.g. one tagged source_sheet =
+  // 'supplemental-2026-08-27') is a different provenance and must survive a
+  // --reset of the original sheet cutover.
+  await query("DELETE FROM tickets WHERE source_sheet LIKE '%.csv'");
   await query('DELETE FROM instruments WHERE is_fleet = TRUE');
   await query(`DELETE FROM instruments WHERE id NOT IN (
                  SELECT instrument_id FROM tickets WHERE instrument_id IS NOT NULL)`);
@@ -469,8 +474,11 @@ async function run() {
   await migrate();
   await seed();
 
+  // Same '%.csv' scoping as resetImported() — a supplemental migration's
+  // tickets (source_sheet not ending in .csv) shouldn't make this think the
+  // sheet cutover already ran.
   const { rows: guard } = await query(
-    'SELECT count(*)::int AS n FROM tickets WHERE source_sheet IS NOT NULL',
+    "SELECT count(*)::int AS n FROM tickets WHERE source_sheet LIKE '%.csv'",
   );
   if (guard[0].n > 0 && !RESET && !DRY_RUN) {
     console.error(

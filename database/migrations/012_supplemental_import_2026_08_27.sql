@@ -135,9 +135,9 @@ SELECT
   JOIN instruments i   ON i.customer_id = c.id
                       AND i.family = r.family
                       AND lower(i.model) = lower(r.model)
-  JOIN settings cat ON cat.category = 'ticket_category' AND cat.key = 'servicing'
-  JOIN settings pr  ON pr.category  = 'priority_tier'   AND pr.key  = r.priority_key
-  JOIN settings st  ON st.category  = 'ticket_status'   AND st.key  = r.status_key
+  LEFT JOIN settings cat ON cat.category = 'ticket_category' AND cat.key = 'servicing'
+  LEFT JOIN settings pr  ON pr.category  = 'priority_tier'   AND pr.key  = r.priority_key
+  LEFT JOIN settings st  ON st.category  = 'ticket_status'   AND st.key  = r.status_key
  WHERE NOT EXISTS (
      SELECT 1 FROM tickets t
       WHERE t.customer_id = c.id

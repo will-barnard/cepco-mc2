@@ -12,6 +12,11 @@ const props = defineProps({
   // and this prop is what decides which reorder endpoint gets called. Leave
   // unset (default) for a mixed/unfiltered list to hide the arrows entirely.
   queue: { type: String, default: null },
+  // Which tech's queue this is, when queue === 'tech' — a ticket can now be
+  // on more than one tech's queue at once (see migration 013), so
+  // reorder-tech needs to be told whose queue_position to move. Unused for
+  // queue === 'category'.
+  queueTechId: { type: [Number, String], default: null },
 });
 
 const emit = defineEmits(['reordered']);
@@ -36,12 +41,20 @@ function hoursOver(t) {
   return est > 0 && Number(t.actual_hours || 0) > est;
 }
 
+/** "Sam Tech, Jamie Tech" — a ticket can have zero or more assigned techs. */
+function techNames(t) {
+  return (t.technicians || []).map((x) => x.name).join(', ') || '—';
+}
+
 // Admin-only (Settings has the same gate on its own reorder buttons).
 // Reordering is server-side (POST /tickets/:id/reorder-category|tech, see
 // NOTES.md) — the parent reloads its own list on 'reordered' rather than
-// this component guessing at the new order itself.
+// this component guessing at the new order itself. A tech-queue reorder is
+// scoped to one tech (queueTechId) since a ticket can be on several techs'
+// queues at once.
 async function reorder(t, direction) {
-  await api.post(`/tickets/${t.id}/reorder-${props.queue}`, { direction });
+  const body = props.queue === 'tech' ? { direction, employee_id: props.queueTechId } : { direction };
+  await api.post(`/tickets/${t.id}/reorder-${props.queue}`, body);
   emit('reordered');
 }
 </script>
@@ -86,7 +99,7 @@ async function reorder(t, direction) {
             </span>
           </td>
           <td class="small">{{ t.priority_label || t.priority_label_snapshot }}</td>
-          <td class="small">{{ t.assigned_tech_name || '—' }}</td>
+          <td class="small">{{ techNames(t) }}</td>
           <td class="right nowrap" :style="hoursOver(t) ? 'color: var(--amber)' : ''">
             {{ hoursLabel(t) }}
           </td>

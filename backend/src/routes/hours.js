@@ -72,8 +72,9 @@ router.get('/by-employee', asyncHandler(async (req, res) => {
            COALESCE(sum(h.hours) FILTER (WHERE h.worked_on >= date_trunc('month', CURRENT_DATE)), 0)
              AS hours_this_month,
            COALESCE(sum(h.hours), 0) AS hours_total,
-           (SELECT count(*)::int FROM tickets t
-             WHERE t.assigned_tech_id = e.id AND t.archived = FALSE) AS open_tickets
+           (SELECT count(*)::int FROM ticket_technicians tt
+             JOIN tickets t ON t.id = tt.ticket_id
+             WHERE tt.employee_id = e.id AND t.archived = FALSE) AS open_tickets
       FROM employees e
       LEFT JOIN hours_log h ON h.employee_id = e.id
      WHERE e.active = TRUE

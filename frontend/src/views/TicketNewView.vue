@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
+import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const router = useRouter();
 const settings = useSettings();
@@ -21,7 +22,7 @@ const form = ref({
   tech_level_key: '',
   customer_id: '',
   instrument_id: '',
-  assigned_tech_id: '',
+  technician_ids: [],
   notes: '',
   drop_off_date: '',
   due_date: '',
@@ -75,9 +76,9 @@ async function submit() {
       payload.instrument_id = created.id;
     }
 
-    // Blank <select> values are '' — the API wants null.
-    for (const k of ['customer_id', 'instrument_id', 'assigned_tech_id', 'tech_level_key',
-      'drop_off_date', 'due_date']) {
+    // Blank <select> values are '' — the API wants null. (technician_ids is
+    // already a real array, so it doesn't need this treatment.)
+    for (const k of ['customer_id', 'instrument_id', 'tech_level_key', 'drop_off_date', 'due_date']) {
       if (payload[k] === '') payload[k] = null;
     }
 
@@ -211,15 +212,6 @@ async function submit() {
 
       <div class="field-row">
         <div class="field">
-          <label>Assign to</label>
-          <select v-model="form.assigned_tech_id">
-            <option value="">— unassigned —</option>
-            <option v-for="e in refData.employees" :key="e.id" :value="e.id">
-              {{ e.name }} ({{ e.role }})
-            </option>
-          </select>
-        </div>
-        <div class="field">
           <label>Tech level required</label>
           <select v-model="form.tech_level_key">
             <option value="">— any —</option>
@@ -228,6 +220,11 @@ async function submit() {
             </option>
           </select>
         </div>
+      </div>
+
+      <div class="field">
+        <label>Assign to</label>
+        <TechnicianPicker v-model="form.technician_ids" />
       </div>
 
       <div class="field-row">

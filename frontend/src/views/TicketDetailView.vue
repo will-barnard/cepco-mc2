@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
-import { useAuth, useSettings, useRefData } from '../stores';
+import { useAuth, useSettings } from '../stores';
 import TicketPhotos from '../components/TicketPhotos.vue';
 import TicketQc from '../components/TicketQc.vue';
 import TicketHours from '../components/TicketHours.vue';
@@ -10,12 +10,12 @@ import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
+import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
 const auth = useAuth();
 const settings = useSettings();
-const refData = useRefData();
 const router = useRouter();
 
 const ticket = ref(null);
@@ -76,6 +76,10 @@ async function archive() {
 }
 
 const when = (ts) => new Date(ts).toLocaleString();
+
+// A ticket can now be on more than one tech's plate (migration 013) —
+// TechnicianPicker's v-model is just the list of assigned ids.
+const assignedTechIds = computed(() => (ticket.value?.technicians || []).map((t) => t.id));
 
 // Shipping tickets are pack-and-send jobs, not billable repair work — no QC
 // round, no labor estimate, no hours logging, no invoice. Just the shared
@@ -159,21 +163,6 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
                 </option>
               </select>
             </div>
-          </div>
-
-          <div class="field-row">
-            <div class="field">
-              <label>Assigned tech</label>
-              <select
-                :value="ticket.assigned_tech_id || ''"
-                @change="patch({ assigned_tech_id: $event.target.value || null })"
-              >
-                <option value="">— unassigned —</option>
-                <option v-for="e in refData.employees" :key="e.id" :value="e.id">
-                  {{ e.name }} ({{ e.role }})
-                </option>
-              </select>
-            </div>
             <div class="field">
               <label>Tech level required</label>
               <select
@@ -186,6 +175,14 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
                 </option>
               </select>
             </div>
+          </div>
+
+          <div class="field">
+            <label>Assigned technicians</label>
+            <TechnicianPicker
+              :model-value="assignedTechIds"
+              @update:model-value="(ids) => patch({ technician_ids: ids })"
+            />
           </div>
 
           <div class="field-row">

@@ -32,8 +32,8 @@ function departureLabel(dateStr) {
 onMounted(async () => {
   const [s, mine, un] = await Promise.all([
     api.get('/tickets/summary'),
-    api.get('/tickets', { assigned_tech_id: auth.user.id, limit: 15 }),
-    api.get('/tickets', { assigned_tech_id: 'unassigned', limit: 10 }),
+    api.get('/tickets', { technician_id: auth.user.id, limit: 15 }),
+    api.get('/tickets', { technician_id: 'unassigned', limit: 10 }),
     // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
     // the request entirely for everyone else.
     auth.isAdmin ? api.get('/rentals/departing', { within_days: 7 }).then((r) => { departing.value = r; }) : null,

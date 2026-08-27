@@ -31,13 +31,13 @@
 import { ref, computed } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
-import { useSettings, useRefData } from '../stores';
+import { useSettings } from '../stores';
+import TechnicianPicker from './TechnicianPicker.vue';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
 const emit = defineEmits(['changed']);
 
 const settings = useSettings();
-const refData = useRefData();
 const router = useRouter();
 
 const error = ref('');
@@ -52,7 +52,7 @@ const blank = () => ({
   title: '',
   category_key: props.ticket.category_key,
   priority_key: props.ticket.priority_key,
-  assigned_tech_id: '',
+  technician_ids: [],
   notes: '',
 });
 const form = ref(blank());
@@ -88,7 +88,7 @@ async function createSubTicket() {
       notes: form.value.notes || null,
       category_key: form.value.category_key,
       priority_key: form.value.priority_key,
-      assigned_tech_id: form.value.assigned_tech_id || null,
+      technician_ids: form.value.technician_ids,
       instrument_id: props.ticket.instrument_id || null,
       customer_id: props.ticket.customer_id || null,
       source_ticket_id: props.ticket.id,
@@ -100,6 +100,11 @@ async function createSubTicket() {
   } finally {
     creating.value = false;
   }
+}
+
+/** "Sam Tech, Jamie Tech" — a sub-ticket can have zero or more assigned techs. */
+function techNames(c) {
+  return (c.technicians || []).map((x) => x.name).join(', ') || 'unassigned';
 }
 </script>
 
@@ -140,15 +145,6 @@ async function createSubTicket() {
           </option>
         </select>
       </div>
-      <div class="field">
-        <label>Assign to</label>
-        <select v-model="form.assigned_tech_id">
-          <option value="">— unassigned —</option>
-          <option v-for="e in refData.employees" :key="e.id" :value="e.id">
-            {{ e.name }} ({{ e.role }})
-          </option>
-        </select>
-      </div>
       <div class="field" style="flex: 3">
         <label>Notes</label>
         <textarea v-model="form.notes" style="min-height: 38px" />
@@ -161,6 +157,11 @@ async function createSubTicket() {
       </div>
     </div>
 
+    <div v-if="showForm" class="field" style="margin-bottom: 16px">
+      <label>Assign to</label>
+      <TechnicianPicker v-model="form.technician_ids" />
+    </div>
+
     <div v-if="!children.length" class="empty">No sub-tickets yet.</div>
     <ul v-else class="checklist">
       <li v-for="c in children" :key="c.id">
@@ -169,7 +170,7 @@ async function createSubTicket() {
         </RouterLink>
         <span class="tag">{{ c.category_label_snapshot }}</span>
         <span :class="['pill', settings.colorFor(c.status_key)]">{{ c.status_label_snapshot }}</span>
-        <span class="muted small">{{ c.assigned_tech_name || 'unassigned' }}</span>
+        <span class="muted small">{{ techNames(c) }}</span>
       </li>
     </ul>
   </div>

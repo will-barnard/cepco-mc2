@@ -19,7 +19,7 @@ const filters = ref({
   category: route.query.category || '',
   priority: route.query.priority || '',
   instrument_family: route.query.instrument_family || '',
-  assigned_tech_id: route.query.assigned_tech_id || '',
+  technician_id: route.query.technician_id || '',
   archived: route.query.archived === 'true',
   // '' = the usual priority/queue order; 'status' = ordered by each
   // status's own position in the shop's workflow (Settings -> Ticket
@@ -51,7 +51,7 @@ watch(filters, (f) => {
 function reset() {
   filters.value = {
     q: '', status: '', category: '', priority: '',
-    instrument_family: '', assigned_tech_id: '', archived: false, sort: '',
+    instrument_family: '', technician_id: '', archived: false, sort: '',
   };
 }
 
@@ -65,7 +65,7 @@ const queueType = computed(() => {
   // column, so the reorder arrows (which act on that position column)
   // would silently not match what's on screen — hide them in that mode.
   if (filters.value.sort) return null;
-  const { category, assigned_tech_id: techId } = filters.value;
+  const { category, technician_id: techId } = filters.value;
   if (category && !techId) return 'category';
   if (techId && techId !== 'unassigned' && !category) return 'tech';
   return null;
@@ -117,7 +117,7 @@ onMounted(load);
         </div>
         <div>
           <label>Tech</label>
-          <select v-model="filters.assigned_tech_id">
+          <select v-model="filters.technician_id">
             <option value="">Anyone</option>
             <option value="unassigned">Unassigned</option>
             <option v-for="e in refData.employees" :key="e.id" :value="e.id">{{ e.name }}</option>
@@ -144,7 +144,10 @@ onMounted(load);
 
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else class="card tight">
-      <TicketTable :tickets="tickets" :queue="queueType" @reordered="load" />
+      <TicketTable
+        :tickets="tickets" :queue="queueType" :queue-tech-id="filters.technician_id"
+        @reordered="load"
+      />
     </div>
   </div>
 </template>
