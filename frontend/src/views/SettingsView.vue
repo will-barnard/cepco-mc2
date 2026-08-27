@@ -227,6 +227,40 @@ async function toggleEmployee(emp) {
   }
 }
 
+// Admin-only inline edits for the attributes an account is defined by
+// (name, role, initials) — everything else about "who this person is" in
+// the app. Each is a no-op if unchanged, mirroring the rename() pattern
+// above for settings values. The server still enforces the guardrails
+// (e.g. an admin can't demote/deactivate themselves — see routes/employees.js);
+// that comes back through the same error banner as everything else here.
+async function updateEmployeeField(emp, field, value) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.patch(`/employees/${emp.id}`, { [field]: value });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+async function updateEmployeeName(emp, value) {
+  const name = value.trim();
+  if (!name || name === emp.name) return;
+  await updateEmployeeField(emp, 'name', name);
+}
+
+async function updateEmployeeInitials(emp, value) {
+  const initials = value.trim();
+  if (initials === (emp.initials || '')) return;
+  await updateEmployeeField(emp, 'initials', initials || null);
+}
+
+async function updateEmployeeRole(emp, value) {
+  if (value === emp.role) return;
+  await updateEmployeeField(emp, 'role', value);
+}
+
 onMounted(refresh);
 </script>
 
@@ -432,10 +466,26 @@ onMounted(refresh);
             </thead>
             <tbody>
               <tr v-for="e in refData.employees" :key="e.id">
-                <td>{{ e.name }}</td>
+                <td>
+                  <input
+                    :value="e.name" style="min-width: 160px"
+                    @change="updateEmployeeName(e, $event.target.value)"
+                  />
+                </td>
                 <td class="small muted">{{ e.email }}</td>
-                <td><span class="tag">{{ e.role }}</span></td>
-                <td class="small">{{ e.initials || '—' }}</td>
+                <td>
+                  <select :value="e.role" @change="updateEmployeeRole(e, $event.target.value)">
+                    <option value="junior">Junior tech</option>
+                    <option value="senior">Senior tech</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </td>
+                <td>
+                  <input
+                    :value="e.initials || ''" maxlength="6" style="width: 70px" placeholder="—"
+                    @change="updateEmployeeInitials(e, $event.target.value)"
+                  />
+                </td>
                 <td>
                   <span :class="['pill', e.active ? 'green' : 'slate']">
                     {{ e.active ? 'Active' : 'Inactive' }}
