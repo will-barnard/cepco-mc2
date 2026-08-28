@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue';
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -25,6 +25,11 @@ const filters = ref({
   // status's own position in the shop's workflow (Settings -> Ticket
   // statuses), i.e. status progression rather than alphabetical.
   sort: route.query.sort || '',
+  // "Hide statuses" dropdown below — status keys to exclude, e.g. hiding
+  // Done/On Hold while otherwise browsing everything. A list rather than
+  // the single-value `status` above because it answers a different
+  // question ("what should I not see" vs. "show only this one").
+  hide_status: (route.query.hide_status || '').split(',').filter(Boolean),
 });
 
 async function load() {
@@ -33,6 +38,7 @@ async function load() {
     tickets.value = await api.get('/tickets', {
       ...filters.value,
       archived: filters.value.archived ? 'true' : '',
+      hide_status: filters.value.hide_status.join(','),
     });
   } finally {
     loading.value = false;
@@ -42,7 +48,9 @@ async function load() {
 // Keep filters in the URL so a filtered view can be bookmarked or shared.
 watch(filters, (f) => {
   const query = Object.fromEntries(
-    Object.entries(f).filter(([, v]) => v !== '' && v !== false),
+    Object.entries(f)
+      .map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : v])
+      .filter(([, v]) => v !== '' && v !== false),
   );
   router.replace({ query });
   load();
@@ -52,8 +60,43 @@ function reset() {
   filters.value = {
     q: '', status: '', category: '', priority: '',
     instrument_family: '', technician_id: '', archived: false, sort: '',
+    hide_status: [],
   };
 }
+
+function toggleHiddenStatus(key, hide) {
+  const next = new Set(filters.value.hide_status);
+  if (hide) next.add(key); else next.delete(key);
+  filters.value.hide_status = [...next];
+}
+
+// Hide-statuses dropdown: open/close, plus the same click-outside/Escape
+// pattern App.vue's mobile nav uses.
+const hideMenuOpen = ref(false);
+const hideMenuEl = ref(null);
+
+function closeHideMenu() {
+  hideMenuOpen.value = false;
+}
+
+function onDocumentClick(event) {
+  if (hideMenuOpen.value && hideMenuEl.value && !hideMenuEl.value.contains(event.target)) {
+    closeHideMenu();
+  }
+}
+
+function onKeydown(event) {
+  if (event.key === 'Escape') closeHideMenu();
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick);
+  document.addEventListener('keydown', onKeydown);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick);
+  document.removeEventListener('keydown', onKeydown);
+});
 
 // Reordering itself now lives on its own page (QueueView.vue) rather than
 // here — this view stays focused on filtering/finding a ticket. Filtering
@@ -119,6 +162,22 @@ onMounted(load);
             <option value="">Priority / queue order</option>
             <option value="status">Status progression</option>
           </select>
+        </div>
+        <div ref="hideMenuEl" class="hide-status-field">
+          <label>Hide statuses</label>
+          <button type="button" class="hide-status-toggle" @click="hideMenuOpen = !hideMenuOpen">
+            <span>{{ filters.hide_status.length ? `${filters.hide_status.length} hidden` : 'None hidden' }}</span>
+            <span class="hide-status-caret">▾</span>
+          </button>
+          <div v-if="hideMenuOpen" class="hide-status-menu">
+            <label v-for="s in settings.statuses" :key="s.key" class="checkbox">
+              <input
+                type="checkbox" :checked="filters.hide_status.includes(s.key)"
+                @change="toggleHiddenStatus(s.key, $event.target.checked)"
+              />
+              <span class="small">{{ s.label }}</span>
+            </label>
+          </div>
         </div>
       </div>
       <div class="row" style="margin-top: 4px">

@@ -421,7 +421,12 @@ onMounted(refresh);
                 </td>
 
                 <td v-if="category === 'ticket_status'">
-                  <div class="row" style="flex-wrap: wrap; gap: 2px 10px; max-width: 260px">
+                  <!-- Styled in styles.css (.status-category-checks), not inline: it needs a
+                       mobile override (run single-line, let table-wrap's horizontal scroll
+                       handle overflow) instead of the desktop wrapped/capped-width layout,
+                       which on a narrow table column was squeezing every label onto its own
+                       line and ballooning row height. -->
+                  <div class="status-category-checks">
                     <label
                       v-for="cat in settings.active('ticket_category')" :key="cat.key"
                       class="checkbox"

@@ -72,6 +72,40 @@ h3 { font-size: 15px; }
 .topbar nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .topbar nav a.router-link-active { background: var(--surface-2); color: var(--text); }
 
+/* --- mobile nav (hamburger) ------------------------------------------------
+   Ten nav links plus the account row don't fit a phone width — below
+   .topbar-collapse (960px, wide enough to also cover phones in landscape)
+   the hamburger button appears and nav + account-row become a stacked panel
+   that's hidden until .topbar.menu-open is toggled (App.vue). Above that
+   width this is all inert: the button stays display:none and nav/account-row
+   render exactly as they did before (nav's own overflow-x:auto remains the
+   fallback for anything in between a phone and a full desktop width). */
+.topbar .menu-toggle {
+  display: none;
+  flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  width: 40px; height: 40px; min-height: 40px; padding: 0; margin-left: auto;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.topbar .menu-toggle span { display: block; width: 18px; height: 2px; background: var(--text); border-radius: 1px; }
+
+@media (max-width: 960px) {
+  .topbar { flex-wrap: wrap; }
+  .topbar .menu-toggle { display: flex; }
+
+  .topbar nav, .topbar .account-row {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column; align-items: stretch;
+    overflow-x: visible;
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+  }
+  .topbar.menu-open nav, .topbar.menu-open .account-row { display: flex; }
+  .topbar.menu-open .account-row { margin-top: 0; padding-top: 10px; }
+
+  .topbar nav a { padding: 12px 14px; font-size: 15px; }
+  .topbar .account-row { gap: 10px; }
+}
+
 .page { padding: 20px; max-width: 1400px; width: 100%; margin: 0 auto; flex: 1; }
 .page-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -139,6 +173,39 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 .field-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .checkbox { display: flex; align-items: center; gap: 8px; }
 .checkbox input { width: 20px; height: 20px; min-height: 20px; flex: none; }
+
+/* --- hide-statuses dropdown (TicketsView.vue) ------------------------------
+   A checkbox popover rather than a native <select multiple> — multi-selects
+   are clumsy to operate (ctrl/cmd-click to pick more than one) and don't
+   show a summary count when closed the way this button does. */
+.hide-status-field { position: relative; }
+.hide-status-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left;
+}
+.hide-status-caret { color: var(--text-dim); font-size: 11px; }
+.hide-status-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 25;
+  min-width: 220px; max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.hide-status-menu .checkbox { padding: 3px 2px; }
+
+/* --- status category checkboxes (SettingsView.vue) ------------------------
+   Desktop: wrap within a capped width so the "Applies to" column stays
+   compact instead of stretching the whole table. Mobile: that table already
+   scrolls horizontally (.table-wrap below), so past this breakpoint the row
+   runs single-line at its natural width instead of wrapping — wrapping each
+   checkbox label onto its own line inside a squeezed column was ballooning
+   row height on a phone. */
+.status-category-checks {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px 10px; max-width: 260px;
+}
+@media (max-width: 900px) {
+  .status-category-checks { flex-wrap: nowrap; max-width: none; }
+}
 
 /* --- table ---------------------------------------------------------------- */
 .table-wrap { overflow-x: auto; }

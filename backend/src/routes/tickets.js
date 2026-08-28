@@ -83,6 +83,21 @@ router.get('/', asyncHandler(async (req, res) => {
   if (req.query.customer_id) push('t.customer_id = ?', req.query.customer_id);
   if (req.query.instrument_family) push('i.family = ?', req.query.instrument_family);
 
+  // Tickets page's "Hide statuses" dropdown (TicketsView.vue) — a comma-
+  // separated list of status keys to exclude, independent of (and
+  // combinable with, however little sense that combination makes) the
+  // single-status filter above. Distinct from `status` because that one
+  // means "show only this one status" while this means "show everything
+  // except these" — two different shapes of question, so one query param
+  // apiece rather than overloading `status` with a hide/show sense.
+  if (req.query.hide_status) {
+    const hidden = String(req.query.hide_status).split(',').map((s) => s.trim()).filter(Boolean);
+    if (hidden.length) {
+      params.push(hidden);
+      clauses.push(`NOT (t.status_key = ANY($${params.length}))`);
+    }
+  }
+
   // A ticket can carry more than one tech now (migration 013) — this filter
   // means "this tech is among the ones assigned," not "the" tech.
   // technicianParamIdx tracks which $N holds the id, so the ORDER BY below
