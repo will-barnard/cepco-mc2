@@ -2,20 +2,22 @@
 /**
  * Queue — dedicated drag-and-drop reordering, split out of TicketsView.vue
  * (which stays focused on filtering/finding a ticket; NOTES.md). A ticket
- * sits in up to two kinds of queue — its category's, and each of its
- * assigned techs' own (migration 007, extended to one position per
- * assignment in 013) — this page reorders one of those at a time, picked
- * from the single dropdown below.
+ * sits in up to three kinds of queue — its category's, each of its assigned
+ * techs' own (migration 007, extended to one position per assignment in
+ * 013), and its instrument's family (migration 015, e.g. every Rhodes job)
+ * — this page reorders one of those at a time, picked from the single
+ * dropdown below.
  *
  * Open to any signed-in user, not just admins — same as assigning
  * technicians to a ticket already was.
  *
- * The picker's value is "category:<key>" or "tech:<employee id>" so one
- * <select> can switch between both queue types. The list itself is just
- * GET /tickets?category=... or ?technician_id=..., already returned in
- * that queue's own order (see routes/tickets.js's GET / ORDER BY) — this
- * page reads and writes the exact same ordering TicketsView shows when
- * it's filtered down to one category or one tech.
+ * The picker's value is "category:<key>", "tech:<employee id>", or
+ * "family:<family key>" so one <select> can switch between all three queue
+ * types. The list itself is just GET /tickets?category=..., ?technician_id=
+ * ..., or ?instrument_family=..., already returned in that queue's own
+ * order (see routes/tickets.js's GET / ORDER BY) — this page reads and
+ * writes the exact same ordering TicketsView shows when it's filtered down
+ * to one category, one tech, or one instrument family.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -26,12 +28,19 @@ const settings = useSettings();
 const refData = useRefData();
 
 const selected = ref('');
-const scope = computed(() => (selected.value.startsWith('tech:') ? 'tech' : 'category'));
+const scope = computed(() => {
+  if (selected.value.startsWith('tech:')) return 'tech';
+  if (selected.value.startsWith('family:')) return 'family';
+  return 'category';
+});
 const categoryKey = computed(
   () => (scope.value === 'category' ? selected.value.slice('category:'.length) : ''),
 );
 const employeeId = computed(
   () => (scope.value === 'tech' ? Number(selected.value.slice('tech:'.length)) : null),
+);
+const familyKey = computed(
+  () => (scope.value === 'family' ? selected.value.slice('family:'.length) : ''),
 );
 
 const tickets = ref([]);
@@ -45,9 +54,10 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const params = scope.value === 'category'
-      ? { category: categoryKey.value }
-      : { technician_id: employeeId.value };
+    let params;
+    if (scope.value === 'category') params = { category: categoryKey.value };
+    else if (scope.value === 'tech') params = { technician_id: employeeId.value };
+    else params = { instrument_family: familyKey.value };
     tickets.value = await api.get('/tickets', params);
   } catch (err) {
     error.value = err.message;
@@ -98,9 +108,11 @@ async function persistOrder() {
   error.value = '';
   saving.value = true;
   try {
-    const body = scope.value === 'category'
-      ? { scope: 'category', category_key: categoryKey.value, ticket_ids: tickets.value.map((t) => t.id) }
-      : { scope: 'tech', employee_id: employeeId.value, ticket_ids: tickets.value.map((t) => t.id) };
+    const ticketIds = tickets.value.map((t) => t.id);
+    let body;
+    if (scope.value === 'category') body = { scope: 'category', category_key: categoryKey.value, ticket_ids: ticketIds };
+    else if (scope.value === 'tech') body = { scope: 'tech', employee_id: employeeId.value, ticket_ids: ticketIds };
+    else body = { scope: 'family', family: familyKey.value, ticket_ids: ticketIds };
     await api.post('/tickets/reorder-queue', body);
   } catch (err) {
     error.value = `${err.message} The queue below has been reloaded.`;
@@ -110,8 +122,9 @@ async function persistOrder() {
   }
 }
 
-/** "Sam Tech, Jamie Tech" — only shown in category view, where who's on
- * each ticket isn't otherwise implied by which queue you're looking at. */
+/** "Sam Tech, Jamie Tech" — shown in category and family view, where who's
+ * on each ticket isn't otherwise implied by which queue you're looking at
+ * (the tech view doesn't need it — that's the one axis it *is* the queue). */
 function techNames(t) {
   return (t.technicians || []).map((x) => x.name).join(', ') || 'unassigned';
 }
@@ -123,8 +136,8 @@ function techNames(t) {
       <div>
         <h1 style="margin-bottom: 4px">Queue</h1>
         <p class="muted small" style="margin: 0">
-          Drag a ticket to move it within a category's queue or a technician's own queue — the
-          new order saves as soon as you drop it.
+          Drag a ticket to move it within a category's queue, a technician's own queue, or an
+          instrument family's queue — the new order saves as soon as you drop it.
         </p>
       </div>
     </div>
@@ -142,6 +155,11 @@ function techNames(t) {
           <optgroup label="By technician">
             <option v-for="e in refData.employees" :key="e.id" :value="`tech:${e.id}`">
               {{ e.name }}
+            </option>
+          </optgroup>
+          <optgroup label="By instrument family">
+            <option v-for="f in refData.families" :key="f" :value="`family:${f}`">
+              {{ f }}
             </option>
           </optgroup>
         </select>
@@ -176,14 +194,14 @@ function techNames(t) {
             </RouterLink>
             <div class="muted small">
               {{ t.customer_name || (t.instrument_is_fleet ? 'CEPCo fleet' : '—') }}
-              <span v-if="t.instrument_family"> · {{ t.instrument_family }}</span>
+              <span v-if="t.instrument_family && scope !== 'family'"> · {{ t.instrument_family }}</span>
             </div>
           </div>
           <span :class="['pill', settings.colorFor(t.status_key)]">
             {{ t.status_label || t.status_label_snapshot }}
           </span>
           <span
-            v-if="scope === 'category'" class="muted small nowrap"
+            v-if="scope !== 'tech'" class="muted small nowrap"
             style="min-width: 140px; text-align: right"
           >
             {{ techNames(t) }}

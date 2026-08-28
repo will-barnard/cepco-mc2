@@ -6,6 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
+const { FAMILIES } = require('./instruments');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -128,11 +129,12 @@ router.get('/', asyncHandler(async (req, res) => {
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
 
-  // Filtered to exactly one category or one tech -> that's a real queue, so
-  // show it in its explicit, reorderable order (see migration 007). Anything
-  // broader (browsing everything, or both filters at once — those don't
-  // share a single queue) falls back to the old priority/recency sort, since
-  // there's no one queue order that spans multiple categories or techs.
+  // Filtered to exactly one category, one tech, or one instrument family ->
+  // that's a real queue, so show it in its explicit, reorderable order (see
+  // migrations 007 and 015). Anything broader (browsing everything, or more
+  // than one of those filters at once — those don't share a single queue)
+  // falls back to the old priority/recency sort, since there's no one queue
+  // order that spans multiple categories, techs, or families.
   //
   // An explicit ?sort= overrides all of the above — it's a deliberate "show
   // me the list this way" choice, not a fallback, so it wins regardless of
@@ -152,6 +154,10 @@ router.get('/', asyncHandler(async (req, res) => {
     extraJoin = ` LEFT JOIN ticket_technicians tt_order
                     ON tt_order.ticket_id = t.id AND tt_order.employee_id = $${technicianParamIdx}`;
     orderBy = 'tt_order.queue_position NULLS LAST, t.updated_at DESC';
+  } else if (req.query.instrument_family && !req.query.category && !req.query.technician_id) {
+    // Third queue axis (migration 015): a family, e.g. every Rhodes job,
+    // in its own deliberate order independent of category or tech.
+    orderBy = 't.family_queue_position NULLS LAST, t.updated_at DESC';
   }
 
   const { rows } = await query(
@@ -309,6 +315,25 @@ async function resolveNewTicketFields(b) {
   };
 }
 
+// Small shared helpers so insertTicketRow and PATCH /:id (below) don't each
+// re-derive "what family is this instrument" / "what's the back of that
+// family's queue" their own way.
+async function instrumentFamily(client, instrumentId) {
+  if (!instrumentId) return null;
+  const { rows } = await client.query('SELECT family FROM instruments WHERE id = $1', [instrumentId]);
+  return rows[0] ? rows[0].family : null;
+}
+
+async function nextFamilyQueuePosition(client, family) {
+  const { rows } = await client.query(
+    `SELECT COALESCE(MAX(t2.family_queue_position), 0) + 10 AS next
+       FROM tickets t2 JOIN instruments i2 ON i2.id = t2.instrument_id
+      WHERE i2.family = $1 AND t2.archived = FALSE`,
+    [family],
+  );
+  return rows[0].next;
+}
+
 // Insert the ticket + its creation status_change_log entry + its technician
 // assignments on an already-open client, given fields already resolved by
 // the function above. Callers own the transaction: the POST / route wraps
@@ -338,6 +363,11 @@ async function insertTicketRow(client, b, resolved, createdById) {
   );
   const categoryQueuePosition = catRows[0].next;
 
+  // Same "back of the line" rule, on the instrument-family axis (migration
+  // 015) — only applies when this ticket actually has an instrument.
+  const family = await instrumentFamily(client, b.instrument_id || null);
+  const familyQueuePosition = family ? await nextFamilyQueuePosition(client, family) : null;
+
   const { rows } = await client.query(
     `INSERT INTO tickets (
        title, category_key, category_label_snapshot,
@@ -347,9 +377,10 @@ async function insertTicketRow(client, b, resolved, createdById) {
        instrument_id, customer_id, shop_contact_id,
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
-       category_queue_position, source_ticket_id, source_estimate_id
+       category_queue_position, source_ticket_id, source_estimate_id,
+       family_queue_position
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-               COALESCE($17,'{}'::jsonb),$18,COALESCE($19,TRUE),$20,$21,$22,$23)
+               COALESCE($17,'{}'::jsonb),$18,COALESCE($19,TRUE),$20,$21,$22,$23,$24)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -371,6 +402,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
       categoryQueuePosition,
       b.source_ticket_id || null,
       b.source_estimate_id || null,
+      familyQueuePosition,
     ],
   );
   const created = rows[0];
@@ -466,6 +498,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       newCategoryQueuePosition = catRows[0].next;
     }
 
+    // Same idea, on the instrument-family axis (migration 015) — but the
+    // scope key here isn't a direct column, it's derived from
+    // instrument_id, so re-homing only makes sense once we know both the
+    // old and new instrument's family and can tell whether that actually
+    // changed. Swapping to a *different* instrument in the *same* family
+    // (rare, but possible) correctly does nothing here — same "no-op
+    // unless the effective scope key changes" rule the category branch
+    // above follows.
+    let newFamilyQueuePosition;
+    if (b.instrument_id !== undefined && b.instrument_id !== existing.instrument_id) {
+      const [oldFamily, newFamily] = await Promise.all([
+        instrumentFamily(client, existing.instrument_id),
+        instrumentFamily(client, b.instrument_id || null),
+      ]);
+      if (newFamily !== oldFamily) {
+        newFamilyQueuePosition = newFamily ? await nextFamilyQueuePosition(client, newFamily) : null;
+      }
+    }
+
     const { rows } = await client.query(
       `UPDATE tickets SET
          title            = COALESCE($2, title),
@@ -487,7 +538,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          vendor_tracks    = COALESCE($22, vendor_tracks),
          qc_required      = COALESCE($23, qc_required),
          archived         = COALESCE($24, archived),
-         category_queue_position = CASE WHEN $25::boolean THEN $26 ELSE category_queue_position END
+         category_queue_position = CASE WHEN $25::boolean THEN $26 ELSE category_queue_position END,
+         family_queue_position   = CASE WHEN $27::boolean THEN $28 ELSE family_queue_position END
        WHERE id = $1
        RETURNING *`,
       [
@@ -513,6 +565,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.qc_required === undefined ? null : b.qc_required,
         b.archived === undefined ? null : b.archived,
         newCategoryQueuePosition !== undefined, newCategoryQueuePosition ?? null,
+        newFamilyQueuePosition !== undefined, newFamilyQueuePosition ?? null,
       ],
     );
 
@@ -584,19 +637,22 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 // (frontend QueueView.vue) replaced that with drag-and-drop, which needs a
 // "here's the whole new order" call rather than a series of single swaps).
 //
-// A ticket sits in up to two kinds of queue — its category's, and each of
-// its assigned techs' own (migration 007, extended to one position per
-// assignment in 013) — so every call has to say which queue (and for a
-// tech queue, whose). The client sends the *entire* reordered list of
-// ticket ids for that one queue; the server checks it's exactly the same
-// set of tickets currently in that queue (nobody else added/removed one
-// while this was being dragged) and then renumbers positions 10, 20, 30...
-// in the given order — a plain reindex, not a series of swaps, since
-// drag-and-drop can move something many places in one action.
+// A ticket sits in up to three kinds of queue — its category's, each of its
+// assigned techs' own (migration 007, extended to one position per
+// assignment in 013), and its instrument's family (migration 015) — so
+// every call has to say which queue (and for a tech or family queue,
+// whose/which). The client sends the *entire* reordered list of ticket ids
+// for that one queue; the server checks it's exactly the same set of
+// tickets currently in that queue (nobody else added/removed one while
+// this was being dragged) and then renumbers positions 10, 20, 30... in the
+// given order — a plain reindex, not a series of swaps, since drag-and-drop
+// can move something many places in one action.
 // ---------------------------------------------------------------------------
 router.post('/reorder-queue', asyncHandler(async (req, res) => {
   const { scope } = req.body || {};
-  if (scope !== 'category' && scope !== 'tech') throw badRequest("scope must be 'category' or 'tech'");
+  if (scope !== 'category' && scope !== 'tech' && scope !== 'family') {
+    throw badRequest("scope must be 'category', 'tech', or 'family'");
+  }
 
   const ticketIds = [...new Set(
     (Array.isArray(req.body.ticket_ids) ? req.body.ticket_ids : [])
@@ -635,7 +691,7 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
         );
       }
     });
-  } else {
+  } else if (scope === 'tech') {
     const employeeId = Number(req.body.employee_id);
     if (!Number.isFinite(employeeId)) throw badRequest('employee_id is required for scope=tech');
     const { rows: empRows } = await query('SELECT id FROM employees WHERE id = $1', [employeeId]);
@@ -656,6 +712,29 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
         await client.query(
           'UPDATE ticket_technicians SET queue_position = $1 WHERE ticket_id = $2 AND employee_id = $3',
           [(i + 1) * 10, ticketIds[i], employeeId],
+        );
+      }
+    });
+  } else {
+    const family = req.body.family;
+    if (!family || !FAMILIES.includes(family)) {
+      throw badRequest(`family must be one of: ${FAMILIES.join(', ')}`);
+    }
+
+    await withTransaction(async (client) => {
+      const { rows: current } = await client.query(
+        `SELECT t2.id FROM tickets t2 JOIN instruments i2 ON i2.id = t2.instrument_id
+          WHERE i2.family = $1 AND t2.archived = FALSE`,
+        [family],
+      );
+      const currentIds = new Set(current.map((r) => r.id));
+      if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
+        throw mismatchError();
+      }
+      for (let i = 0; i < ticketIds.length; i += 1) {
+        await client.query(
+          'UPDATE tickets SET family_queue_position = $1 WHERE id = $2',
+          [(i + 1) * 10, ticketIds[i]],
         );
       }
     });
