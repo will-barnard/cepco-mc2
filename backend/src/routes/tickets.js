@@ -539,7 +539,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          qc_required      = COALESCE($23, qc_required),
          archived         = COALESCE($24, archived),
          category_queue_position = CASE WHEN $25::boolean THEN $26 ELSE category_queue_position END,
-         family_queue_position   = CASE WHEN $27::boolean THEN $28 ELSE family_queue_position END
+         family_queue_position   = CASE WHEN $27::boolean THEN $28 ELSE family_queue_position END,
+         service_done_notes      = COALESCE($29, service_done_notes),
+         service_needed_notes    = COALESCE($30, service_needed_notes)
        WHERE id = $1
        RETURNING *`,
       [
@@ -566,6 +568,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.archived === undefined ? null : b.archived,
         newCategoryQueuePosition !== undefined, newCategoryQueuePosition ?? null,
         newFamilyQueuePosition !== undefined, newFamilyQueuePosition ?? null,
+        b.service_done_notes === undefined ? null : b.service_done_notes,
+        b.service_needed_notes === undefined ? null : b.service_needed_notes,
       ],
     );
 

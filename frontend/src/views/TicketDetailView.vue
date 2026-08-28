@@ -24,12 +24,23 @@ const error = ref('');
 const statusNote = ref('');
 const notesDraft = ref('');
 const savingNotes = ref(false);
+// "Status notes" (Settings -> Ticket categories -> "Status notes" toggle) —
+// two free-text fields distinct from the status-CHANGE note above
+// (statusNote, attached to the audit log entry when the status dropdown
+// changes) and from the general Notes & parts field: these track what was
+// actually done on the job vs. what's still outstanding, editable any time
+// rather than only at the moment of a status change.
+const serviceDoneDraft = ref('');
+const serviceNeededDraft = ref('');
+const savingStatusNotes = ref(false);
 
 async function load() {
   loading.value = true;
   try {
     ticket.value = await api.get(`/tickets/${props.id}`);
     notesDraft.value = ticket.value.notes || '';
+    serviceDoneDraft.value = ticket.value.service_done_notes || '';
+    serviceNeededDraft.value = ticket.value.service_needed_notes || '';
   } finally {
     loading.value = false;
   }
@@ -57,6 +68,15 @@ async function saveNotes() {
   savingNotes.value = true;
   await patch({ notes: notesDraft.value });
   savingNotes.value = false;
+}
+
+async function saveStatusNotes() {
+  savingStatusNotes.value = true;
+  await patch({
+    service_done_notes: serviceDoneDraft.value,
+    service_needed_notes: serviceNeededDraft.value,
+  });
+  savingStatusNotes.value = false;
 }
 
 async function createInvoice() {
@@ -231,6 +251,23 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
             <textarea v-model="notesDraft" />
             <button class="small" :disabled="savingNotes" @click="saveNotes">
               {{ savingNotes ? 'Saving…' : 'Save notes' }}
+            </button>
+          </div>
+
+          <div v-if="settings.statusNotesAllowed(ticket.category_key)" class="field">
+            <label>Status notes</label>
+            <div class="field-row">
+              <div class="field">
+                <label class="small muted">Service done</label>
+                <textarea v-model="serviceDoneDraft" style="min-height: 80px" />
+              </div>
+              <div class="field">
+                <label class="small muted">Service needed</label>
+                <textarea v-model="serviceNeededDraft" style="min-height: 80px" />
+              </div>
+            </div>
+            <button class="small" :disabled="savingStatusNotes" @click="saveStatusNotes">
+              {{ savingStatusNotes ? 'Saving…' : 'Save status notes' }}
             </button>
           </div>
         </div>

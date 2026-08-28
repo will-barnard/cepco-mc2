@@ -18,6 +18,7 @@ const routes = [
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/parts', name: 'parts', component: () => import('./views/PartsView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
+  { path: '/ceppies', name: 'ceppies', component: () => import('./views/CeppiesView.vue') },
   { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { admin: true } },
   { path: '/settings/qc-templates', name: 'qc-templates', component: () => import('./views/QcTemplatesView.vue'), meta: { admin: true } },

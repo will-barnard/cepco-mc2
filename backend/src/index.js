@@ -9,6 +9,7 @@ const { pool, waitForDatabase } = require('./db');
 const { errorHandler } = require('./middleware/errors');
 const { migrate } = require('./scripts/migrate');
 const { seed } = require('./scripts/seed');
+const ceppieScheduler = require('./services/ceppieScheduler');
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.use('/api/parts', require('./routes/parts'));
 app.use('/api/shipments', require('./routes/shipments'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/ceppies', require('./routes/ceppies'));
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Unknown endpoint' }));
 app.use(errorHandler);
@@ -66,6 +68,8 @@ async function start() {
   app.listen(config.port, '0.0.0.0', () => {
     console.log(`[cepco-mc2] backend listening on :${config.port} (${config.env})`);
   });
+
+  ceppieScheduler.start();
 }
 
 const shutdown = async (signal) => {

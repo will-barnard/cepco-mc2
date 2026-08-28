@@ -113,6 +113,7 @@ async function signOut() {
         <RouterLink to="/inventory">Inventory</RouterLink>
         <RouterLink to="/parts">Parts</RouterLink>
         <RouterLink to="/hours">Hours</RouterLink>
+        <RouterLink to="/ceppies">Ceppies</RouterLink>
         <RouterLink v-if="auth.isAdmin" to="/settings">Settings</RouterLink>
       </nav>
 

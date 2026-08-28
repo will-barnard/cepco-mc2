@@ -177,6 +177,21 @@ async function toggleShipButton(row) {
   }
 }
 
+// Per-category "Status notes" (Service done / Service needed) visibility on
+// the ticket detail page — see stores.js's statusNotesAllowed. Same pattern
+// as toggleShipButton, just the opposite starting value (off by default).
+async function toggleStatusNotes(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, show_status_notes: !row.meta.show_status_notes },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function setRequiredRounds(row, value) {
   error.value = '';
   try {
@@ -391,6 +406,7 @@ onMounted(refresh);
                 <th v-if="category === 'qc_tier'">Two reviewers</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
+                <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th>Order</th><th>State</th><th />
               </tr>
@@ -441,6 +457,15 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!row.meta.hide_ship_button"
                       @change="toggleShipButton(row)"
+                    />
+                  </label>
+                </td>
+
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Show the Status notes fields (Service done / Service needed) on tickets in this category">
+                    <input
+                      type="checkbox" :checked="!!row.meta.show_status_notes"
+                      @change="toggleStatusNotes(row)"
                     />
                   </label>
                 </td>
