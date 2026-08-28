@@ -1,16 +1,16 @@
 <script setup>
 /**
- * Ceppies — a fictional, purely-for-fun staff-recognition award. Any tech
+ * Ceppys — a fictional, purely-for-fun staff-recognition award. Any tech
  * can nominate any other tech (including themselves) with a short reason;
  * nominations stay invisible to everyone but their own nominator until the
  * weekly digest email fires (schedule or an admin's manual "Send now"),
  * at which point they move to the Past nominations tab for everyone to
- * see. See backend/src/routes/ceppies.js and migration 017 for the full
+ * see. See backend/src/routes/ceppys.js and migration 017 for the full
  * mechanics — this view is just three tabs plus an admin-only config panel
  * over that API.
  *
  * The schedule itself isn't a bespoke endpoint — it's an ordinary
- * shop_config settings row (key 'ceppies_schedule'), edited through the
+ * shop_config settings row (key 'ceppys_schedule'), edited through the
  * same generic PATCH /settings/:id SettingsView.vue already uses for the
  * labor rate. useSettings already loads it as part of the normal settings
  * fetch, so the config panel here just finds that one row and patches it.
@@ -29,7 +29,7 @@ const tab = ref('nominate');
 const error = ref('');
 
 // --- nominate ----------------------------------------------------------
-const form = ref({ nominee_id: '', reason: '' });
+const form = ref({ nominee_id: '', title: '', reason: '' });
 const submitting = ref(false);
 const submitted = ref(false);
 
@@ -37,14 +37,16 @@ async function submitNomination() {
   error.value = '';
   submitted.value = false;
   if (!form.value.nominee_id) { error.value = 'Pick who you’re nominating.'; return; }
+  if (!form.value.title.trim()) { error.value = 'Give this Ceppy a title.'; return; }
   if (!form.value.reason.trim()) { error.value = 'Add a quick reason for the nomination.'; return; }
   submitting.value = true;
   try {
-    await api.post('/ceppies/nominations', {
+    await api.post('/ceppys/nominations', {
       nominee_id: Number(form.value.nominee_id),
+      title: form.value.title.trim(),
       reason: form.value.reason.trim(),
     });
-    form.value = { nominee_id: '', reason: '' };
+    form.value = { nominee_id: '', title: '', reason: '' };
     submitted.value = true;
     await loadMine();
   } catch (err) {
@@ -60,7 +62,7 @@ const loadingMine = ref(false);
 async function loadMine() {
   loadingMine.value = true;
   try {
-    mine.value = await api.get('/ceppies/nominations/mine');
+    mine.value = await api.get('/ceppys/nominations/mine');
   } finally {
     loadingMine.value = false;
   }
@@ -72,7 +74,7 @@ const loadingPast = ref(false);
 async function loadPast() {
   loadingPast.value = true;
   try {
-    past.value = await api.get('/ceppies/nominations/past');
+    past.value = await api.get('/ceppys/nominations/past');
   } finally {
     loadingPast.value = false;
   }
@@ -99,7 +101,7 @@ function switchTab(next) {
 
 // --- admin config panel ---------------------------------------------------
 const showConfig = ref(false);
-const scheduleRow = computed(() => (settings.data.shop_config || []).find((r) => r.key === 'ceppies_schedule'));
+const scheduleRow = computed(() => (settings.data.shop_config || []).find((r) => r.key === 'ceppys_schedule'));
 const scheduleDraft = ref({
   enabled: false, day_of_week: 5, time: '15:00',
 });
@@ -145,12 +147,12 @@ async function saveSchedule() {
 }
 
 async function sendNow() {
-  if (!confirm('Send the Ceppies digest to all staff right now with whatever nominations are pending?')) return;
+  if (!confirm('Send the Ceppys digest to all staff right now with whatever nominations are pending?')) return;
   error.value = '';
   sendNowResult.value = null;
   sendingNow.value = true;
   try {
-    const result = await api.post('/ceppies/send-now');
+    const result = await api.post('/ceppys/send-now');
     sendNowResult.value = result;
     await settings.load(true); // picks up the new last_sent_at
     if (tab.value === 'mine') loadMine();
@@ -174,14 +176,14 @@ onMounted(async () => {
   <div class="page">
     <div class="page-head">
       <div>
-        <h1 style="margin-bottom: 4px">Ceppies</h1>
+        <h1 style="margin-bottom: 4px">Ceppys</h1>
         <p class="muted small" style="margin: 0">
           A completely made-up, entirely real award. Nominate a teammate any time —
           nominations stay private until the next digest email.
         </p>
       </div>
       <button v-if="auth.isAdmin" class="small" @click="showConfig ? (showConfig = false) : openConfig()">
-        {{ showConfig ? 'Close' : 'Configure Ceppies' }}
+        {{ showConfig ? 'Close' : 'Configure Ceppys' }}
       </button>
     </div>
 
@@ -258,14 +260,19 @@ onMounted(async () => {
         </select>
       </div>
       <div class="field">
-        <label>Why do they deserve a Ceppie?</label>
+        <label>Ceppy title</label>
+        <input v-model="form.title" type="text"
+          placeholder="e.g. Technical Ceppy for Innovation of the Laser Level" />
+      </div>
+      <div class="field">
+        <label>Why do they deserve a Ceppy?</label>
         <textarea v-model="form.reason" style="min-height: 90px" placeholder="What did they do?" />
       </div>
       <button class="primary" :disabled="submitting" @click="submitNomination">
         {{ submitting ? 'Submitting…' : 'Submit nomination' }}
       </button>
       <p v-if="submitted" class="small" style="color: #4ade80; margin: 10px 0 0">
-        Nomination submitted — it'll go out in the next Ceppies digest.
+        Nomination submitted — it'll go out in the next Ceppys digest.
       </p>
     </div>
 
@@ -276,6 +283,9 @@ onMounted(async () => {
       </div>
       <div v-else class="stack">
         <div v-for="n in mine" :key="n.id" class="card tight">
+          <div class="muted small" style="text-transform: uppercase; letter-spacing: .02em; margin-bottom: 2px">
+            {{ n.title }}
+          </div>
           <strong>{{ n.nominee_name }}</strong>
           <div class="muted small" style="margin: 4px 0">Submitted {{ when(n.created_at) }}</div>
           <p style="margin: 0">{{ n.reason }}</p>
@@ -285,12 +295,15 @@ onMounted(async () => {
 
     <div v-else-if="tab === 'past'">
       <div v-if="loadingPast" class="empty">Loading…</div>
-      <div v-else-if="!pastBatches.length" class="empty">No Ceppies digest has gone out yet.</div>
+      <div v-else-if="!pastBatches.length" class="empty">No Ceppys digest has gone out yet.</div>
       <div v-else class="stack">
         <div v-for="batch in pastBatches" :key="batch.emailed_at" class="card">
           <h2 style="margin-bottom: 12px">{{ when(batch.emailed_at) }}</h2>
           <ul class="timeline">
             <li v-for="n in batch.nominations" :key="n.id">
+              <div class="muted small" style="text-transform: uppercase; letter-spacing: .02em; margin-bottom: 2px">
+                {{ n.title }}
+              </div>
               <strong>{{ n.nominee_name }}</strong>
               <span class="muted small"> — nominated by {{ n.nominator_name }}</span>
               <div class="small" style="margin-top: 4px">{{ n.reason }}</div>

@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * Sends the weekly Ceppies digest — the one place both the manual "Send
- * now" button (routes/ceppies.js, admin-only) and the automatic schedule
- * (services/ceppieScheduler.js) actually fire from, so there's exactly one
+ * Sends the weekly Ceppys digest — the one place both the manual "Send
+ * now" button (routes/ceppys.js, admin-only) and the automatic schedule
+ * (services/ceppyScheduler.js) actually fire from, so there's exactly one
  * definition of "what counts as a digest going out."
  *
  * Every active employee with an email on file gets their own send (Resend
@@ -17,18 +17,18 @@ const { query } = require('../db');
 const { sendEmail } = require('../mailer');
 const config = require('../config');
 const settings = require('./settings');
-const { buildCeppieDigestEmail } = require('../templates/ceppieDigest');
+const { buildCeppyDigestEmail } = require('../templates/ceppyDigest');
 
-const EMAIL_TEMPLATE = 'ceppie_digest';
+const EMAIL_TEMPLATE = 'ceppy_digest';
 
-async function sendCeppieDigest() {
+async function sendCeppyDigest() {
   if (!config.resend.apiKey || !config.resend.fromEmail) {
     throw new Error('Email sending is not configured — set RESEND_API_KEY and RESEND_FROM_EMAIL');
   }
 
   const { rows: nominations } = await query(
     `SELECT n.*, nom.name AS nominee_name, tor.name AS nominator_name
-       FROM ceppie_nominations n
+       FROM ceppy_nominations n
        JOIN employees nom ON nom.id = n.nominee_id
        JOIN employees tor ON tor.id = n.nominator_id
       WHERE n.emailed_at IS NULL
@@ -40,7 +40,7 @@ async function sendCeppieDigest() {
       WHERE active = TRUE AND email IS NOT NULL AND email <> ''`,
   );
 
-  const { subject, html, attachments } = buildCeppieDigestEmail({ nominations });
+  const { subject, html, attachments } = buildCeppyDigestEmail({ nominations });
 
   let sent = 0;
   let failed = 0;
@@ -75,14 +75,14 @@ async function sendCeppieDigest() {
   // entirely unset (the throw above) is the one case that stops this from
   // running at all, so a totally broken Resend setup never silently empties
   // the pending queue with nothing to show for it.
-  await query('UPDATE ceppie_nominations SET emailed_at = now() WHERE emailed_at IS NULL');
+  await query('UPDATE ceppy_nominations SET emailed_at = now() WHERE emailed_at IS NULL');
 
   // Stamp last_sent_at on the schedule row itself — see
-  // services/ceppieScheduler.js, which is what stops the automatic
+  // services/ceppyScheduler.js, which is what stops the automatic
   // schedule from firing a second time on the same shop-local day (and
   // what a manual "Send now" earlier in the day already satisfies for it).
   const { rows: scheduleRows } = await query(
-    "SELECT id, meta FROM settings WHERE category = 'shop_config' AND key = 'ceppies_schedule'",
+    "SELECT id, meta FROM settings WHERE category = 'shop_config' AND key = 'ceppys_schedule'",
   );
   if (scheduleRows[0]) {
     await settings.update(scheduleRows[0].id, {
@@ -95,4 +95,4 @@ async function sendCeppieDigest() {
   };
 }
 
-module.exports = { sendCeppieDigest };
+module.exports = { sendCeppyDigest };

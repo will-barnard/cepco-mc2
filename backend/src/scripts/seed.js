@@ -73,19 +73,19 @@ const SETTINGS = [
   ['shop_config', 'shopify_default_category', 'Default category for Shopify orders', 20,
     { value: 'orders_shipping' }],
 
-  // Ceppies (fictional staff-recognition award) weekly digest schedule —
-  // admin-configured from the Ceppies page's "Configure" panel, read by
-  // services/ceppieScheduler.js. day_of_week follows JS's Date#getDay()
+  // Ceppys (fictional staff-recognition award) weekly digest schedule —
+  // admin-configured from the Ceppys page's "Configure" panel, read by
+  // services/ceppyScheduler.js. day_of_week follows JS's Date#getDay()
   // convention (0 = Sunday .. 6 = Saturday) since that's what a plain
   // <select> in the frontend naturally produces; time is 24-hour "HH:MM" in
   // the shop's own timezone (config.shopTimezone), same convention as every
   // other shop-local time comparison in this app (see NOTES.md §2.13).
   // Disabled by default — nobody gets an unexpected email until an admin
   // opts in, and a manual "send now" always works regardless of this flag.
-  // last_sent_at (unset here) is written by services/ceppies.js after each
+  // last_sent_at (unset here) is written by services/ceppys.js after each
   // digest run, scheduled or manual, and is what stops the scheduler from
   // firing twice in the same shop-local day.
-  ['shop_config', 'ceppies_schedule', 'Ceppies weekly email', 30,
+  ['shop_config', 'ceppys_schedule', 'Ceppys weekly email', 30,
     {
       enabled: false, day_of_week: 5, time: '15:00', last_sent_at: null,
     }],

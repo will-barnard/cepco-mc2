@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Fires the weekly Ceppies digest automatically, on the day/time an admin
- * configured (Settings -> shop_config's ceppies_schedule row, edited from
- * the Ceppies page's own "Configure" panel — see routes/ceppies.js and
- * services/ceppies.js).
+ * Fires the weekly Ceppys digest automatically, on the day/time an admin
+ * configured (Settings -> shop_config's ceppys_schedule row, edited from
+ * the Ceppys page's own "Configure" panel — see routes/ceppys.js and
+ * services/ceppys.js).
  *
  * A plain in-process setInterval, not a real cron library or an external
  * scheduled task: this backend runs as one long-lived Node process under
@@ -20,14 +20,14 @@
 
 const { query } = require('../db');
 const config = require('../config');
-const { sendCeppieDigest } = require('./ceppies');
+const { sendCeppyDigest } = require('./ceppys');
 
 const CHECK_INTERVAL_MS = 60_000;
 
 async function tick() {
   try {
     const { rows } = await query(
-      "SELECT meta FROM settings WHERE category = 'shop_config' AND key = 'ceppies_schedule'",
+      "SELECT meta FROM settings WHERE category = 'shop_config' AND key = 'ceppys_schedule'",
     );
     const meta = rows[0]?.meta || {};
     if (!meta.enabled) return;
@@ -48,9 +48,9 @@ async function tick() {
     if (hhmm < meta.time) return;
     if (lastSentLocalDate && lastSentLocalDate === today) return; // already sent today
 
-    const result = await sendCeppieDigest();
+    const result = await sendCeppyDigest();
     console.log(
-      `[ceppies] scheduled digest sent — ${result.sent} ok, ${result.failed} failed, `
+      `[ceppys] scheduled digest sent — ${result.sent} ok, ${result.failed} failed, `
       + `${result.nominations_included} nomination(s) included`,
     );
   } catch (err) {
@@ -59,7 +59,7 @@ async function tick() {
     // middleware/errors.js's asyncHandler for the request-handling
     // equivalent). Next tick, or the admin's manual "Send now", can still
     // recover from whatever this was.
-    console.error('[ceppies] scheduler tick failed', err);
+    console.error('[ceppys] scheduler tick failed', err);
   }
 }
 

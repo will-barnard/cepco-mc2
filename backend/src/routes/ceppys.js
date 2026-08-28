@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Ceppies — a fictional, purely-for-fun staff-recognition award (frontend
- * CeppiesView.vue). Any signed-in tech can nominate any other tech,
+ * Ceppys — a fictional, purely-for-fun staff-recognition award (frontend
+ * CeppysView.vue). Any signed-in tech can nominate any other tech,
  * including themselves; nominations sit invisible to everyone but their
  * own nominator (GET /nominations/mine) until the weekly digest email goes
- * out (services/ceppies.js / services/ceppieScheduler.js), at which point
+ * out (services/ceppys.js / services/ceppyScheduler.js), at which point
  * they become visible to everyone under GET /nominations/past. Nothing
  * here is admin-gated except the schedule/manual-send config itself
  * (POST /send-now) — the schedule's day/time live as an ordinary
@@ -18,7 +18,7 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
-const { sendCeppieDigest } = require('../services/ceppies');
+const { sendCeppyDigest } = require('../services/ceppys');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -31,7 +31,7 @@ router.use(requireAuth);
 router.get('/nominations/mine', asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT n.*, e.name AS nominee_name
-       FROM ceppie_nominations n
+       FROM ceppy_nominations n
        JOIN employees e ON e.id = n.nominee_id
       WHERE n.nominator_id = $1 AND n.emailed_at IS NULL
       ORDER BY n.created_at DESC`,
@@ -49,7 +49,7 @@ router.get('/nominations/past', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
   const { rows } = await query(
     `SELECT n.*, nom.name AS nominee_name, tor.name AS nominator_name
-       FROM ceppie_nominations n
+       FROM ceppy_nominations n
        JOIN employees nom ON nom.id = n.nominee_id
        JOIN employees tor ON tor.id = n.nominator_id
       WHERE n.emailed_at IS NOT NULL
@@ -69,6 +69,8 @@ router.post('/nominations', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const nomineeId = Number(b.nominee_id);
   if (!Number.isFinite(nomineeId)) throw badRequest('nominee_id is required');
+  const title = b.title ? String(b.title).trim() : '';
+  if (!title) throw badRequest('title is required');
   const reason = b.reason ? String(b.reason).trim() : '';
   if (!reason) throw badRequest('reason is required');
 
@@ -78,21 +80,21 @@ router.post('/nominations', asyncHandler(async (req, res) => {
   if (!nomineeRows[0]) throw badRequest('Nominee not found or inactive');
 
   const { rows } = await query(
-    `INSERT INTO ceppie_nominations (nominee_id, nominator_id, reason)
-     VALUES ($1, $2, $3) RETURNING *`,
-    [nomineeId, req.user.id, reason],
+    `INSERT INTO ceppy_nominations (nominee_id, nominator_id, title, reason)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [nomineeId, req.user.id, title, reason],
   );
   res.status(201).json(rows[0]);
 }));
 
 // ---------------------------------------------------------------------------
 // Manual "Send now" — admin-only. Runs the exact same digest function the
-// schedule uses (services/ceppies.js), so there's never a behavioral
+// schedule uses (services/ceppys.js), so there's never a behavioral
 // difference between "it fired on its own" and "an admin fired it."
 // ---------------------------------------------------------------------------
 router.post('/send-now', requireAdmin, asyncHandler(async (req, res) => {
   try {
-    const result = await sendCeppieDigest();
+    const result = await sendCeppyDigest();
     res.json(result);
   } catch (err) {
     throw badRequest(err.message);
