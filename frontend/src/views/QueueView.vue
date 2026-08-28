@@ -2,34 +2,32 @@
 /**
  * Queue — dedicated drag-and-drop reordering, split out of TicketsView.vue
  * (which stays focused on filtering/finding a ticket; NOTES.md). A ticket
- * sits in up to three kinds of queue — its category's, each of its assigned
- * techs' own (migration 007, extended to one position per assignment in
- * 013), and its instrument's family (migration 015, e.g. every Rhodes job)
- * — this page reorders one of those at a time, picked from the single
- * dropdown below.
+ * sits in two kinds of queue — its category's, and its instrument's family
+ * (migration 015, e.g. every Rhodes job) — this page reorders one of those
+ * at a time, picked with the buttons below. (A per-technician queue axis
+ * existed here too until §2.26 dropped it — see NOTES.md.)
  *
  * Open to any signed-in user, not just admins — same as assigning
  * technicians to a ticket already was.
  *
- * The picker's value is "category:<key>", "tech:<employee id>", or
- * "family:<family key>" so one <select> can switch between all three queue
- * types. "By category" is narrowed to whichever categories an admin hasn't
- * hidden via Settings -> Ticket categories (settings.categoriesForQueuePicker)
- * — meant for the "catch-all" categories that don't usually carry an
- * instrument (Shipping, Daily To-Do's, ...), since instrument-tied
- * categories (Servicing, Inventory Restorations) are better browsed "By
- * instrument family."
+ * The picker's value is "category:<key>" or "family:<family key>". "By
+ * category" is narrowed to whichever categories an admin hasn't hidden via
+ * Settings -> Ticket categories (settings.categoriesForQueuePicker) — meant
+ * for the "catch-all" categories that don't usually carry an instrument
+ * (Shipping, Daily To-Do's, ...), since instrument-tied categories
+ * (Servicing, Inventory Restorations) are better browsed by instrument
+ * type — which is why that group of buttons is shown first and kept
+ * visually separate from the category buttons below it.
  *
- * The list itself is just GET /tickets?category=..., ?technician_id=
- * ..., or ?instrument_family=..., already returned in that queue's own
- * order (see routes/tickets.js's GET / ORDER BY) — this page reads and
- * writes the exact same ordering TicketsView shows when it's filtered down
- * to one category, one tech, or one instrument family. That order is now
- * status-first: every queue is broken into status sections (Settings ->
- * Ticket statuses controls the section order), and dragging a ticket can
- * only reorder it within its own section — see onDragOver/persistOrder
- * below, and routes/tickets.js's POST /reorder-queue which enforces the
- * same thing server-side.
+ * The list itself is just GET /tickets?category=... or ?instrument_family=
+ * ..., already returned in that queue's own order (see routes/tickets.js's
+ * GET / ORDER BY) — this page reads and writes the exact same ordering
+ * TicketsView shows when it's filtered down to one category or one
+ * instrument family. That order is status-first: every queue is broken
+ * into status sections (Settings -> Ticket statuses controls the section
+ * order), and dragging a ticket can only reorder it within its own section
+ * — see onDragOver/persistOrder below, and routes/tickets.js's POST
+ * /reorder-queue which enforces the same thing server-side.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -40,16 +38,9 @@ const settings = useSettings();
 const refData = useRefData();
 
 const selected = ref('');
-const scope = computed(() => {
-  if (selected.value.startsWith('tech:')) return 'tech';
-  if (selected.value.startsWith('family:')) return 'family';
-  return 'category';
-});
+const scope = computed(() => (selected.value.startsWith('family:') ? 'family' : 'category'));
 const categoryKey = computed(
   () => (scope.value === 'category' ? selected.value.slice('category:'.length) : ''),
-);
-const employeeId = computed(
-  () => (scope.value === 'tech' ? Number(selected.value.slice('tech:'.length)) : null),
 );
 const familyKey = computed(
   () => (scope.value === 'family' ? selected.value.slice('family:'.length) : ''),
@@ -66,10 +57,9 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    let params;
-    if (scope.value === 'category') params = { category: categoryKey.value };
-    else if (scope.value === 'tech') params = { technician_id: employeeId.value };
-    else params = { instrument_family: familyKey.value };
+    const params = scope.value === 'category'
+      ? { category: categoryKey.value }
+      : { instrument_family: familyKey.value };
     tickets.value = await api.get('/tickets', params);
   } catch (err) {
     error.value = err.message;
@@ -94,11 +84,20 @@ const rowInfo = computed(() => {
   });
 });
 
-// Default to the first pickable category once settings has loaded, so this
-// isn't a blank picker on first visit.
-watch(() => settings.categoriesForQueuePicker, (cats) => {
-  if (!selected.value && cats.length) selected.value = `category:${cats[0].key}`;
-}, { immediate: true });
+// Default to the first instrument type once ref data has loaded, so this
+// isn't a blank picker on first visit — instrument type is the primary axis
+// (see header comment), so it's preferred over category as the default.
+// Falls back to the first pickable category on the off chance a shop has no
+// instrument families loaded yet.
+watch(
+  () => [refData.families, settings.categoriesForQueuePicker],
+  ([families, cats]) => {
+    if (selected.value) return;
+    if (families.length) selected.value = `family:${families[0]}`;
+    else if (cats.length) selected.value = `category:${cats[0].key}`;
+  },
+  { immediate: true },
+);
 
 onMounted(async () => {
   await Promise.all([settings.load(), refData.load()]);
@@ -145,20 +144,13 @@ async function persistOrder(statusKey) {
   saving.value = true;
   try {
     const ticketIds = tickets.value.filter((t) => t.status_key === statusKey).map((t) => t.id);
-    let body;
-    if (scope.value === 'category') {
-      body = {
+    const body = scope.value === 'category'
+      ? {
         scope: 'category', category_key: categoryKey.value, status_key: statusKey, ticket_ids: ticketIds,
-      };
-    } else if (scope.value === 'tech') {
-      body = {
-        scope: 'tech', employee_id: employeeId.value, status_key: statusKey, ticket_ids: ticketIds,
-      };
-    } else {
-      body = {
+      }
+      : {
         scope: 'family', family: familyKey.value, status_key: statusKey, ticket_ids: ticketIds,
       };
-    }
     await api.post('/tickets/reorder-queue', body);
   } catch (err) {
     error.value = `${err.message} The queue below has been reloaded.`;
@@ -168,9 +160,8 @@ async function persistOrder(statusKey) {
   }
 }
 
-/** "Sam Tech, Jamie Tech" — shown in category and family view, where who's
- * on each ticket isn't otherwise implied by which queue you're looking at
- * (the tech view doesn't need it — that's the one axis it *is* the queue). */
+/** "Sam Tech, Jamie Tech" — who's on each ticket isn't otherwise implied by
+ * which queue (category or instrument type) you're looking at. */
 function techNames(t) {
   return (t.technicians || []).map((x) => x.name).join(', ') || 'unassigned';
 }
@@ -182,41 +173,49 @@ function techNames(t) {
       <div>
         <h1 style="margin-bottom: 4px">Queue</h1>
         <p class="muted small" style="margin: 0">
-          Drag a ticket to move it within a category's queue, a technician's own queue, or an
-          instrument family's queue — grouped by status, and only reorderable within a status
-          section. The new order saves as soon as you drop it.
+          Drag a ticket to move it within an instrument type's queue or a category's queue —
+          grouped by status, and only reorderable within a status section. The new order saves
+          as soon as you drop it.
         </p>
       </div>
     </div>
 
     <div class="card tight" style="margin-bottom: 16px">
-      <div class="field" style="margin: 0; max-width: 320px">
-        <label>Queue</label>
-        <select v-model="selected">
-          <option value="" disabled>— choose a queue —</option>
-          <optgroup label="By category">
-            <option v-for="c in settings.categoriesForQueuePicker" :key="c.key" :value="`category:${c.key}`">
-              {{ c.label }}
-            </option>
-          </optgroup>
-          <optgroup label="By technician">
-            <option v-for="e in refData.employees" :key="e.id" :value="`tech:${e.id}`">
-              {{ e.name }}
-            </option>
-          </optgroup>
-          <optgroup label="By instrument family">
-            <option v-for="f in refData.families" :key="f" :value="`family:${f}`">
-              {{ f }}
-            </option>
-          </optgroup>
-        </select>
+      <div class="field" style="margin: 0 0 14px">
+        <label>Instrument type</label>
+        <div class="row">
+          <button
+            v-for="f in refData.families" :key="f"
+            type="button" class="small" :class="{ primary: selected === `family:${f}` }"
+            @click="selected = `family:${f}`"
+          >
+            {{ f }}
+          </button>
+        </div>
+      </div>
+
+      <div class="field" style="margin: 0">
+        <label>Category</label>
+        <div v-if="settings.categoriesForQueuePicker.length" class="row">
+          <button
+            v-for="c in settings.categoriesForQueuePicker" :key="c.key"
+            type="button" class="small" :class="{ primary: selected === `category:${c.key}` }"
+            @click="selected = `category:${c.key}`"
+          >
+            {{ c.label }}
+          </button>
+        </div>
+        <p v-else class="muted small" style="margin: 0">
+          No categories are shown here — enable some from Settings → Ticket categories'
+          "Queue picker" column.
+        </p>
       </div>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
     <div v-if="loading" class="empty">Loading…</div>
-    <div v-else-if="!selected" class="empty">Pick a category or technician above to see its queue.</div>
+    <div v-else-if="!selected" class="empty">Pick an instrument type or category above to see its queue.</div>
     <div v-else-if="!tickets.length" class="empty">No tickets in this queue.</div>
 
     <div v-else class="stack" :style="saving ? 'opacity: 0.6; pointer-events: none' : ''">
@@ -254,10 +253,7 @@ function techNames(t) {
                 </span>
               </div>
             </div>
-            <span
-              v-if="scope !== 'tech'" class="muted small nowrap"
-              style="min-width: 140px; text-align: right"
-            >
+            <span class="muted small nowrap" style="min-width: 140px; text-align: right">
               {{ techNames(row.ticket) }}
             </span>
           </div>

@@ -913,6 +913,29 @@ dashboard lists) that renders the same kind of status section headers —
 `TicketsView.vue`'s plain flat table doesn't pass it, so that page is
 unaffected.
 
+### 2.26 Queue page drops the technician axis, dropdown becomes buttons
+
+Follow-up to §2.25: the Queue page (`QueueView.vue`) no longer offers "By
+technician" as a pickable queue — just "By instrument type" and "By
+category," each its own row of buttons instead of one `<select>` with
+optgroups, so the two axes read as visually distinct groups rather than
+three flattened dropdown sections. Instrument type is listed first and
+defaults to being pre-selected on load (falling back to the first pickable
+category only if a shop somehow has no instrument families), matching
+§2.25's framing that instrument type is the primary axis and category is
+just the catch-all for tickets that don't have one.
+
+This only removes the *picker* — `GET /tickets?technician_id=...` and
+`ticket_technicians.queue_position` (migration 013) are untouched, since
+the dashboard's "Assigned to me" list still orders by them (§2.25's
+status-first change applies there too). The practical effect: a tech's
+personal queue order is no longer directly draggable anywhere — a new
+ticket still joins the back of the tech's queue the same as always
+(§2.17), it just can't be manually reshuffled from this page anymore.
+`POST /tickets/reorder-queue`'s `scope=tech` branch is also left in place
+server-side (unused now, but harmless) rather than removed, in case that
+capability is wanted back later.
+
 ---
 
 ## 4. Suggested first moves after deploy
