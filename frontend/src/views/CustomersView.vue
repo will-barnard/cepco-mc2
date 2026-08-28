@@ -1,10 +1,11 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRoute } from 'vue-router';
 import api from '../api';
 import { useSettings } from '../stores';
 
 const settings = useSettings();
+const route = useRoute();
 
 const customers = ref([]);
 const selected = ref(null);
@@ -39,6 +40,17 @@ watch(search, () => {
   clearTimeout(debounce);
   debounce = setTimeout(load, 250);
 });
+
+// TicketDetailView's "Customer" link goes to /customers?id=<id> so clicking
+// a customer's name from a ticket actually opens that customer's detail
+// pane, not just the bare customer list. Watched (not just read once) so
+// following a second such link while already on this page — e.g. from one
+// ticket's customer to another via browser back/forward — re-selects too,
+// since Vue Router reuses this component instance across same-route
+// navigations that only change the query string.
+watch(() => route.query.id, (id) => {
+  if (id) select(id);
+}, { immediate: true });
 
 onMounted(load);
 </script>
