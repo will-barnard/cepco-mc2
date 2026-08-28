@@ -162,6 +162,21 @@ async function setDefaultAssignee(row, employeeId) {
   }
 }
 
+// Per-category "Ship this instrument" quick-action visibility (see
+// stores.js's shipButtonAllowed) — same meta-on-the-category-row storage as
+// setDefaultAssignee above, just a plain boolean instead of an id.
+async function toggleShipButton(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, hide_ship_button: !row.meta.hide_ship_button },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function setRequiredRounds(row, value) {
   error.value = '';
   try {
@@ -375,6 +390,7 @@ onMounted(refresh);
                 <th v-if="category === 'qc_tier'">Rounds required</th>
                 <th v-if="category === 'qc_tier'">Two reviewers</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
+                <th v-if="category === 'ticket_category'">Ship button</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th>Order</th><th>State</th><th />
               </tr>
@@ -418,6 +434,15 @@ onMounted(refresh);
                       {{ e.name }}
                     </option>
                   </select>
+                </td>
+
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Show the &quot;Ship this instrument&quot; quick-action on tickets in this category">
+                    <input
+                      type="checkbox" :checked="!row.meta.hide_ship_button"
+                      @change="toggleShipButton(row)"
+                    />
+                  </label>
                 </td>
 
                 <td v-if="category === 'ticket_status'">

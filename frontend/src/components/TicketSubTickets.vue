@@ -47,6 +47,11 @@ const creating = ref(false);
 
 const children = computed(() => props.ticket.child_tickets || []);
 const hasShippingChild = computed(() => children.value.some((c) => c.category_key === 'shipping'));
+// Settings -> Ticket categories -> "Ship button" lets an admin turn this
+// quick-action off per category (e.g. a Shipping ticket has no business
+// offering to spin off *another* shipping ticket) — see stores.js's
+// shipButtonAllowed.
+const shipButtonAllowed = computed(() => settings.shipButtonAllowed(props.ticket.category_key));
 
 const blank = () => ({
   title: '',
@@ -114,7 +119,7 @@ function techNames(c) {
       <h2 style="margin: 0">Sub-tickets</h2>
       <div class="spacer" />
       <button
-        v-if="ticket.instrument_id && !hasShippingChild"
+        v-if="ticket.instrument_id && !hasShippingChild && shipButtonAllowed"
         class="small" :disabled="shippingBusy" @click="createShippingTicket"
       >{{ shippingBusy ? 'Creating…' : 'Ship this instrument' }}</button>
       <button class="small" @click="showForm ? (showForm = false) : openForm()">

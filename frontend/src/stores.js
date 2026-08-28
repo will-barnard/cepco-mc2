@@ -65,6 +65,16 @@ export const useSettings = defineStore('settings', {
     }),
     labelFor: (s) => (category, key) => (s.data[category] || []).find((r) => r.key === key)?.label || key,
     colorFor: (s) => (key) => (s.data.ticket_status || []).find((r) => r.key === key)?.meta?.color || 'slate',
+    // TicketSubTickets.vue's "Ship this instrument" quick-action — a
+    // Settings -> Ticket categories toggle per category (meta.hide_ship_button),
+    // e.g. a Shipping-category ticket has no business offering to spin off
+    // *another* shipping ticket. Absent/false meta means "shown," same
+    // default-is-permissive convention as applicable_categories above, so
+    // every category already behaves exactly as it does today until an
+    // admin explicitly turns one off.
+    shipButtonAllowed: (s) => (categoryKey) => (
+      !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_ship_button
+    ),
   },
   actions: {
     async load(force = false) {
