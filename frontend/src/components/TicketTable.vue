@@ -1,29 +1,14 @@
 <script setup>
 import { useRouter } from 'vue-router';
-import { useSettings, useAuth } from '../stores';
-import api from '../api';
+import { useSettings } from '../stores';
 
-const props = defineProps({
+defineProps({
   tickets: { type: Array, required: true },
   emptyText: { type: String, default: 'No tickets match those filters.' },
-  // Which queue these rows represent, if any: 'category' or 'tech'. Only set
-  // this when the parent has already filtered to exactly one category or
-  // one assigned tech — reordering only makes sense within a single queue,
-  // and this prop is what decides which reorder endpoint gets called. Leave
-  // unset (default) for a mixed/unfiltered list to hide the arrows entirely.
-  queue: { type: String, default: null },
-  // Which tech's queue this is, when queue === 'tech' — a ticket can now be
-  // on more than one tech's queue at once (see migration 013), so
-  // reorder-tech needs to be told whose queue_position to move. Unused for
-  // queue === 'category'.
-  queueTechId: { type: [Number, String], default: null },
 });
-
-const emit = defineEmits(['reordered']);
 
 const router = useRouter();
 const settings = useSettings();
-const auth = useAuth();
 
 const open = (id) => router.push({ name: 'ticket', params: { id } });
 
@@ -45,18 +30,6 @@ function hoursOver(t) {
 function techNames(t) {
   return (t.technicians || []).map((x) => x.name).join(', ') || '—';
 }
-
-// Admin-only (Settings has the same gate on its own reorder buttons).
-// Reordering is server-side (POST /tickets/:id/reorder-category|tech, see
-// NOTES.md) — the parent reloads its own list on 'reordered' rather than
-// this component guessing at the new order itself. A tech-queue reorder is
-// scoped to one tech (queueTechId) since a ticket can be on several techs'
-// queues at once.
-async function reorder(t, direction) {
-  const body = props.queue === 'tech' ? { direction, employee_id: props.queueTechId } : { direction };
-  await api.post(`/tickets/${t.id}/reorder-${props.queue}`, body);
-  emit('reordered');
-}
 </script>
 
 <template>
@@ -66,7 +39,6 @@ async function reorder(t, direction) {
     <table>
       <thead>
         <tr>
-          <th v-if="queue && auth.isAdmin" class="nowrap">Queue</th>
           <th>Ticket</th>
           <th class="nowrap">Created</th>
           <th>Customer</th>
@@ -78,10 +50,6 @@ async function reorder(t, direction) {
       </thead>
       <tbody>
         <tr v-for="t in tickets" :key="t.id" class="clickable" @click="open(t.id)">
-          <td v-if="queue && auth.isAdmin" class="nowrap">
-            <button class="small" @click.stop="reorder(t, 'up')">↑</button>
-            <button class="small" @click.stop="reorder(t, 'down')">↓</button>
-          </td>
           <td>
             <strong>{{ t.title }}</strong>
             <div v-if="t.instrument_family" class="muted small">

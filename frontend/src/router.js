@@ -6,6 +6,7 @@ const routes = [
   { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
   { path: '/tickets', name: 'tickets', component: () => import('./views/TicketsView.vue') },
   { path: '/tickets/new', name: 'ticket-new', component: () => import('./views/TicketNewView.vue') },
+  { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue') },
   { path: '/tickets/:id', name: 'ticket', component: () => import('./views/TicketDetailView.vue'), props: true },
   { path: '/estimates', name: 'estimates', component: () => import('./views/EstimatesView.vue') },
   { path: '/estimates/new', name: 'estimate-new', component: () => import('./views/EstimateNewView.vue') },

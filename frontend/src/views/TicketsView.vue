@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, watch, onMounted } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -55,21 +55,11 @@ function reset() {
   };
 }
 
-// A "queue" only exists when the list is narrowed to exactly one category
-// or one tech (not both at once — those are two different queues, and a
-// ticket doesn't have a combined position across them). Anything broader is
-// a mixed browse view with no single reorderable order, so the arrows stay
-// hidden — see TicketTable's `queue` prop and NOTES.md.
-const queueType = computed(() => {
-  // sort=status shows a different order than either queue's own position
-  // column, so the reorder arrows (which act on that position column)
-  // would silently not match what's on screen — hide them in that mode.
-  if (filters.value.sort) return null;
-  const { category, technician_id: techId } = filters.value;
-  if (category && !techId) return 'category';
-  if (techId && techId !== 'unassigned' && !category) return 'tech';
-  return null;
-});
+// Reordering itself now lives on its own page (QueueView.vue) rather than
+// here — this view stays focused on filtering/finding a ticket. Filtering
+// to exactly one category or one tech still shows that queue's own order
+// (see routes/tickets.js's GET / — it's the same ordering QueueView reads
+// and writes), just without any reorder controls on this page.
 
 onMounted(load);
 </script>
@@ -144,10 +134,7 @@ onMounted(load);
 
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else class="card tight">
-      <TicketTable
-        :tickets="tickets" :queue="queueType" :queue-tech-id="filters.technician_id"
-        @reordered="load"
-      />
+      <TicketTable :tickets="tickets" />
     </div>
   </div>
 </template>

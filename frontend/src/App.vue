@@ -59,6 +59,7 @@ async function signOut() {
       <nav>
         <RouterLink to="/">Dashboard</RouterLink>
         <RouterLink to="/tickets">Tickets</RouterLink>
+        <RouterLink to="/queue">Queue</RouterLink>
         <RouterLink to="/estimates">Estimates</RouterLink>
         <RouterLink to="/customers">Customers</RouterLink>
         <RouterLink to="/fleet">Fleet</RouterLink>

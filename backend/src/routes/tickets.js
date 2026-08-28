@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { query, withTransaction } = require('../db');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
@@ -564,126 +564,89 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
-// Queue reordering (admin only, per NOTES.md). A ticket sits in up to two
-// kinds of queue — its category's, and each of its assigned techs' own
-// (migration 007, extended to one position per assignment in 013) — so
-// "up"/"down" always needs to know which queue it's being asked to move
-// within (and, for a tech queue, *whose*). Swapping position values with
-// whichever neighbor is currently adjacent (rather than a blind +/- delta)
-// is what makes a single click always land exactly where you'd expect,
-// regardless of how uneven the gaps between positions have become from past
-// inserts/reorders.
+// Queue reordering — open to any signed-in user (per NOTES.md: this used to
+// be admin-only via one-step up/down swaps; the dedicated Queue view
+// (frontend QueueView.vue) replaced that with drag-and-drop, which needs a
+// "here's the whole new order" call rather than a series of single swaps).
 //
-// Known limitation: the neighbor is the next item in the *full* queue, not
-// just whatever's currently visible under other filters (search, status,
-// priority) — if a filter is hiding that neighbor, the move still happens
-// but won't visibly reorder the two rows on screen until the filter clears.
+// A ticket sits in up to two kinds of queue — its category's, and each of
+// its assigned techs' own (migration 007, extended to one position per
+// assignment in 013) — so every call has to say which queue (and for a
+// tech queue, whose). The client sends the *entire* reordered list of
+// ticket ids for that one queue; the server checks it's exactly the same
+// set of tickets currently in that queue (nobody else added/removed one
+// while this was being dragged) and then renumbers positions 10, 20, 30...
+// in the given order — a plain reindex, not a series of swaps, since
+// drag-and-drop can move something many places in one action.
 // ---------------------------------------------------------------------------
-async function swapAdjacentQueuePosition(client, {
-  positionColumn, scopeColumn, scopeValue, ticketId, currentPosition, direction,
-}) {
-  const comparator = direction === 'up' ? '<' : '>';
-  const order = direction === 'up' ? 'DESC' : 'ASC';
-  const { rows } = await client.query(
-    `SELECT id, ${positionColumn} AS position FROM tickets
-      WHERE ${scopeColumn} = $1 AND archived = FALSE AND id != $2
-        AND ${positionColumn} ${comparator} $3
-      ORDER BY ${positionColumn} ${order} LIMIT 1`,
-    [scopeValue, ticketId, currentPosition],
+router.post('/reorder-queue', asyncHandler(async (req, res) => {
+  const { scope } = req.body || {};
+  if (scope !== 'category' && scope !== 'tech') throw badRequest("scope must be 'category' or 'tech'");
+
+  const ticketIds = [...new Set(
+    (Array.isArray(req.body.ticket_ids) ? req.body.ticket_ids : [])
+      .map(Number)
+      .filter((n) => Number.isFinite(n)),
+  )];
+  if (!ticketIds.length) throw badRequest('ticket_ids is required');
+
+  // Both branches follow the same shape: look up who's *actually* in this
+  // queue right now, refuse if that doesn't match what the client thinks
+  // it's reordering (stale view — someone else changed the queue mid-drag),
+  // then write positions 10/20/30... in the client's given order.
+  const mismatchError = () => badRequest(
+    "That queue has changed since it was loaded — someone else likely added, removed, "
+    + 'or reassigned a ticket. Reload the queue and try again.',
   );
-  const neighbor = rows[0];
-  if (!neighbor) return false; // already first/last in this queue
 
-  await client.query(`UPDATE tickets SET ${positionColumn} = $1 WHERE id = $2`, [neighbor.position, ticketId]);
-  await client.query(`UPDATE tickets SET ${positionColumn} = $1 WHERE id = $2`, [currentPosition, neighbor.id]);
-  return true;
-}
+  if (scope === 'category') {
+    const categoryKey = req.body.category_key;
+    if (!categoryKey) throw badRequest('category_key is required for scope=category');
+    await settings.resolve('ticket_category', categoryKey); // throws if unknown
 
-// Same swap, but for a tech's queue (ticket_technicians.queue_position) —
-// a separate function because that position no longer lives on `tickets`
-// at all, and a swap must stay scoped to one (employee_id) queue, never
-// touching that ticket's position in anyone else's.
-async function swapAdjacentTechQueuePosition(client, {
-  employeeId, ticketId, currentPosition, direction,
-}) {
-  const comparator = direction === 'up' ? '<' : '>';
-  const order = direction === 'up' ? 'DESC' : 'ASC';
-  const { rows } = await client.query(
-    `SELECT tt.ticket_id AS id, tt.queue_position AS position
-       FROM ticket_technicians tt
-       JOIN tickets t2 ON t2.id = tt.ticket_id
-      WHERE tt.employee_id = $1 AND t2.archived = FALSE AND tt.ticket_id != $2
-        AND tt.queue_position ${comparator} $3
-      ORDER BY tt.queue_position ${order} LIMIT 1`,
-    [employeeId, ticketId, currentPosition],
-  );
-  const neighbor = rows[0];
-  if (!neighbor) return false; // already first/last in this tech's queue
+    await withTransaction(async (client) => {
+      const { rows: current } = await client.query(
+        'SELECT id FROM tickets WHERE category_key = $1 AND archived = FALSE',
+        [categoryKey],
+      );
+      const currentIds = new Set(current.map((r) => r.id));
+      if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
+        throw mismatchError();
+      }
+      for (let i = 0; i < ticketIds.length; i += 1) {
+        await client.query(
+          'UPDATE tickets SET category_queue_position = $1 WHERE id = $2',
+          [(i + 1) * 10, ticketIds[i]],
+        );
+      }
+    });
+  } else {
+    const employeeId = Number(req.body.employee_id);
+    if (!Number.isFinite(employeeId)) throw badRequest('employee_id is required for scope=tech');
+    const { rows: empRows } = await query('SELECT id FROM employees WHERE id = $1', [employeeId]);
+    if (!empRows[0]) throw notFound('Technician not found');
 
-  await client.query(
-    'UPDATE ticket_technicians SET queue_position = $1 WHERE ticket_id = $2 AND employee_id = $3',
-    [neighbor.position, ticketId, employeeId],
-  );
-  await client.query(
-    'UPDATE ticket_technicians SET queue_position = $1 WHERE ticket_id = $2 AND employee_id = $3',
-    [currentPosition, neighbor.id, employeeId],
-  );
-  return true;
-}
-
-function requireDirection(body) {
-  const direction = body && body.direction;
-  if (direction !== 'up' && direction !== 'down') throw badRequest("direction must be 'up' or 'down'");
-  return direction;
-}
-
-router.post('/:id/reorder-category', requireAdmin, asyncHandler(async (req, res) => {
-  const direction = requireDirection(req.body);
-  const { rows } = await query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
-  const ticket = rows[0];
-  if (!ticket) throw notFound('Ticket not found');
-  if (ticket.archived) throw badRequest('Cannot reorder an archived ticket');
-  if (ticket.category_queue_position === null) throw badRequest('Ticket has no category queue position');
-
-  await withTransaction((client) => swapAdjacentQueuePosition(client, {
-    positionColumn: 'category_queue_position',
-    scopeColumn: 'category_key',
-    scopeValue: ticket.category_key,
-    ticketId: ticket.id,
-    currentPosition: ticket.category_queue_position,
-    direction,
-  }));
-  const { rows: updated } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
-  res.json(updated[0]);
-}));
-
-router.post('/:id/reorder-tech', requireAdmin, asyncHandler(async (req, res) => {
-  const direction = requireDirection(req.body);
-  const employeeId = req.body && req.body.employee_id;
-  if (!employeeId) {
-    throw badRequest("employee_id is required — a ticket can be on more than one tech's queue now, "
-      + 'so reordering has to say whose queue');
+    await withTransaction(async (client) => {
+      const { rows: current } = await client.query(
+        `SELECT tt.ticket_id AS id FROM ticket_technicians tt
+           JOIN tickets t2 ON t2.id = tt.ticket_id
+          WHERE tt.employee_id = $1 AND t2.archived = FALSE`,
+        [employeeId],
+      );
+      const currentIds = new Set(current.map((r) => r.id));
+      if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
+        throw mismatchError();
+      }
+      for (let i = 0; i < ticketIds.length; i += 1) {
+        await client.query(
+          'UPDATE ticket_technicians SET queue_position = $1 WHERE ticket_id = $2 AND employee_id = $3',
+          [(i + 1) * 10, ticketIds[i], employeeId],
+        );
+      }
+    });
   }
 
-  const { rows: ticketRows } = await query('SELECT archived FROM tickets WHERE id = $1', [req.params.id]);
-  if (!ticketRows[0]) throw notFound('Ticket not found');
-  if (ticketRows[0].archived) throw badRequest('Cannot reorder an archived ticket');
-
-  const { rows: assignRows } = await query(
-    'SELECT queue_position FROM ticket_technicians WHERE ticket_id = $1 AND employee_id = $2',
-    [req.params.id, employeeId],
-  );
-  const assignment = assignRows[0];
-  if (!assignment) throw badRequest('Ticket is not assigned to that tech');
-
-  await withTransaction((client) => swapAdjacentTechQueuePosition(client, {
-    employeeId,
-    ticketId: req.params.id,
-    currentPosition: assignment.queue_position,
-    direction,
-  }));
-  const { rows: updated } = await query(`${TICKET_SELECT} WHERE t.id = $1`, [req.params.id]);
-  res.json(updated[0]);
+  res.json({ scope, reordered: ticketIds.length });
 }));
 
 // ---------------------------------------------------------------------------
