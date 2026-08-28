@@ -87,9 +87,10 @@ router.post('/checks', asyncHandler(async (req, res) => {
     if (!rows[0]) throw notFound('QC template not found');
     items = rows[0].items;
   }
-  const results = items.map((item) => ({
-    label: item.label, note: item.note || null, checked: false, checked_at: null,
-  }));
+  // No per-item checkboxes anymore (per NOTES.md — a plain reference list
+  // plus the round-level notes field replaced tracked completion state), so
+  // the snapshot just keeps label/note for display.
+  const results = items.map((item) => ({ label: item.label, note: item.note || null }));
 
   const { rows: roundRows } = await query(
     'SELECT COALESCE(max(round_number), 0) + 1 AS next FROM qc_checks WHERE ticket_id = $1',
@@ -139,14 +140,6 @@ router.post('/checks/:id/sign-off', requireRole('senior'), asyncHandler(async (r
     const check = checkRows[0];
     if (!check) throw notFound('QC check not found');
     if (check.signed_off_at) throw badRequest('This QC round is already signed off');
-
-    const unchecked = (check.results || []).filter((r) => !r.checked);
-    if (passed && unchecked.length) {
-      throw badRequest(
-        `${unchecked.length} checklist item(s) are still incomplete`,
-        { incomplete: unchecked.map((r) => r.label) },
-      );
-    }
 
     const { rows: signed } = await client.query(
       `UPDATE qc_checks SET passed = $2, signed_off_at = now(), reviewer_id = $3

@@ -31,6 +31,16 @@ const newLabel = ref({});
 const showNewEmployee = ref(false);
 const employeeForm = ref({ name: '', email: '', password: '', role: 'junior', initials: '' });
 
+// Admin-only password reset/overwrite for any staff account (including
+// another admin's — requireAdmin at the route doesn't special-case the
+// target's own role, so there's nothing extra to gate here). No current
+// password needed, unlike AccountView.vue's self-service change — an admin
+// resetting someone else's forgotten password can't know it. Only one
+// row's form is open at a time.
+const passwordResetFor = ref(null);
+const passwordDraft = ref('');
+const passwordConfirmDraft = ref('');
+
 async function refresh() {
   await settings.load(true);
   await refData.load(true);
@@ -261,6 +271,42 @@ async function updateEmployeeRole(emp, value) {
   await updateEmployeeField(emp, 'role', value);
 }
 
+function startPasswordReset(emp) {
+  error.value = '';
+  notice.value = '';
+  passwordResetFor.value = emp.id;
+  passwordDraft.value = '';
+  passwordConfirmDraft.value = '';
+}
+
+function cancelPasswordReset() {
+  passwordResetFor.value = null;
+  passwordDraft.value = '';
+  passwordConfirmDraft.value = '';
+}
+
+async function submitPasswordReset(emp) {
+  error.value = '';
+  notice.value = '';
+  if (passwordDraft.value.length < 10) {
+    error.value = 'New password must be at least 10 characters';
+    return;
+  }
+  if (passwordDraft.value !== passwordConfirmDraft.value) {
+    error.value = 'New password and confirmation do not match';
+    return;
+  }
+  try {
+    await api.patch(`/employees/${emp.id}`, { password: passwordDraft.value });
+    notice.value = `Password reset for ${emp.name}. Give them the new password directly — `
+      + `they weren't notified.`;
+    cancelPasswordReset();
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 onMounted(refresh);
 </script>
 
@@ -468,38 +514,71 @@ onMounted(refresh);
               <tr><th>Name</th><th>Email</th><th>Role</th><th>Initials</th><th>State</th><th /></tr>
             </thead>
             <tbody>
-              <tr v-for="e in refData.employees" :key="e.id">
-                <td>
-                  <input
-                    :value="e.name" style="min-width: 160px"
-                    @change="updateEmployeeName(e, $event.target.value)"
-                  />
-                </td>
-                <td class="small muted">{{ e.email }}</td>
-                <td>
-                  <select :value="e.role" @change="updateEmployeeRole(e, $event.target.value)">
-                    <option value="junior">Junior tech</option>
-                    <option value="senior">Senior tech</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                </td>
-                <td>
-                  <input
-                    :value="e.initials || ''" maxlength="6" style="width: 70px" placeholder="—"
-                    @change="updateEmployeeInitials(e, $event.target.value)"
-                  />
-                </td>
-                <td>
-                  <span :class="['pill', e.active ? 'green' : 'slate']">
-                    {{ e.active ? 'Active' : 'Inactive' }}
-                  </span>
-                </td>
-                <td class="right">
-                  <button class="small" @click="toggleEmployee(e)">
-                    {{ e.active ? 'Deactivate' : 'Reactivate' }}
-                  </button>
-                </td>
-              </tr>
+              <template v-for="e in refData.employees" :key="e.id">
+                <tr>
+                  <td>
+                    <input
+                      :value="e.name" style="min-width: 160px"
+                      @change="updateEmployeeName(e, $event.target.value)"
+                    />
+                  </td>
+                  <td class="small muted">{{ e.email }}</td>
+                  <td>
+                    <select :value="e.role" @change="updateEmployeeRole(e, $event.target.value)">
+                      <option value="junior">Junior tech</option>
+                      <option value="senior">Senior tech</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      :value="e.initials || ''" maxlength="6" style="width: 70px" placeholder="—"
+                      @change="updateEmployeeInitials(e, $event.target.value)"
+                    />
+                  </td>
+                  <td>
+                    <span :class="['pill', e.active ? 'green' : 'slate']">
+                      {{ e.active ? 'Active' : 'Inactive' }}
+                    </span>
+                  </td>
+                  <td class="right nowrap">
+                    <button class="small" @click="startPasswordReset(e)">Reset password</button>
+                    <button class="small" @click="toggleEmployee(e)">
+                      {{ e.active ? 'Deactivate' : 'Reactivate' }}
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="passwordResetFor === e.id">
+                  <td colspan="6">
+                    <form class="card tight" @submit.prevent="submitPasswordReset(e)">
+                      <p class="muted small" style="margin-top: 0">
+                        Setting a new password for {{ e.name }}. This overwrites their current
+                        password immediately and doesn't require knowing it.
+                      </p>
+                      <div class="field-row">
+                        <div class="field" style="margin-bottom: 0">
+                          <label>New password (min 10 chars)</label>
+                          <input
+                            v-model="passwordDraft" type="password" minlength="10"
+                            autocomplete="new-password" required
+                          />
+                        </div>
+                        <div class="field" style="margin-bottom: 0">
+                          <label>Confirm password</label>
+                          <input
+                            v-model="passwordConfirmDraft" type="password" minlength="10"
+                            autocomplete="new-password" required
+                          />
+                        </div>
+                      </div>
+                      <div class="row" style="margin-top: 10px">
+                        <button class="primary small" type="submit">Save new password</button>
+                        <button class="small" type="button" @click="cancelPasswordReset">Cancel</button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+              </template>
             </tbody>
           </table>
         </div>

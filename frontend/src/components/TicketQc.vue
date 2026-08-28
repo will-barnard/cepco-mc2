@@ -49,20 +49,6 @@ async function startRound() {
   }
 }
 
-async function toggleItem(check, index) {
-  const results = check.results.map((r, i) => (
-    i === index
-      ? { ...r, checked: !r.checked, checked_at: !r.checked ? new Date().toISOString() : null }
-      : r
-  ));
-  try {
-    await api.patch(`/qc/checks/${check.id}`, { results });
-    emit('changed');
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
 async function saveNotes(check, value) {
   try {
     await api.patch(`/qc/checks/${check.id}`, { notes: value });
@@ -83,15 +69,14 @@ async function signOff(check, passed) {
     }
     emit('changed');
   } catch (err) {
-    error.value = err.details?.incomplete
-      ? `${err.message}: ${err.details.incomplete.join(', ')}`
-      : err.message;
+    // (No more "N items still incomplete" case — sign-off no longer gates
+    // on checklist completion now that items aren't checkable.)
+    error.value = err.message;
   } finally {
     busy.value = false;
   }
 }
 
-const done = (check) => (check.results || []).filter((r) => r.checked).length;
 </script>
 
 <template>
@@ -110,31 +95,30 @@ const done = (check) => (check.results || []).filter((r) => r.checked).length;
       <div class="row">
         <strong>Round {{ check.round_number }}</strong>
         <span class="tag">{{ check.tier_label || check.tier_key }}</span>
-        <span class="muted small">{{ done(check) }} / {{ check.results.length }}</span>
+        <span class="muted small">{{ check.results.length }} item(s)</span>
         <div class="spacer" />
         <span v-if="check.signed_off_at" :class="['pill', check.passed ? 'green' : 'red']">
           {{ check.passed ? 'Passed' : 'Failed' }} — {{ check.reviewer_name }}
         </span>
       </div>
 
-      <ul class="checklist" style="margin-top: 10px">
+      <!-- Reference checklist — items are display-only now (no per-item
+           checkboxes); the tech records what they actually found in the
+           notes field below instead. Laid out in three columns so a
+           longer template doesn't turn into a tall scroll. -->
+      <ul class="qc-checklist" style="margin-top: 10px">
         <li v-for="(r, i) in check.results" :key="i">
-          <input
-            type="checkbox" :checked="r.checked" :disabled="!!check.signed_off_at"
-            @change="toggleItem(check, i)"
-          />
-          <span>
-            {{ r.label }}
-            <span v-if="r.note" class="item-note">{{ r.note }}</span>
-          </span>
+          {{ r.label }}
+          <span v-if="r.note" class="item-note">{{ r.note }}</span>
         </li>
       </ul>
 
       <template v-if="!check.signed_off_at">
         <div class="field" style="margin-top: 12px">
-          <label>Round notes</label>
+          <label>Notes</label>
           <textarea
-            :value="check.notes" style="min-height: 60px"
+            :value="check.notes" style="min-height: 110px"
+            placeholder="What did you check, and what did you find?"
             @change="saveNotes(check, $event.target.value)"
           />
         </div>
