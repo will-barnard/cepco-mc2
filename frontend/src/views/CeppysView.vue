@@ -178,7 +178,7 @@ onMounted(async () => {
       <div>
         <h1 style="margin-bottom: 4px">Ceppys</h1>
         <p class="muted small" style="margin: 0">
-          A completely made-up, entirely real award. Nominate a teammate any time —
+          Nominate a teammate any time —
           nominations stay private until the next digest email.
         </p>
       </div>
