@@ -128,6 +128,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const limit = Math.min(parseInt(req.query.limit, 10) || 500, 1000);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   // Filtered to exactly one category, one tech, or one instrument family ->
   // that's a real queue, so show it in its explicit, reorderable order (see
@@ -135,6 +136,12 @@ router.get('/', asyncHandler(async (req, res) => {
   // than one of those filters at once — those don't share a single queue)
   // falls back to the old priority/recency sort, since there's no one queue
   // order that spans multiple categories, techs, or families.
+  //
+  // Every queue axis below is now prefixed with st.sort_order — status is
+  // the primary grouping everywhere a queue exists (Queue page, dashboard),
+  // and the axis-specific position column is just the tiebreaker *within*
+  // a status. POST /reorder-queue (below) only ever renumbers positions
+  // within one status for exactly this reason — the two have to agree.
   //
   // An explicit ?sort= overrides all of the above — it's a deliberate "show
   // me the list this way" choice, not a fallback, so it wins regardless of
@@ -147,25 +154,45 @@ router.get('/', asyncHandler(async (req, res) => {
   if (req.query.sort === 'status') {
     orderBy = 'st.sort_order NULLS LAST, t.updated_at DESC';
   } else if (req.query.category && !req.query.technician_id) {
-    orderBy = 't.category_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order NULLS LAST, t.category_queue_position NULLS LAST, t.updated_at DESC';
   } else if (technicianParamIdx && !req.query.category) {
     // Order by *this* tech's position for this ticket specifically — a
     // ticket can be #2 for one assigned tech and #7 for another.
     extraJoin = ` LEFT JOIN ticket_technicians tt_order
                     ON tt_order.ticket_id = t.id AND tt_order.employee_id = $${technicianParamIdx}`;
-    orderBy = 'tt_order.queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order NULLS LAST, tt_order.queue_position NULLS LAST, t.updated_at DESC';
   } else if (req.query.instrument_family && !req.query.category && !req.query.technician_id) {
     // Third queue axis (migration 015): a family, e.g. every Rhodes job,
     // in its own deliberate order independent of category or tech.
-    orderBy = 't.family_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order NULLS LAST, t.family_queue_position NULLS LAST, t.updated_at DESC';
+  } else if (req.query.technician_id === 'unassigned' && !req.query.category && !req.query.instrument_family) {
+    // Not a positioned queue (an unassigned ticket has no tech_queue_position
+    // to speak of), but the dashboard's "Unassigned" list still wants status
+    // grouping — tiebroken by priority same as the no-filter fallback below.
+    orderBy = 'st.sort_order NULLS LAST, pr.sort_order NULLS LAST, t.updated_at DESC';
   }
 
   const { rows } = await query(
     `${TICKET_SELECT}${extraJoin} ${where}
      ORDER BY ${orderBy}
-     LIMIT ${limit}`,
+     LIMIT ${limit}
+     OFFSET ${offset}`,
     params,
   );
+
+  // Total matching count (ignoring limit/offset) so callers that paginate
+  // (currently just DashboardView's "Assigned to me"/"Unassigned" lists)
+  // know how many pages there are. A header, not a body-shape change, so
+  // every other caller of GET /tickets keeps getting a plain array back.
+  const { rows: countRows } = await query(
+    `SELECT count(*)::int AS total
+       FROM tickets t
+       LEFT JOIN instruments i ON i.id = t.instrument_id
+       LEFT JOIN customers   c ON c.id = t.customer_id
+       ${where}`,
+    params,
+  );
+  res.set('X-Total-Count', String(countRows[0].total));
   res.json(rows);
 }));
 
@@ -645,18 +672,31 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 // assigned techs' own (migration 007, extended to one position per
 // assignment in 013), and its instrument's family (migration 015) — so
 // every call has to say which queue (and for a tech or family queue,
-// whose/which). The client sends the *entire* reordered list of ticket ids
-// for that one queue; the server checks it's exactly the same set of
-// tickets currently in that queue (nobody else added/removed one while
-// this was being dragged) and then renumbers positions 10, 20, 30... in the
-// given order — a plain reindex, not a series of swaps, since drag-and-drop
-// can move something many places in one action.
+// whose/which). Status is now *also* required (`status_key`): GET /
+// (above) sorts every one of these queues by status first, so QueueView.vue
+// only ever lets someone drag within one status section at a time, and
+// `ticket_ids` here is just that section's ids, not the whole queue. The
+// server re-checks the invariant rather than trusting the client: "current"
+// below is scoped to (queue, status_key), so a request can only ever touch
+// positions for tickets that are actually in that status — reordering
+// across a status boundary is rejected as a mismatch, same as any other
+// stale-queue conflict. The client sends the *entire* reordered list of
+// ticket ids for that one queue+status; the server checks it's exactly the
+// same set of tickets currently there (nobody else added/removed/changed
+// the status of one while this was being dragged) and then renumbers
+// positions 10, 20, 30... in the given order — a plain reindex, not a
+// series of swaps, since drag-and-drop can move something many places in
+// one action. Other statuses' position values are never touched.
 // ---------------------------------------------------------------------------
 router.post('/reorder-queue', asyncHandler(async (req, res) => {
   const { scope } = req.body || {};
   if (scope !== 'category' && scope !== 'tech' && scope !== 'family') {
     throw badRequest("scope must be 'category', 'tech', or 'family'");
   }
+
+  const statusKey = req.body.status_key;
+  if (!statusKey) throw badRequest('status_key is required — reordering is scoped to one status at a time');
+  await settings.resolve('ticket_status', statusKey); // throws if unknown
 
   const ticketIds = [...new Set(
     (Array.isArray(req.body.ticket_ids) ? req.body.ticket_ids : [])
@@ -666,12 +706,16 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
   if (!ticketIds.length) throw badRequest('ticket_ids is required');
 
   // Both branches follow the same shape: look up who's *actually* in this
-  // queue right now, refuse if that doesn't match what the client thinks
-  // it's reordering (stale view — someone else changed the queue mid-drag),
-  // then write positions 10/20/30... in the client's given order.
+  // queue's status section right now, refuse if that doesn't match what the
+  // client thinks it's reordering (stale view — someone else changed the
+  // queue, or the status, mid-drag), then write positions 10/20/30... in
+  // the client's given order. Scoping "current" to status_key means a
+  // client can never smuggle a cross-status reorder through this endpoint,
+  // even if it tried — the mismatch check catches it the same way it
+  // catches any other stale queue.
   const mismatchError = () => badRequest(
-    "That queue has changed since it was loaded — someone else likely added, removed, "
-    + 'or reassigned a ticket. Reload the queue and try again.',
+    "That queue's status section has changed since it was loaded — someone else likely added, "
+    + 'removed, reassigned, or changed the status of a ticket. Reload the queue and try again.',
   );
 
   if (scope === 'category') {
@@ -681,8 +725,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
 
     await withTransaction(async (client) => {
       const { rows: current } = await client.query(
-        'SELECT id FROM tickets WHERE category_key = $1 AND archived = FALSE',
-        [categoryKey],
+        'SELECT id FROM tickets WHERE category_key = $1 AND status_key = $2 AND archived = FALSE',
+        [categoryKey, statusKey],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -705,8 +749,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
       const { rows: current } = await client.query(
         `SELECT tt.ticket_id AS id FROM ticket_technicians tt
            JOIN tickets t2 ON t2.id = tt.ticket_id
-          WHERE tt.employee_id = $1 AND t2.archived = FALSE`,
-        [employeeId],
+          WHERE tt.employee_id = $1 AND t2.status_key = $2 AND t2.archived = FALSE`,
+        [employeeId, statusKey],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -728,8 +772,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
     await withTransaction(async (client) => {
       const { rows: current } = await client.query(
         `SELECT t2.id FROM tickets t2 JOIN instruments i2 ON i2.id = t2.instrument_id
-          WHERE i2.family = $1 AND t2.archived = FALSE`,
-        [family],
+          WHERE i2.family = $1 AND t2.status_key = $2 AND t2.archived = FALSE`,
+        [family, statusKey],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -744,7 +788,7 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
     });
   }
 
-  res.json({ scope, reordered: ticketIds.length });
+  res.json({ scope, status_key: statusKey, reordered: ticketIds.length });
 }));
 
 // ---------------------------------------------------------------------------

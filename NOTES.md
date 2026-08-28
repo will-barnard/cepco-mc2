@@ -866,6 +866,53 @@ the shop, too); `APP_BASE_URL` must be set (`.env.example`) for "Email
 estimate" to work at all — same "fails clearly instead of sending
 something broken" posture as the missing-Resend-keys case it already had.
 
+### 2.25 Queues are now status-first, and the category picker is narrowable
+
+Every queue axis (§2.17's category/tech, §2.15's family) is now sorted by
+status first and its own position column second — `GET /tickets` prefixes
+`st.sort_order` onto all three `ORDER BY`s, so the shop's configured status
+progression (Settings -> Ticket statuses, same `sort_order` §2.21 already
+rides) is the primary grouping everywhere a queue is shown, not just an
+explicit `?sort=status`. The dashboard's "Unassigned" list gets the same
+treatment as a new case (`technician_id=unassigned` with no category/family
+filter), tiebroken by priority since there's no position column for an
+unassigned ticket to speak of.
+
+`POST /tickets/reorder-queue` now requires `status_key` and scopes its
+"what's currently in this queue" check to `(queue, status_key)` rather than
+just `queue` — so it only ever renumbers positions within one status
+section, and a stale/cross-status request fails the existing mismatch check
+rather than silently reordering across a boundary. `QueueView.vue` matches
+this on the client: tickets render as status sections (a header per
+section, using the same status order the query returns), dragging is
+blocked from crossing a section boundary (`onDragOver`'s guard), and
+row numbering restarts per section since positions are now scoped that way.
+
+Two more pieces landed alongside this:
+
+- **Category-queue visibility.** `ticket_category.meta.hide_from_category_queue`
+  (Settings -> Ticket categories' new "Queue picker" column,
+  `stores.js`'s `categoriesForQueuePicker`) lets an admin drop a category out
+  of the Queue page's "By category" picker — meant for categories that
+  usually carry an instrument (Servicing, Inventory Restorations) and are
+  better browsed "By instrument family" instead, leaving the picker to the
+  catch-all categories that usually don't (Shipping, Daily To-Do's, Orders &
+  Shipping). Absent/false meta means "shown," so nothing changed for any
+  existing category until an admin opts one out.
+- **Dashboard pagination.** "Assigned to me"/"Unassigned" used to hard-cap
+  at 15/10 tickets with no way to see past that. `GET /tickets` now accepts
+  `offset` and reports the *un*-limited match count via an `X-Total-Count`
+  header rather than changing its response shape (still a plain array —
+  every other caller is unaffected); `api.js` attaches that count as a
+  non-enumerable `.totalCount` on the returned array, and `DashboardView.vue`
+  uses it to drive independent Prev/Next paging per list, re-fetching a page
+  at a time rather than holding the full list in memory.
+
+`TicketTable.vue` picked up an opt-in `groupByStatus` prop (used by both
+dashboard lists) that renders the same kind of status section headers —
+`TicketsView.vue`'s plain flat table doesn't pass it, so that page is
+unaffected.
+
 ---
 
 ## 4. Suggested first moves after deploy

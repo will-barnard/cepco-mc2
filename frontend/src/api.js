@@ -34,6 +34,20 @@ async function request(method, path, body, options = {}) {
     err.details = payload?.details;
     throw err;
   }
+
+  // GET /tickets sends the total matching count (ignoring limit/offset) as
+  // a header rather than changing the body shape, so every existing caller
+  // still gets back a plain array. Pagination-aware callers (currently just
+  // DashboardView's "Assigned to me"/"Unassigned" lists) read it off a
+  // non-enumerable property instead — invisible to .length, v-for, spreads,
+  // and JSON.stringify, so nothing else has to know it's there.
+  if (Array.isArray(payload)) {
+    const total = res.headers.get('X-Total-Count');
+    if (total !== null) {
+      Object.defineProperty(payload, 'totalCount', { value: Number(total), enumerable: false });
+    }
+  }
+
   return payload;
 }
 

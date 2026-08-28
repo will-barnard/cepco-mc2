@@ -50,6 +50,18 @@ export const useSettings = defineStore('settings', {
   getters: {
     statuses: (s) => s.data.ticket_status || [],
     categories: (s) => s.data.ticket_category || [],
+    // Queue page's "By category" picker (QueueView.vue) — narrowed to
+    // categories an admin hasn't opted out of via Settings -> Ticket
+    // categories' "Queue picker" column (meta.hide_from_category_queue).
+    // The idea: categories tied to a specific instrument (Servicing,
+    // Inventory Restorations) are better browsed "By instrument family,"
+    // so this lets an admin leave just the catch-all categories (Shipping,
+    // Daily To-Do's, ...) as their own pickable queue. Absent/false meta
+    // means "shown," same default-is-permissive convention as
+    // shipButtonAllowed below, so nothing changes until an admin opts a
+    // category out.
+    categoriesForQueuePicker: (s) => (s.data.ticket_category || [])
+      .filter((r) => !r.retired && !r.meta?.hide_from_category_queue),
     priorities: (s) => s.data.priority_tier || [],
     qcTiers: (s) => s.data.qc_tier || [],
     techLevels: (s) => s.data.tech_level || [],

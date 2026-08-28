@@ -177,6 +177,24 @@ async function toggleShipButton(row) {
   }
 }
 
+// Per-category visibility in the Queue page's "By category" picker (see
+// stores.js's categoriesForQueuePicker) — same meta-on-the-category-row
+// storage as toggleShipButton above. Meant for narrowing that picker down
+// to "catch-all" categories that don't usually carry an instrument
+// (Shipping, Daily To-Do's, ...); instrument-tied categories (Servicing,
+// Inventory Restorations) are better browsed by instrument family instead.
+async function toggleQueuePicker(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, hide_from_category_queue: !row.meta.hide_from_category_queue },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-category "Status notes" (Service done / Service needed) visibility on
 // the ticket detail page — see stores.js's statusNotesAllowed. Same pattern
 // as toggleShipButton, just the opposite starting value (off by default).
@@ -407,6 +425,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
+                <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th>Order</th><th>State</th><th />
               </tr>
@@ -466,6 +485,15 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!!row.meta.show_status_notes"
                       @change="toggleStatusNotes(row)"
+                    />
+                  </label>
+                </td>
+
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Show this category as its own queue on the Queue page's &quot;By category&quot; picker">
+                    <input
+                      type="checkbox" :checked="!row.meta.hide_from_category_queue"
+                      @change="toggleQueuePicker(row)"
                     />
                   </label>
                 </td>

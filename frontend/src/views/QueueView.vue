@@ -13,11 +13,23 @@
  *
  * The picker's value is "category:<key>", "tech:<employee id>", or
  * "family:<family key>" so one <select> can switch between all three queue
- * types. The list itself is just GET /tickets?category=..., ?technician_id=
+ * types. "By category" is narrowed to whichever categories an admin hasn't
+ * hidden via Settings -> Ticket categories (settings.categoriesForQueuePicker)
+ * — meant for the "catch-all" categories that don't usually carry an
+ * instrument (Shipping, Daily To-Do's, ...), since instrument-tied
+ * categories (Servicing, Inventory Restorations) are better browsed "By
+ * instrument family."
+ *
+ * The list itself is just GET /tickets?category=..., ?technician_id=
  * ..., or ?instrument_family=..., already returned in that queue's own
  * order (see routes/tickets.js's GET / ORDER BY) — this page reads and
  * writes the exact same ordering TicketsView shows when it's filtered down
- * to one category, one tech, or one instrument family.
+ * to one category, one tech, or one instrument family. That order is now
+ * status-first: every queue is broken into status sections (Settings ->
+ * Ticket statuses controls the section order), and dragging a ticket can
+ * only reorder it within its own section — see onDragOver/persistOrder
+ * below, and routes/tickets.js's POST /reorder-queue which enforces the
+ * same thing server-side.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -68,9 +80,23 @@ async function load() {
 
 watch(selected, load);
 
-// Default to the first category once settings has loaded, so this isn't a
-// blank picker on first visit.
-watch(() => settings.categories, (cats) => {
+// Per-row rendering info: which tickets start a new status section (the
+// backend already returns every queue status-sorted, see routes/tickets.js's
+// GET / ordering — this just finds where status_key changes from the
+// previous row) and each ticket's 1-based position *within* its own status
+// section, since positions are now scoped per status (POST /reorder-queue
+// below only ever renumbers one status section at a time).
+const rowInfo = computed(() => {
+  let groupStart = 0;
+  return tickets.value.map((t, i) => {
+    if (i === 0 || tickets.value[i - 1].status_key !== t.status_key) groupStart = i;
+    return { ticket: t, isGroupStart: i === groupStart, posInGroup: i - groupStart + 1 };
+  });
+});
+
+// Default to the first pickable category once settings has loaded, so this
+// isn't a blank picker on first visit.
+watch(() => settings.categoriesForQueuePicker, (cats) => {
   if (!selected.value && cats.length) selected.value = `category:${cats[0].key}`;
 }, { immediate: true });
 
@@ -89,6 +115,10 @@ function onDragStart(index, event) {
 // the actual save happens once, on drop/dragend, not on every one of these.
 function onDragOver(index) {
   if (dragIndex.value === null || dragIndex.value === index) return;
+  // Confines drag-and-drop to one status section: a drag-over that would
+  // cross into a different status's rows is simply ignored, so a ticket can
+  // never be spliced across the boundary in the first place.
+  if (tickets.value[dragIndex.value].status_key !== tickets.value[index].status_key) return;
   const moved = tickets.value.splice(dragIndex.value, 1)[0];
   tickets.value.splice(index, 0, moved);
   dragIndex.value = index;
@@ -96,23 +126,39 @@ function onDragOver(index) {
 
 async function onDragEnd() {
   if (dragIndex.value === null) return;
+  // Capture before clearing dragIndex — onDragOver's guard above means the
+  // dragged ticket's status_key never changed during the drag, so this is
+  // exactly the one status section that just got reordered.
+  const statusKey = tickets.value[dragIndex.value].status_key;
   dragIndex.value = null;
-  await persistOrder();
+  await persistOrder(statusKey);
 }
 
-// Sends the whole reordered id list — the server checks it's exactly the
-// set of tickets currently in this queue (nobody else changed it mid-drag)
-// and renumbers positions to match. A mismatch reloads the queue instead of
-// silently applying a stale order on top of whatever changed.
-async function persistOrder() {
+// Sends just the reordered id list for the one status section that was
+// dragged — the server checks it's exactly the set of tickets currently in
+// that queue+status (nobody else changed it mid-drag) and renumbers
+// positions to match, leaving every other status section's positions
+// untouched. A mismatch reloads the queue instead of silently applying a
+// stale order on top of whatever changed.
+async function persistOrder(statusKey) {
   error.value = '';
   saving.value = true;
   try {
-    const ticketIds = tickets.value.map((t) => t.id);
+    const ticketIds = tickets.value.filter((t) => t.status_key === statusKey).map((t) => t.id);
     let body;
-    if (scope.value === 'category') body = { scope: 'category', category_key: categoryKey.value, ticket_ids: ticketIds };
-    else if (scope.value === 'tech') body = { scope: 'tech', employee_id: employeeId.value, ticket_ids: ticketIds };
-    else body = { scope: 'family', family: familyKey.value, ticket_ids: ticketIds };
+    if (scope.value === 'category') {
+      body = {
+        scope: 'category', category_key: categoryKey.value, status_key: statusKey, ticket_ids: ticketIds,
+      };
+    } else if (scope.value === 'tech') {
+      body = {
+        scope: 'tech', employee_id: employeeId.value, status_key: statusKey, ticket_ids: ticketIds,
+      };
+    } else {
+      body = {
+        scope: 'family', family: familyKey.value, status_key: statusKey, ticket_ids: ticketIds,
+      };
+    }
     await api.post('/tickets/reorder-queue', body);
   } catch (err) {
     error.value = `${err.message} The queue below has been reloaded.`;
@@ -137,7 +183,8 @@ function techNames(t) {
         <h1 style="margin-bottom: 4px">Queue</h1>
         <p class="muted small" style="margin: 0">
           Drag a ticket to move it within a category's queue, a technician's own queue, or an
-          instrument family's queue — the new order saves as soon as you drop it.
+          instrument family's queue — grouped by status, and only reorderable within a status
+          section. The new order saves as soon as you drop it.
         </p>
       </div>
     </div>
@@ -148,7 +195,7 @@ function techNames(t) {
         <select v-model="selected">
           <option value="" disabled>— choose a queue —</option>
           <optgroup label="By category">
-            <option v-for="c in settings.categories" :key="c.key" :value="`category:${c.key}`">
+            <option v-for="c in settings.categoriesForQueuePicker" :key="c.key" :value="`category:${c.key}`">
               {{ c.label }}
             </option>
           </optgroup>
@@ -173,41 +220,49 @@ function techNames(t) {
     <div v-else-if="!tickets.length" class="empty">No tickets in this queue.</div>
 
     <div v-else class="stack" :style="saving ? 'opacity: 0.6; pointer-events: none' : ''">
-      <div
-        v-for="(t, i) in tickets" :key="t.id"
-        class="card tight"
-        :style="dragIndex === i ? 'opacity: 0.4' : ''"
-        draggable="true"
-        @dragstart="onDragStart(i, $event)"
-        @dragover.prevent="onDragOver(i)"
-        @drop.prevent
-        @dragend="onDragEnd"
-      >
-        <div class="row" style="align-items: center; gap: 14px">
-          <span class="muted" style="font-size: 18px; line-height: 1; cursor: grab" title="Drag to reorder">
-            ⠿
-          </span>
-          <span class="muted small nowrap">#{{ i + 1 }}</span>
-          <div style="flex: 1; min-width: 0">
-            <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">
-              <strong>{{ t.title }}</strong>
-            </RouterLink>
-            <div class="muted small">
-              {{ t.customer_name || (t.instrument_is_fleet ? 'CEPCo fleet' : '—') }}
-              <span v-if="t.instrument_family && scope !== 'family'"> · {{ t.instrument_family }}</span>
-            </div>
-          </div>
-          <span :class="['pill', settings.colorFor(t.status_key)]">
-            {{ t.status_label || t.status_label_snapshot }}
-          </span>
-          <span
-            v-if="scope !== 'tech'" class="muted small nowrap"
-            style="min-width: 140px; text-align: right"
-          >
-            {{ techNames(t) }}
+      <template v-for="(row, i) in rowInfo" :key="row.ticket.id">
+        <div
+          v-if="row.isGroupStart" class="muted small"
+          :style="i === 0 ? 'margin: 4px 0 2px' : 'margin: 20px 0 2px'"
+        >
+          <span :class="['pill', settings.colorFor(row.ticket.status_key)]">
+            {{ row.ticket.status_label || row.ticket.status_label_snapshot }}
           </span>
         </div>
-      </div>
+        <div
+          class="card tight"
+          :style="dragIndex === i ? 'opacity: 0.4' : ''"
+          draggable="true"
+          @dragstart="onDragStart(i, $event)"
+          @dragover.prevent="onDragOver(i)"
+          @drop.prevent
+          @dragend="onDragEnd"
+        >
+          <div class="row" style="align-items: center; gap: 14px">
+            <span class="muted" style="font-size: 18px; line-height: 1; cursor: grab" title="Drag to reorder">
+              ⠿
+            </span>
+            <span class="muted small nowrap">#{{ row.posInGroup }}</span>
+            <div style="flex: 1; min-width: 0">
+              <RouterLink :to="{ name: 'ticket', params: { id: row.ticket.id } }">
+                <strong>{{ row.ticket.title }}</strong>
+              </RouterLink>
+              <div class="muted small">
+                {{ row.ticket.customer_name || (row.ticket.instrument_is_fleet ? 'CEPCo fleet' : '—') }}
+                <span v-if="row.ticket.instrument_family && scope !== 'family'">
+                  · {{ row.ticket.instrument_family }}
+                </span>
+              </div>
+            </div>
+            <span
+              v-if="scope !== 'tech'" class="muted small nowrap"
+              style="min-width: 140px; text-align: right"
+            >
+              {{ techNames(row.ticket) }}
+            </span>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
