@@ -180,10 +180,13 @@ const isQueueOrdered = computed(() => {
 // reorder-queue mismatch check doesn't recognize), and no explicit sort
 // override is replacing the queue's own order. Status/hide-status are
 // fine — they only ever drop whole status sections, never part of one.
+// 'date' (Q3) is excluded for the same reason 'status' already was: the
+// visual order it produces has nothing to do with the persisted queue
+// position, so dragging a row wouldn't mean what it looks like it means.
 const canReorder = computed(() => {
   const f = filters.value;
   const singleScope = Boolean(f.category) !== Boolean(f.instrument_family);
-  return singleScope && !f.technician_id && f.sort !== 'status'
+  return singleScope && !f.technician_id && f.sort !== 'status' && f.sort !== 'date'
     && f.q === '' && f.priority === '' && !f.archived;
 });
 
@@ -268,6 +271,15 @@ async function persistOrder(statusKey) {
  * which queue (category or instrument type) you're looking at. */
 function techNames(t) {
   return (t.technicians || []).map((x) => x.name).join(', ') || 'unassigned';
+}
+
+// Q3 (boss-list scope): drop-off date on every queue card — when the
+// instrument physically landed in the shop, both for display and for the
+// new "Sort by -> Drop-off date" option below. The flat table
+// (TicketTable.vue) already had a Created column; the drag-reorderable
+// cards here had no date at all.
+function dropOffDate(t) {
+  return t.drop_off_date ? new Date(t.drop_off_date).toLocaleDateString() : '—';
 }
 </script>
 
@@ -375,6 +387,7 @@ function techNames(t) {
           <select v-model="filters.sort">
             <option value="">Priority / queue order</option>
             <option value="status">Status progression</option>
+            <option value="date">Drop-off date</option>
           </select>
         </div>
         <div ref="hideMenuEl" class="hide-status-field">
@@ -452,6 +465,9 @@ function techNames(t) {
                 </span>
               </div>
             </div>
+            <span class="muted small nowrap" title="Drop-off date">
+              {{ dropOffDate(row.ticket) }}
+            </span>
             <span class="muted small nowrap" style="min-width: 140px; text-align: right">
               {{ techNames(row.ticket) }}
             </span>

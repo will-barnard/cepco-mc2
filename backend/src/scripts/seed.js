@@ -61,6 +61,13 @@ const SETTINGS = [
   ['tech_level', 'senior', 'Senior Tech', 20,
     { examples: ['action regulation', 'tuning', 'electronics diagnostics'] }],
 
+  // Ceppy award categories (C1) — a settings category, not a hardcoded
+  // pair, so the shop can add a third award (or rename these two) without
+  // a deploy. ceppy_nominations.category_other covers a one-off award
+  // that hasn't been added here yet.
+  ['ceppy_category', 'technical', 'Technical Ceppy', 10, {}],
+  ['ceppy_category', 'primetime', 'Primetime Ceppy', 20, {}],
+
   // Shop-wide values. Not a ticket enum — single rows the admin can change
   // without a deploy. Each new estimate copies the rate onto itself, so
   // changing this never restates a quote that already went out.

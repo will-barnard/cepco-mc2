@@ -18,6 +18,7 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
+const settings = require('../services/settings');
 const { sendCeppyDigest } = require('../services/ceppys');
 
 const router = express.Router();
@@ -74,15 +75,33 @@ router.post('/nominations', asyncHandler(async (req, res) => {
   const reason = b.reason ? String(b.reason).trim() : '';
   if (!reason) throw badRequest('reason is required');
 
+  // C1: one award category per nomination — either a settings-configured
+  // one (Technical Ceppy, Primetime Ceppy, ...) or a one-off typed name,
+  // same mutually-exclusive key-or-free-text shape as parts_orders'
+  // vendor/vendor_other (P3).
+  const categoryOther = b.category_other ? String(b.category_other).trim() : '';
+  if (b.category_key && categoryOther) {
+    throw badRequest('category_key and category_other are mutually exclusive — pick one');
+  }
+  let category = null;
+  if (b.category_key) {
+    category = await settings.resolveActive('ceppy_category', b.category_key);
+  } else if (!categoryOther) {
+    throw badRequest('category_key or category_other is required');
+  }
+
   const { rows: nomineeRows } = await query(
     'SELECT id FROM employees WHERE id = $1 AND active = TRUE', [nomineeId],
   );
   if (!nomineeRows[0]) throw badRequest('Nominee not found or inactive');
 
   const { rows } = await query(
-    `INSERT INTO ceppy_nominations (nominee_id, nominator_id, title, reason)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [nomineeId, req.user.id, title, reason],
+    `INSERT INTO ceppy_nominations
+       (nominee_id, nominator_id, title, reason, category_key, category_label_snapshot, category_other)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [nomineeId, req.user.id, title, reason,
+      category ? category.key : null, category ? category.label : null,
+      category ? null : categoryOther],
   );
   res.status(201).json(rows[0]);
 }));

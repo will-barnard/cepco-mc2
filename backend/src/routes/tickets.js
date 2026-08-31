@@ -153,10 +153,15 @@ router.get('/', asyncHandler(async (req, res) => {
   // sort_order (its position in the shop's workflow — Not Started before In
   // Progress before Done, etc.), i.e. the settings-configurable progression
   // from Settings -> Ticket statuses, not alphabetical or by-key order.
+  // sort=date (Q3) orders by drop-off date — when the instrument physically
+  // landed in the shop, not due_date or created_at — with the usual
+  // updated_at tiebreak for rows sharing (or missing) a drop-off date.
   let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
   let extraJoin = '';
   if (req.query.sort === 'status') {
     orderBy = 'st.sort_order NULLS LAST, t.updated_at DESC';
+  } else if (req.query.sort === 'date') {
+    orderBy = 't.drop_off_date NULLS LAST, t.updated_at DESC';
   } else if (req.query.category && !req.query.technician_id) {
     orderBy = 'st.sort_order NULLS LAST, t.category_queue_position NULLS LAST, t.updated_at DESC';
   } else if (technicianParamIdx && !req.query.category) {

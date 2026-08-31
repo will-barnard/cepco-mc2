@@ -20,6 +20,11 @@ const CATEGORIES = [
   // Not a ticket enum — single-row shop-wide values (labor rate, etc.) that
   // shouldn't need a deploy to change.
   'shop_config',
+  // C1 (boss-list scope): Ceppy award categories (Technical Ceppy,
+  // Primetime Ceppy, ...) — a settings category rather than a hardcoded
+  // pair, since the shop will invent a third award eventually and this way
+  // they add it themselves rather than filing an engineering ticket for it.
+  'ceppy_category',
   // 'qc_tier' used to live here — retired in migration 021 (see
   // routes/qc.js). Deliberately left out of CATEGORIES so a new one can't
   // be created, but existing rows (retired, not deleted) still resolve()
@@ -27,13 +32,16 @@ const CATEGORIES = [
   // them since it groups by whatever category a row actually has.
 ];
 
-// Which ticket column each settings category backs — used to block deletion of
-// values still referenced by live tickets.
-const USAGE_COLUMN = {
-  ticket_category: 'category_key',
-  ticket_status: 'status_key',
-  priority_tier: 'priority_key',
-  tech_level: 'tech_level_key',
+// Which table+column each settings category backs — used to block deletion
+// of values still referenced by a live row elsewhere. Most categories back
+// a ticket column; ceppy_category (C1) is the first to back something else,
+// hence table+column instead of assuming every source is `tickets`.
+const USAGE_SOURCE = {
+  ticket_category: { table: 'tickets', column: 'category_key', noun: 'ticket' },
+  ticket_status: { table: 'tickets', column: 'status_key', noun: 'ticket' },
+  priority_tier: { table: 'tickets', column: 'priority_key', noun: 'ticket' },
+  tech_level: { table: 'tickets', column: 'tech_level_key', noun: 'ticket' },
+  ceppy_category: { table: 'ceppy_nominations', column: 'category_key', noun: 'nomination' },
 };
 
 async function listAll() {
@@ -280,10 +288,10 @@ async function shopConfigString(key, fallback) {
 }
 
 async function countUsage(category, key) {
-  const column = USAGE_COLUMN[category];
-  if (!column) return 0;
+  const source = USAGE_SOURCE[category];
+  if (!source) return 0;
   const { rows } = await query(
-    `SELECT count(*)::int AS n FROM tickets WHERE ${column} = $1`,
+    `SELECT count(*)::int AS n FROM ${source.table} WHERE ${source.column} = $1`,
     [key],
   );
   return rows[0].n;
@@ -309,9 +317,10 @@ async function remove(id) {
 
   const inUse = await countUsage(setting.category, setting.key);
   if (inUse > 0) {
+    const noun = USAGE_SOURCE[setting.category]?.noun || 'record';
     throw conflict(
-      `'${setting.label}' is used by ${inUse} ticket(s). Retire it instead, `
-      + 'or move those tickets to another value first.',
+      `'${setting.label}' is used by ${inUse} ${noun}(s). Retire it instead, `
+      + `or move those ${noun}s to another value first.`,
       { in_use: inUse },
     );
   }

@@ -29,7 +29,14 @@ const tab = ref('nominate');
 const error = ref('');
 
 // --- nominate ----------------------------------------------------------
-const form = ref({ nominee_id: '', title: '', reason: '' });
+// C1: award category — a Settings-driven picker (ceppy_category) plus the
+// same free-text "Other…" escape hatch PartsView.vue uses for vendors
+// (OTHER_VENDOR there, OTHER_CATEGORY here) for a one-off award category
+// the shop hasn't added to Settings yet.
+const OTHER_CATEGORY = '__other__';
+const form = ref({
+  nominee_id: '', title: '', reason: '', category_key: '', category_other: '',
+});
 const submitting = ref(false);
 const submitted = ref(false);
 
@@ -39,14 +46,21 @@ async function submitNomination() {
   if (!form.value.nominee_id) { error.value = 'Pick who you’re nominating.'; return; }
   if (!form.value.title.trim()) { error.value = 'Give this Ceppy a title.'; return; }
   if (!form.value.reason.trim()) { error.value = 'Add a quick reason for the nomination.'; return; }
+  const usingOther = form.value.category_key === OTHER_CATEGORY;
+  if (!form.value.category_key) { error.value = 'Pick an award category.'; return; }
+  if (usingOther && !form.value.category_other.trim()) { error.value = 'Name the award category.'; return; }
   submitting.value = true;
   try {
     await api.post('/ceppys/nominations', {
       nominee_id: Number(form.value.nominee_id),
       title: form.value.title.trim(),
       reason: form.value.reason.trim(),
+      category_key: usingOther ? null : form.value.category_key,
+      category_other: usingOther ? form.value.category_other.trim() : null,
     });
-    form.value = { nominee_id: '', title: '', reason: '' };
+    form.value = {
+      nominee_id: '', title: '', reason: '', category_key: '', category_other: '',
+    };
     submitted.value = true;
     await loadMine();
   } catch (err) {
@@ -260,6 +274,20 @@ onMounted(async () => {
         </select>
       </div>
       <div class="field">
+        <label>Award category</label>
+        <select v-model="form.category_key">
+          <option value="" disabled>— choose a category —</option>
+          <option v-for="c in settings.active('ceppy_category')" :key="c.key" :value="c.key">
+            {{ c.label }}
+          </option>
+          <option :value="OTHER_CATEGORY">Other…</option>
+        </select>
+      </div>
+      <div v-if="form.category_key === OTHER_CATEGORY" class="field">
+        <label>Category name *</label>
+        <input v-model="form.category_other" placeholder="e.g. Cleanest Bench" />
+      </div>
+      <div class="field">
         <label>Ceppy title</label>
         <input v-model="form.title" type="text"
           placeholder="e.g. Technical Ceppy for Innovation of the Laser Level" />
@@ -287,6 +315,7 @@ onMounted(async () => {
             {{ n.title }}
           </div>
           <strong>{{ n.nominee_name }}</strong>
+          <span class="tag" style="margin-left: 6px">{{ n.category_label_snapshot || n.category_other }}</span>
           <div class="muted small" style="margin: 4px 0">Submitted {{ when(n.created_at) }}</div>
           <p style="margin: 0">{{ n.reason }}</p>
         </div>
@@ -305,6 +334,7 @@ onMounted(async () => {
                 {{ n.title }}
               </div>
               <strong>{{ n.nominee_name }}</strong>
+              <span class="tag" style="margin-left: 6px">{{ n.category_label_snapshot || n.category_other }}</span>
               <span class="muted small"> — nominated by {{ n.nominator_name }}</span>
               <div class="small" style="margin-top: 4px">{{ n.reason }}</div>
             </li>

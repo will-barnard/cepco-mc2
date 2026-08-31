@@ -8,6 +8,13 @@
  * personalization) — same visual language as templates/quoteEmail.js and
  * templates/purchaseReceipt.js (inline CID logo, same fonts/colors) so it
  * reads as the same shop, not a separate tool bolted on.
+ *
+ * C1 (boss-list scope): nominations are grouped by award category
+ * (category_label_snapshot, or the free-typed category_other, in that
+ * order — see migration 027) so the email reads like an actual awards
+ * list rather than a flat pile. Nominations with neither (pre-C1 rows
+ * still sitting unsent when this deploys) fall into a final "General"
+ * bucket rather than being dropped or crashing the render.
  */
 
 const fs = require('fs');
@@ -46,10 +53,43 @@ function nominationRow(n) {
   </div>`;
 }
 
+/** Group label for a nomination — snapshot key label wins, then the
+ * free-typed "other" category, then a catch-all for rows with neither. */
+function categoryLabel(n) {
+  return n.category_label_snapshot || n.category_other || 'General';
+}
+
+/** Groups nominations by category, preserving each group's first-appearance
+ * order (nominations already arrive ordered by created_at) rather than
+ * re-sorting groups alphabetically — the first category to get a nomination
+ * this round leads the email. */
+function groupByCategory(nominations) {
+  const order = [];
+  const groups = new Map();
+  for (const n of nominations) {
+    const label = categoryLabel(n);
+    if (!groups.has(label)) {
+      groups.set(label, []);
+      order.push(label);
+    }
+    groups.get(label).push(n);
+  }
+  return order.map((label) => ({ label, items: groups.get(label) }));
+}
+
+function categorySection({ label, items }) {
+  return `<div style="margin:0 0 20px;">
+    <h2 style="margin:0 0 4px;font-size:13px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:#16181d;border-bottom:2px solid #16181d;padding-bottom:6px;">
+      ${escapeHtml(label)}
+    </h2>
+    ${items.map(nominationRow).join('')}
+  </div>`;
+}
+
 /** `nominations` is an array of ceppy_nominations rows joined to nominee_name/nominator_name. */
 function buildCeppyDigestEmail({ nominations }) {
   const body = nominations.length
-    ? nominations.map(nominationRow).join('')
+    ? groupByCategory(nominations).map(categorySection).join('')
     : `<p style="margin:0;font-size:14px;color:#6b7280;line-height:1.5;">
          No Ceppy nominations came in this round — nominate a teammate any time from the
          Ceppys tab.

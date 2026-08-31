@@ -5,12 +5,22 @@ import api from '../api';
 const orders = ref([]);
 const vendors = ref([]);
 const statusFilter = ref('needed');
+// Delivered orders archive themselves (P2) — hidden by default like
+// tickets' own archived filter, this just reveals them again.
+const showArchived = ref(false);
 const error = ref('');
-const form = ref({ vendor_id: '', item: '', quantity: '', notes: '' });
+// '__other__' is a picker sentinel, not a real vendor id — resolved into
+// vendor_other (free text) at submit time (P3). Vendors have no Settings
+// screen of their own, so a bare "Other" row there would be useless;
+// nobody could say *who*.
+const OTHER_VENDOR = '__other__';
+const form = ref({
+  vendor_id: '', vendor_other: '', item: '', quantity: '', notes: '',
+});
 
-const STATUSES = ['needed', 'ordered', 'received', 'cancelled'];
+const STATUSES = ['needed', 'ordered', 'delivered', 'cancelled'];
 const pill = {
-  needed: 'amber', ordered: 'blue', received: 'green', cancelled: 'slate',
+  needed: 'amber', ordered: 'blue', delivered: 'green', cancelled: 'slate',
 };
 
 const grouped = computed(() => {
@@ -24,14 +34,19 @@ const grouped = computed(() => {
 });
 
 async function load() {
-  orders.value = await api.get('/parts', { status: statusFilter.value });
+  orders.value = await api.get('/parts', {
+    status: statusFilter.value,
+    archived: showArchived.value ? 'true' : 'false',
+  });
 }
 
 async function create() {
   error.value = '';
   try {
+    const usingOther = form.value.vendor_id === OTHER_VENDOR;
     await api.post('/parts', {
-      vendor_id: form.value.vendor_id || null,
+      vendor_id: usingOther ? null : (form.value.vendor_id || null),
+      vendor_other: usingOther ? form.value.vendor_other.trim() : null,
       item: form.value.item,
       quantity: form.value.quantity || null,
       notes: form.value.notes || null,
@@ -39,6 +54,7 @@ async function create() {
     form.value.item = '';
     form.value.quantity = '';
     form.value.notes = '';
+    form.value.vendor_other = '';
     await load();
   } catch (err) {
     error.value = err.message;
@@ -63,10 +79,14 @@ onMounted(async () => {
 <template>
   <div class="page">
     <div class="page-head">
-      <h1>Parts orders</h1>
+      <h1>Parts / Supplies</h1>
       <select v-model="statusFilter" style="width: auto; min-width: 160px" @change="load">
         <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
       </select>
+      <label class="checkbox small" style="margin-left: 12px">
+        <input type="checkbox" v-model="showArchived" @change="load" />
+        Show archived
+      </label>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
@@ -78,7 +98,12 @@ onMounted(async () => {
           <select v-model="form.vendor_id">
             <option value="">— none —</option>
             <option v-for="v in vendors" :key="v.id" :value="v.id">{{ v.name }}</option>
+            <option :value="OTHER_VENDOR">Other…</option>
           </select>
+        </div>
+        <div v-if="form.vendor_id === OTHER_VENDOR">
+          <label>Vendor name *</label>
+          <input v-model="form.vendor_other" required placeholder="New supplier's name" />
         </div>
         <div style="flex: 2; min-width: 220px">
           <label>Item *</label>
@@ -119,8 +144,8 @@ onMounted(async () => {
                   >Mark ordered</button>
                   <button
                     v-if="o.status === 'ordered'" class="small"
-                    @click="setStatus(o, 'received')"
-                  >Mark received</button>
+                    @click="setStatus(o, 'delivered')"
+                  >Mark delivered</button>
                 </td>
               </tr>
             </tbody>

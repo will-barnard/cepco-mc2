@@ -1170,6 +1170,79 @@ own packet describes a separate `instrument_models` table instead (ragged
 4-level depth doesn't fit a flat parent/child pair) — left for N7 to settle
 when it's picked up.
 
+### 2.31 Wave 2 (boss-list scope) — Parts/Supplies, Queue sort, Ceppy categories
+
+Five packets, two of which had an explicit "ask the boss" decision point in
+the scope doc; both were put to the actual person running this project
+before writing any code, and the answers below are recorded here so nobody
+re-litigates them by reading old code and guessing.
+
+**P1 — Parts renamed to "Parts / Supplies."** Purely cosmetic: the nav
+label and page heading change, nothing about the data model or API. Kept
+as its own item rather than folded silently into P2/P3 so it shows up in
+this changelog as the deliberate, separate rename it is.
+
+**P2 — "Received" renamed to "Delivered," and delivered orders archive.**
+The boss-list flagged a decision: should "Ordered" and "Delivered" both be
+able to show on one line item, or stay sequential (an order is Needed, or
+Ordered, or Delivered — never two states at once)? **Answer: sequential** —
+the existing `status` enum model stays exactly as it was, just with the
+one value renamed (`received` → `delivered`, migration 026, plus the
+`ordered_at`/`received_at` timestamp columns which keep their names since
+renaming a column is a bigger footprint than renaming a status string for
+no behavioral gain). The archiving half is new: marking an order delivered
+now also sets `parts_orders.archived = TRUE` in the same PATCH, and the
+default parts list filters `archived = FALSE` unless `?archived=true` is
+passed — same "hidden by default, nothing thrown away, one query param to
+see it" convention `tickets`'s own archived filter already uses. There's
+no explicit "unarchive" affordance; if a delivered order's status is later
+changed back, it stays archived until someone flips it manually via the
+API — not worth a UI for a case the shop hasn't asked for.
+
+**P3 — Parts orders can name a vendor that isn't in the vendor list.**
+`parts_orders.vendor_other` (migration 025) is the free-text escape hatch,
+mutually exclusive with `vendor_id` exactly the way `tickets.subcategory_
+other_text` is mutually exclusive with a real subcategory (§2.30) —
+enforced in both `POST /parts` and `PATCH /parts/:id`. The parts list's
+`vendor_name` now reads `COALESCE(v.name, p.vendor_other)` so the UI never
+has to know which case it's looking at.
+
+**Q3 — Queue cards and "sort by" now have a date option.** Another
+boss-list decision: which date should drive it — drop-off, due, or
+created? **Answer: drop-off date** — when the instrument actually landed
+in the shop, which is what a front-counter person glancing at the queue
+actually wants ("what's been sitting here longest"), not `due_date` (a
+promise date, not an arrival date) or `created_at` (when the ticket record
+was typed in, which can lag the physical drop-off). `sort=date` orders by
+`t.drop_off_date NULLS LAST, t.updated_at DESC`, and the drag-reorder queue
+view disables manual drag-reordering under this sort the same way it
+already does under `sort=status` — a computed sort order isn't something
+you drag around.
+
+**C1 — Ceppy nominations get an award category.** `ceppy_category` is a
+new settings category (`Technical Ceppy`, `Primetime Ceppy` seeded, plus
+the usual free-text "Other…" escape hatch on the nomination form —
+`ceppy_nominations.category_key` / `category_label_snapshot` /
+`category_other`, migration 027) rather than a hardcoded pair, because the
+shop will invent a third award eventually and this way that's a Settings
+edit, not an engineering ticket. `services/settings.js`'s old
+`USAGE_COLUMN` (ticket-only) became `USAGE_SOURCE` — `{table, column,
+noun}` per category — so delete-protection (`remove()`/`countUsage()`)
+extends to a non-ticket table without special-casing `ceppy_category`
+inline; the four existing ticket-backed categories behave identically to
+before. The weekly digest email (`templates/ceppyDigest.js`) now groups
+nominations under a heading per category — label snapshot, then the typed
+"Other" text, then a `General` catch-all for any nomination that predates
+this packet and is still unsent when it deploys — so the email reads like
+an actual awards list instead of one flat pile, which was the doc's
+explicit ask.
+
+One factual correction to the scope doc itself, noted here so it isn't
+rediscovered the hard way later: the doc claims the nominations table
+"kept its original spelling through the Ceppie → Ceppy rename." It didn't —
+migration 019 renamed the table to `ceppy_nominations`. Migration 027
+targets the real, current name; see its own header comment.
+
 ---
 
 ## 4. Suggested first moves after deploy

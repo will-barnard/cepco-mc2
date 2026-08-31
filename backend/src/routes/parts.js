@@ -8,7 +8,7 @@ const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const router = express.Router();
 router.use(requireAuth);
 
-const STATUSES = ['needed', 'ordered', 'received', 'cancelled'];
+const STATUSES = ['needed', 'ordered', 'delivered', 'cancelled'];
 
 router.get('/vendors', asyncHandler(async (req, res) => {
   const { rows } = await query(
@@ -37,10 +37,14 @@ router.get('/', asyncHandler(async (req, res) => {
     clauses.push(`EXISTS (SELECT 1 FROM parts_order_tickets pt
                            WHERE pt.parts_order_id = p.id AND pt.ticket_id = $${params.length})`);
   }
+  // Delivered orders are archived automatically (see PATCH below) so the
+  // list doesn't accumulate — same "hidden unless asked for, nothing truly
+  // lost" archived convention routes/tickets.js already uses.
+  clauses.push(req.query.archived === 'true' ? 'p.archived = TRUE' : 'p.archived = FALSE');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const { rows } = await query(
-    `SELECT p.*, v.name AS vendor_name,
+    `SELECT p.*, COALESCE(v.name, p.vendor_other) AS vendor_name,
             COALESCE(
               (SELECT json_agg(json_build_object('id', t.id, 'title', t.title))
                  FROM parts_order_tickets pt JOIN tickets t ON t.id = pt.ticket_id
@@ -60,13 +64,16 @@ router.post('/', asyncHandler(async (req, res) => {
   if (b.status && !STATUSES.includes(b.status)) {
     throw badRequest(`status must be one of: ${STATUSES.join(', ')}`);
   }
+  if (b.vendor_id && b.vendor_other) {
+    throw badRequest('vendor_id and vendor_other are mutually exclusive — pick one');
+  }
 
   const order = await withTransaction(async (client) => {
     const { rows } = await client.query(
-      `INSERT INTO parts_orders (vendor_id, item, quantity, notes, status, created_by)
-       VALUES ($1,$2,$3,$4,COALESCE($5,'needed'),$6) RETURNING *`,
+      `INSERT INTO parts_orders (vendor_id, item, quantity, notes, status, vendor_other, created_by)
+       VALUES ($1,$2,$3,$4,COALESCE($5,'needed'),$6,$7) RETURNING *`,
       [b.vendor_id || null, String(b.item).trim(), b.quantity || null,
-        b.notes || null, b.status, req.user.id],
+        b.notes || null, b.status, b.vendor_other || null, req.user.id],
     );
     for (const ticketId of b.ticket_ids || []) {
       // eslint-disable-next-line no-await-in-loop
@@ -85,16 +92,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.status && !STATUSES.includes(b.status)) {
     throw badRequest(`status must be one of: ${STATUSES.join(', ')}`);
   }
+  if (b.vendor_id && b.vendor_other) {
+    throw badRequest('vendor_id and vendor_other are mutually exclusive — pick one');
+  }
   const { rows } = await query(
     `UPDATE parts_orders SET
        vendor_id = COALESCE($2, vendor_id), item = COALESCE($3, item),
        quantity = COALESCE($4, quantity), notes = COALESCE($5, notes),
+       vendor_other = COALESCE($7, vendor_other),
        status = COALESCE($6, status),
-       ordered_at  = CASE WHEN $6 = 'ordered'  AND ordered_at  IS NULL THEN now() ELSE ordered_at END,
-       received_at = CASE WHEN $6 = 'received' AND received_at IS NULL THEN now() ELSE received_at END
+       ordered_at  = CASE WHEN $6 = 'ordered'   AND ordered_at  IS NULL THEN now() ELSE ordered_at END,
+       received_at = CASE WHEN $6 = 'delivered' AND received_at IS NULL THEN now() ELSE received_at END,
+       -- Marking an order delivered archives it in the same step — that's
+       -- the whole point of the rename (P2): a delivered order stops
+       -- showing up in the default list without a separate manual step.
+       archived    = CASE WHEN $6 = 'delivered' THEN TRUE ELSE archived END
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.vendor_id || null, b.item || null, b.quantity || null,
-      b.notes === undefined ? null : b.notes, b.status || null],
+      b.notes === undefined ? null : b.notes, b.status || null,
+      b.vendor_other === undefined ? null : b.vendor_other],
   );
   if (!rows[0]) throw notFound('Parts order not found');
   res.json(rows[0]);
