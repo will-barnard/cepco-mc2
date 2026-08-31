@@ -212,6 +212,23 @@ async function toggleStatusNotes(row) {
   }
 }
 
+// Per-status "Unlocks tasks" flag (migration 022, NOTES.md §2.28) — whether
+// a ticket sitting in this status has its tasks surfaced on anyone's
+// dashboard (stores.js's unlocksTasks). Same on/off-meta-flag pattern as
+// every toggle above, just scoped to ticket_status rows instead of
+// ticket_category ones.
+async function toggleUnlocksTasks(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, unlocks_tasks: !row.meta.unlocks_tasks },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Which ticket categories a status applies to (empty/absent meta means
 // "every category" — see NOTES.md and services/settings.js). Returns null
 // for "every category" rather than expanding it, so the checkbox render
@@ -403,6 +420,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
+                <th v-if="category === 'ticket_status'">Unlocks tasks</th>
                 <th>Order</th><th>State</th><th />
               </tr>
             </thead>
@@ -477,6 +495,15 @@ onMounted(refresh);
                       <span class="small">{{ cat.label }}</span>
                     </label>
                   </div>
+                </td>
+
+                <td v-if="category === 'ticket_status'">
+                  <label class="checkbox" title="Surface this status's tickets' tasks on techs' dashboards (My tasks)">
+                    <input
+                      type="checkbox" :checked="!!row.meta.unlocks_tasks"
+                      @change="toggleUnlocksTasks(row)"
+                    />
+                  </label>
                 </td>
 
                 <td class="nowrap">

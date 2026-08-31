@@ -9,6 +9,7 @@ const auth = useAuth();
 const settings = useSettings();
 
 const summary = ref(null);
+const myTasks = ref([]);
 const myTickets = ref([]);
 const unassigned = ref([]);
 const departing = ref([]);
@@ -46,6 +47,21 @@ const unassignedTotal = ref(0);
 const minePageCount = computed(() => Math.max(1, Math.ceil(mineTotal.value / MINE_PAGE_SIZE)));
 const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal.value / UNASSIGNED_PAGE_SIZE)));
 
+// "My tasks" (NOTES.md §2.28) intentionally isn't paginated like the two
+// ticket lists below it — tasks are meant to be short-lived and few at a
+// time (a handful of open, assigned, unlocked tasks), not a long-running
+// backlog someone pages through.
+async function loadMyTasks() {
+  myTasks.value = await api.get('/tasks', {
+    technician_id: auth.user.id, unlocked_only: 'true', done: 'false',
+  });
+}
+
+async function toggleMyTask(task) {
+  await api.patch(`/tasks/${task.id}`, { done: !task.done });
+  await loadMyTasks();
+}
+
 async function loadMine() {
   const rows = await api.get('/tickets', {
     technician_id: auth.user.id,
@@ -75,6 +91,7 @@ watch(unassignedPage, loadUnassigned);
 onMounted(async () => {
   await Promise.all([
     api.get('/tickets/summary').then((s) => { summary.value = s; }),
+    loadMyTasks(),
     loadMine(),
     loadUnassigned(),
     // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
@@ -141,6 +158,23 @@ onMounted(async () => {
             <strong style="margin-left: 8px">{{ s.count }}</strong>
           </RouterLink>
         </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 24px">
+        <h2>My tasks</h2>
+        <p class="muted small" style="margin: 0 0 10px">
+          Short-lived work items from your tickets, ranked by that ticket's priority.
+        </p>
+        <ul v-if="myTasks.length" class="checklist">
+          <li v-for="t in myTasks" :key="t.id">
+            <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
+            <div style="flex: 1; min-width: 0">
+              <RouterLink :to="{ name: 'ticket', params: { id: t.ticket_id } }">{{ t.title }}</RouterLink>
+              <div class="muted small">{{ t.ticket_title }} · {{ t.priority_label }}</div>
+            </div>
+          </li>
+        </ul>
+        <div v-else class="empty">No open tasks right now.</div>
       </div>
 
       <div class="card" style="margin-bottom: 24px">

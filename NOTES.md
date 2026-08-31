@@ -975,6 +975,88 @@ table), status-grouped when the backend is still returning one queue's
 order (`isQueueOrdered`) and flat otherwise — matching the old Tickets
 page's plain view for the true "browse everything, unfiltered" case.
 
+### 2.28 Tasks — per-tech work items underneath a ticket
+
+The ask (from the shop, not an engineering-driven idea): each ticket should
+break down into a handful of short-lived tasks assigned to individual
+techs, ranked *above* tickets on a tech's dashboard, and only relevant once
+a ticket is actually being worked. Scoped and built as migration 022 plus
+`routes/tasks.js`, `TicketTasks.vue`, and a "My tasks" section on
+`DashboardView.vue`.
+
+**Not a sub-ticket, not a QC check — a new, deliberately lighter table.**
+Sub-tickets (§2.22) were the closest existing "assign a piece of work to
+someone" mechanism, but a sub-ticket is a full ticket: its own status
+workflow, queue position, hours log, QC/invoicing exposure. Ten of those
+per job would flood the Queue page (§2.27), ticket counts, and every report
+that counts tickets. QC checks (§2.23) are reference-only and
+reviewer-signed-off — the wrong shape for a plain per-tech to-do list.
+`ticket_tasks` (migration 022) is its own table instead: a title, an
+optional `technician_id` (independent of `ticket_technicians`, migration
+013 — one ticket's ten tasks can be split across several people), a
+`done`/`done_at`/`done_by` triple, and a back-of-the-line `position` (same
+`MAX(...)+10` convention as `category_queue_position`/
+`family_queue_position`). No status workflow, no queue-position conflicts
+to reconcile, no hours logging of its own — hours stay exactly where they
+already were (`hours_log`), and a task's only state is whether it's done.
+
+**Sourced from Standard Procedures, or free-form.** A task can snapshot a
+`standard_procedures` row (`standard_procedure_id` + a `title` copied from
+its name at attach-time, same snapshot-don't-reference convention as
+`estimate_items.procedure_name`) or be typed directly with no procedure
+behind it, for work that isn't on the catalog (a callback, a one-off fix).
+Both are the same table, same endpoints — `POST /tasks` just requires
+either `standard_procedure_id` or a `title`.
+
+**Quote-born tickets get their tasks automatically; everything else gets a
+"+ Add procedure" panel.** Most tickets never go through a customer quote
+(manual creation, Shopify orders, inventory purchases), so tasks can't
+*only* come from quote conversion the way the ask first sounded — the
+common case would end up with zero tasks. `routes/quotes.js`'s
+`createTicketsForEstimate` now inserts one task per `estimate_item` right
+after that item's ticket is created (`estimate_item_id` traces the
+lineage), unassigned since a quote doesn't know who'll do the work.
+`TicketTasks.vue` (rendered on every ticket, right after `TicketSubTickets`)
+is the same mechanism for everything else: a family-filtered procedure
+picker (same NULL-means-every-instrument-type filtering `EstimateNewView`
+already uses) plus a free-form "add custom task" input, so a ticket that
+never had a quote still ends up with a task list.
+
+**"In progress" is a Settings flag, not a hardcoded status key.** Every
+other status-driven behavior in this app (sort order, category
+applicability, color) already goes through admin-editable `meta` rather
+than a string comparison against a specific key — statuses themselves are
+fully shop-configurable (§2.19), so hardcoding `status_key === 'in_progress'`
+into task visibility would silently break the day someone renames,
+reorders, or retires that status. Settings → Ticket statuses gets a new
+"Unlocks tasks" checkbox (`meta.unlocks_tasks`, same on/off-flag pattern as
+`hide_ship_button`/`show_status_notes`); migration 022 backfills it onto
+the shop's actual "In Progress" row and `seed.js` matches for fresh
+installs, but an admin can move it, add it to more than one status, or
+turn it off entirely. `GET /tasks?unlocked_only=true` is the only thing
+that checks the flag — a ticket's own detail page always shows its full
+task list regardless of status, so staff can plan a job's tasks during
+intake even before it's active. Nothing here blocks checking a task off
+early, either; the flag only gates dashboard *visibility*.
+
+**Dashboard ranking rides the existing priority tiers.** A tech's tasks can
+come from several different tickets at once, so "My tasks" orders them by
+each task's parent ticket's `priority_tier.sort_order` (the same Daily
+To-Do → Custom Shop scale tickets already use), tiebroken by the task's own
+position — reusing an existing concept rather than standing up a second,
+cross-ticket drag-reorderable queue for tasks on top of everything Queue
+already does (§2.17, §2.25–§2.27).
+
+**Deliberately left out of this first version:** no hours logging per task
+(finishing one doesn't touch `actual_hours` — that stays a ticket-level
+concern); no pagination on "My tasks" (tasks are meant to be few and
+short-lived at any given moment, unlike the ticket lists below it); no
+reordering UI for tasks within a ticket beyond creation order; and no
+automatic ticket-status effect when every task on a ticket is done (marking
+tasks complete doesn't move the ticket itself — a shop lead still changes
+status by hand). Any of these can follow if it turns out to matter in
+practice.
+
 ---
 
 ## 4. Suggested first moves after deploy

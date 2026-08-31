@@ -445,6 +445,26 @@ async function createTicketsForEstimate(estimate, createdById) {
         `UPDATE estimate_items SET ticket_id = $1 WHERE id = ANY($2::int[])`,
         [ticket.id, groupItems.map((it) => it.id)],
       );
+
+      // Each procedure line item that just landed on this ticket becomes
+      // one of its tasks (migration 022, NOTES.md §2.28) — technician_id
+      // starts unassigned (a quote doesn't know who'll actually do the
+      // work; a tech claims it later, or an admin assigns it), and
+      // position stacks in the same sort_order the items were already
+      // shown in on the quote. Whether these are visible on anyone's
+      // dashboard yet depends on the new ticket's status, same as any
+      // other task (see routes/tasks.js's unlocked_only) — nothing
+      // special-cased here for that.
+      let taskPosition = 0;
+      for (const item of groupItems) {
+        taskPosition += 10;
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO ticket_tasks (ticket_id, standard_procedure_id, estimate_item_id, title, position, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [ticket.id, item.procedure_id, item.id, item.procedure_name, taskPosition, createdById],
+        );
+      }
     }
 
     const { rows: updatedEstimate } = await client.query(

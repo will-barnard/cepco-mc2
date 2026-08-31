@@ -76,6 +76,12 @@ export const useSettings = defineStore('settings', {
     }),
     labelFor: (s) => (category, key) => (s.data[category] || []).find((r) => r.key === key)?.label || key,
     colorFor: (s) => (key) => (s.data.ticket_status || []).find((r) => r.key === key)?.meta?.color || 'slate',
+    // Whether a ticket sitting in this status should have its tasks show
+    // up on anyone's dashboard (Settings -> Ticket statuses' "Unlocks
+    // tasks" checkbox, meta.unlocks_tasks — migration 022, NOTES.md
+    // §2.28). Admin-configurable per status rather than a hardcoded key,
+    // same reasoning as every other status-driven behavior here.
+    unlocksTasks: (s) => (key) => !!(s.data.ticket_status || []).find((r) => r.key === key)?.meta?.unlocks_tasks,
     // TicketSubTickets.vue's "Ship this instrument" quick-action — a
     // Settings -> Ticket categories toggle per category (meta.hide_ship_button),
     // e.g. a Shipping-category ticket has no business offering to spin off

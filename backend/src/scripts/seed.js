@@ -29,7 +29,11 @@ const SETTINGS = [
   ['ticket_status', 'reservation', 'Reservation', 10,
     { color: 'slate', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
   ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate' }],
-  ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue' }],
+  // unlocks_tasks (migration 022, NOTES.md §2.28): the tech dashboard's
+  // "My tasks" section only ever surfaces tasks belonging to a ticket
+  // whose current status carries this flag — admin-editable per status
+  // from here on (Settings -> Ticket statuses), not hardcoded to this key.
+  ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue', unlocks_tasks: true }],
   ['ticket_status', 'qc', 'QC', 40,
     { color: 'violet', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
   ['ticket_status', 'invoice_sent', 'Invoice Sent', 50,

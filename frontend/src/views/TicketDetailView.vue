@@ -10,6 +10,7 @@ import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
+import TicketTasks from '../components/TicketTasks.vue';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -290,6 +291,7 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
         </div>
 
         <TicketSubTickets :ticket="ticket" @changed="load" />
+        <TicketTasks :ticket="ticket" />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
