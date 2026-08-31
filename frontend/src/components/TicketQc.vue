@@ -15,7 +15,7 @@ import { useAuth } from '../stores';
 const props = defineProps({
   ticket: { type: Object, required: true },
 });
-const emit = defineEmits(['changed']);
+const emit = defineEmits(['changed', 'task-created']);
 
 const auth = useAuth();
 
@@ -36,6 +36,12 @@ function toggleItem(checkId, index) {
 }
 
 const checks = computed(() => props.ticket.qc_checks || []);
+
+// Q5: "what needs doing before this passes" — one draft string per open
+// round, keyed by check id (a plain object inside a ref stays reactive for
+// property-level mutation, same as activeItems' Set above just without
+// needing a full replace each time).
+const issueDrafts = ref({});
 
 async function startRound() {
   error.value = '';
@@ -58,17 +64,45 @@ async function saveNotes(check, value) {
   }
 }
 
-async function signOff(check, passed) {
+// Q5: "Fail this round" is gone — a round that turns up a problem doesn't
+// get stamped failed anymore, it generates a task instead (reportIssue,
+// below) and stays open/unsigned until whoever's doing the work comes back
+// and approves it. qc_checks.passed = false is still something the schema
+// and this route support (nothing stops a future caller from using it),
+// there's simply no UI path to it here anymore — every sign-off from this
+// panel passes.
+async function approveRound(check) {
   error.value = '';
   busy.value = true;
   try {
-    const result = await api.post(`/qc/checks/${check.id}/sign-off`, { passed });
-    if (!result.ticket_qc_passed && passed) {
+    const result = await api.post(`/qc/checks/${check.id}/sign-off`, { passed: true });
+    if (!result.ticket_qc_passed) {
       error.value = `Round signed off. Ticket still needs `
         + `${result.rounds_required - result.rounds_passed} more passing round(s)`
         + `${result.distinct_reviewers_required ? ' from a second reviewer' : ''}.`;
     }
     emit('changed');
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Q5: creates a ticket_task instead of failing the round — the round
+// itself is left alone (still open, still signable once the work's done),
+// so nothing here touches qc_checks at all. Prefixed with the round number
+// purely for context in the Tasks panel; TicketTasks.vue doesn't know or
+// care where a task came from.
+async function reportIssue(check) {
+  const text = (issueDrafts.value[check.id] || '').trim();
+  if (!text) return;
+  error.value = '';
+  busy.value = true;
+  try {
+    await api.post('/tasks', { ticket_id: props.ticket.id, title: `QC round ${check.round_number}: ${text}` });
+    issueDrafts.value = { ...issueDrafts.value, [check.id]: '' };
+    emit('task-created');
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -132,11 +166,28 @@ async function signOff(check, passed) {
             @change="saveNotes(check, $event.target.value)"
           />
         </div>
-        <div v-if="auth.isSenior" class="row">
-          <button class="primary" :disabled="busy" @click="signOff(check, true)">
-            Sign off as passed
+        <!-- Q5: an issue found here becomes a task, not a failed round —
+             open to anyone (not just auth.isSenior below), same reasoning
+             as TicketTasks.vue's own "assigning/completing day-to-day work
+             isn't an admin-only action" — while approval still requires a
+             senior tech/admin, unchanged from before this packet. -->
+        <div class="field" style="margin-top: 12px">
+          <label>Found something? Add it as a task</label>
+          <div class="row">
+            <input
+              v-model="issueDrafts[check.id]" style="flex: 1"
+              placeholder="e.g. Bass register still buzzing on E2"
+              @keyup.enter="reportIssue(check)"
+            />
+            <button class="small" :disabled="busy || !issueDrafts[check.id]?.trim()" @click="reportIssue(check)">
+              + Add
+            </button>
+          </div>
+        </div>
+        <div v-if="auth.isSenior" class="row" style="margin-top: 10px">
+          <button class="primary" :disabled="busy" @click="approveRound(check)">
+            Approve for next round
           </button>
-          <button :disabled="busy" @click="signOff(check, false)">Fail this round</button>
         </div>
         <p v-else class="muted small">Sign-off requires senior tech or admin.</p>
       </template>

@@ -20,6 +20,7 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const settings = require('../services/settings');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -85,22 +86,42 @@ router.get('/', asyncHandler(async (req, res) => {
 // free-form (title only). See migration 022's column comments.
 // ---------------------------------------------------------------------------
 router.post('/', asyncHandler(async (req, res) => {
-  const { ticket_id: ticketId, standard_procedure_id: procedureId, technician_id: technicianId } = req.body || {};
+  const {
+    ticket_id: ticketId, standard_procedure_id: procedureId, technician_id: technicianId,
+  } = req.body || {};
   if (!ticketId) throw badRequest('ticket_id is required');
 
   const { rows: ticketRows } = await query('SELECT id FROM tickets WHERE id = $1', [ticketId]);
   if (!ticketRows[0]) throw notFound('Ticket not found');
 
   let title = req.body && req.body.title ? String(req.body.title).trim() : '';
+  // N8: a procedure can name the tech level its own work usually calls for
+  // (standard_procedures.default_tech_level_key) — a task created from one
+  // arrives pre-tagged with it unless the caller explicitly picked a
+  // different level for this one instance.
+  let procedureDefaultTechLevelKey = null;
   if (procedureId) {
-    const { rows: procRows } = await query('SELECT name FROM standard_procedures WHERE id = $1', [procedureId]);
+    const { rows: procRows } = await query(
+      'SELECT name, default_tech_level_key FROM standard_procedures WHERE id = $1', [procedureId],
+    );
     if (!procRows[0]) throw badRequest('Unknown standard_procedure_id');
     // A caller can still supply a custom title alongside a procedure (e.g.
     // "Rhodes tine replacement — bass register only"); otherwise the task
     // snapshots the procedure's name exactly as it reads right now.
     if (!title) title = procRows[0].name;
+    procedureDefaultTechLevelKey = procRows[0].default_tech_level_key;
   }
   if (!title) throw badRequest('title is required when standard_procedure_id is not set');
+
+  // N8: tech level lives on the task now, not the ticket (see migration
+  // 031) — explicit tech_level_key on the request wins, then the source
+  // procedure's default, then nothing (a task with no particular level
+  // requirement, same as "any" on the old ticket-level picker).
+  const techLevelKey = req.body && req.body.tech_level_key !== undefined
+    ? req.body.tech_level_key
+    : procedureDefaultTechLevelKey;
+  let techLevel = null;
+  if (techLevelKey) techLevel = await settings.resolveActive('tech_level', techLevelKey);
 
   // Back of the line for this ticket — same MAX(...)+10 convention as
   // category_queue_position/family_queue_position (migrations 007/015).
@@ -110,10 +131,15 @@ router.post('/', asyncHandler(async (req, res) => {
   );
 
   const { rows: inserted } = await query(
-    `INSERT INTO ticket_tasks (ticket_id, standard_procedure_id, title, technician_id, position, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO ticket_tasks (
+       ticket_id, standard_procedure_id, title, technician_id, position, created_by,
+       tech_level_key, tech_level_label_snapshot
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
-    [ticketId, procedureId || null, title, technicianId || null, posRows[0].next, req.user.id],
+    [
+      ticketId, procedureId || null, title, technicianId || null, posRows[0].next, req.user.id,
+      techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
+    ],
   );
 
   const { rows } = await query(`${TASK_SELECT} WHERE tk.id = $1`, [inserted[0].id]);
@@ -136,6 +162,24 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (!title) throw badRequest('title cannot be blank');
   const technicianId = b.technician_id !== undefined ? (b.technician_id || null) : existing.technician_id;
 
+  // N8: same "explicit touch, including an explicit clear to null" idiom
+  // as tickets.js's PATCH uses for its own settings-backed columns —
+  // tech_level_key is only re-resolved when the caller actually mentioned
+  // it, so leaving it out of the request never quietly clears a task's
+  // tech level.
+  let techLevelKey = existing.tech_level_key;
+  let techLevelLabel = existing.tech_level_label_snapshot;
+  if (b.tech_level_key !== undefined && b.tech_level_key !== existing.tech_level_key) {
+    if (b.tech_level_key) {
+      const techLevel = await settings.resolveActive('tech_level', b.tech_level_key);
+      techLevelKey = techLevel.key;
+      techLevelLabel = techLevel.label;
+    } else {
+      techLevelKey = null;
+      techLevelLabel = null;
+    }
+  }
+
   let { done, done_at: doneAt, done_by: doneBy } = existing;
   if (b.done !== undefined && Boolean(b.done) !== existing.done) {
     done = Boolean(b.done);
@@ -145,9 +189,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   await query(
     `UPDATE ticket_tasks
-        SET title = $2, technician_id = $3, done = $4, done_at = $5, done_by = $6
+        SET title = $2, technician_id = $3, done = $4, done_at = $5, done_by = $6,
+            tech_level_key = $7, tech_level_label_snapshot = $8
       WHERE id = $1`,
-    [req.params.id, title, technicianId, done, doneAt, doneBy],
+    [req.params.id, title, technicianId, done, doneAt, doneBy, techLevelKey, techLevelLabel],
   );
 
   const { rows: updated } = await query(`${TASK_SELECT} WHERE tk.id = $1`, [req.params.id]);

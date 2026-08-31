@@ -43,6 +43,11 @@ const busy = ref(false);
 
 const selectedProcedureId = ref('');
 const customTitle = ref('');
+// N8: tech level moved here from the ticket (see NOTES.md) — a task
+// created "+ Add from Standard Procedures" pre-fills from that procedure's
+// own default_tech_level_key (still editable before it's added), a custom
+// task starts with none picked.
+const newTaskTechLevel = ref('');
 
 async function load() {
   loading.value = true;
@@ -51,6 +56,15 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+// N8: picking a procedure pre-fills the tech-level picker sitting next to
+// it from that procedure's own default — still just a starting point,
+// same "pre-fill, don't lock" reasoning as TicketNewView.vue's
+// defaultTechsByFamily watch.
+function onProcedureChange() {
+  const proc = procedures.value.find((p) => p.id === selectedProcedureId.value);
+  newTaskTechLevel.value = proc?.default_tech_level_key || '';
 }
 
 onMounted(async () => {
@@ -75,8 +89,13 @@ async function addProcedureTask() {
   error.value = '';
   busy.value = true;
   try {
-    await api.post('/tasks', { ticket_id: props.ticket.id, standard_procedure_id: selectedProcedureId.value });
+    await api.post('/tasks', {
+      ticket_id: props.ticket.id,
+      standard_procedure_id: selectedProcedureId.value,
+      tech_level_key: newTaskTechLevel.value || null,
+    });
     selectedProcedureId.value = '';
+    newTaskTechLevel.value = '';
     await load();
   } catch (err) {
     error.value = err.message;
@@ -91,8 +110,9 @@ async function addCustomTask() {
   error.value = '';
   busy.value = true;
   try {
-    await api.post('/tasks', { ticket_id: props.ticket.id, title });
+    await api.post('/tasks', { ticket_id: props.ticket.id, title, tech_level_key: newTaskTechLevel.value || null });
     customTitle.value = '';
+    newTaskTechLevel.value = '';
     await load();
   } catch (err) {
     error.value = err.message;
@@ -120,6 +140,26 @@ async function assign(task, technicianId) {
     error.value = err.message;
   }
 }
+
+async function setTechLevel(task, techLevelKey) {
+  error.value = '';
+  try {
+    await api.patch(`/tasks/${task.id}`, { tech_level_key: techLevelKey || null });
+    await load();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+// Q5: TicketQc.vue creates tasks directly (its "report an issue" flow, an
+// alternative to failing a round) without going through this component at
+// all, and — per its own docstring above — this component doesn't emit
+// `changed`/listen for it the way its sibling panels do, since tasks
+// aren't part of GET /tickets/:id's payload for a parent reload to expose
+// anyway. Exposing this instead lets TicketDetailView.vue call straight
+// into the one panel that actually needs to know, rather than growing a
+// wider notification mechanism for what's still just one cross-panel case.
+defineExpose({ load });
 
 async function removeTask(task) {
   error.value = '';
@@ -155,6 +195,17 @@ async function removeTask(task) {
           <span :style="t.done ? 'text-decoration: line-through; color: var(--text-dim)' : ''" style="flex: 1">
             {{ t.title }}
           </span>
+          <!-- N8: tech level lives on the task now, not the ticket — see
+               NOTES.md and migration 031. -->
+          <select
+            class="small" style="max-width: 140px"
+            :value="t.tech_level_key || ''" @change="setTechLevel(t, $event.target.value)"
+          >
+            <option value="">Any level</option>
+            <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
+              {{ lvl.label }}
+            </option>
+          </select>
           <select
             class="small" style="max-width: 160px"
             :value="t.technician_id || ''" @change="assign(t, $event.target.value)"
@@ -170,7 +221,7 @@ async function removeTask(task) {
         <div>
           <label>Add from Standard Procedures</label>
           <div class="row">
-            <select v-model="selectedProcedureId" style="flex: 1">
+            <select v-model="selectedProcedureId" style="flex: 1" @change="onProcedureChange">
               <option value="">Select a procedure…</option>
               <option v-for="p in availableProcedures" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
@@ -194,6 +245,19 @@ async function removeTask(task) {
               + Add
             </button>
           </div>
+        </div>
+        <div>
+          <!-- N8: shared by both "add" forms above — whichever one is used,
+               this is the level the new task starts with (pre-filled from
+               the procedure's default when one's picked; still editable
+               per-task afterward via the row select above). -->
+          <label>Tech level for the new task</label>
+          <select v-model="newTaskTechLevel">
+            <option value="">Any level</option>
+            <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
+              {{ lvl.label }}
+            </option>
+          </select>
         </div>
       </div>
     </template>

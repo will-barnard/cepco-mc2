@@ -510,9 +510,43 @@ async function insertTicketRow(client, b, resolved, createdById) {
   return created;
 }
 
+// N1: "[Client Name] ["Nickname"] [Instrument Model]" — whichever of the
+// three pieces are actually present, space-joined, in that order. This is
+// the fallback POST /tickets reaches for when the request didn't supply a
+// title of its own (see below) — it's deliberately NOT wired into
+// resolveNewTicketFields/insertTicketRow themselves, so the other callers
+// of those two functions (fleet restorations, inventory purchases, Shopify
+// orders, the create-shipping-ticket route, quote conversion) keep
+// supplying their own explicit titles completely unaffected, exactly as
+// the boss-list scope doc asked.
+async function composeTicketTitle(customerId, instrumentId) {
+  const parts = [];
+  if (customerId) {
+    const { rows } = await query('SELECT name FROM customers WHERE id = $1', [customerId]);
+    if (rows[0] && rows[0].name) parts.push(rows[0].name);
+  }
+  if (instrumentId) {
+    const { rows } = await query('SELECT nickname, model FROM instruments WHERE id = $1', [instrumentId]);
+    if (rows[0]) {
+      if (rows[0].nickname) parts.push(`"${rows[0].nickname}"`);
+      if (rows[0].model) parts.push(rows[0].model);
+    }
+  }
+  return parts.join(' ').trim();
+}
+
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
-  if (!b.title || !String(b.title).trim()) throw badRequest('title is required');
+
+  // N1: title used to be flatly required; a walk-in ticket with a customer
+  // and/or instrument picked now gets one composed for it instead (see
+  // composeTicketTitle above) — still required when there's neither (e.g.
+  // an internal SideQuest with nothing to build a name from), same as
+  // before. TicketNewView.vue mirrors this exact rule client-side so its
+  // own title field only becomes required when the preview would be empty.
+  let title = b.title && String(b.title).trim();
+  if (!title) title = await composeTicketTitle(b.customer_id || null, b.instrument_id || null);
+  if (!title) throw badRequest('title is required');
 
   // is_shipping is an internal flag meant to be set only by the "Ship this
   // instrument" flow below (create-shipping-ticket) — not something a
@@ -522,7 +556,7 @@ router.post('/', asyncHandler(async (req, res) => {
   // resolveNewTicketFields/insertTicketRow builds its own plain object
   // rather than forwarding a raw request body, so this is the one place
   // that needs to say so explicitly.
-  const fields = { ...b, is_shipping: false };
+  const fields = { ...b, title, is_shipping: false };
   const resolved = await resolveNewTicketFields(fields);
   const ticket = await withTransaction((client) => insertTicketRow(client, fields, resolved, req.user.id));
 

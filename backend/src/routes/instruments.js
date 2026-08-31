@@ -178,10 +178,13 @@ router.post('/', asyncHandler(async (req, res) => {
   }
   const { rows } = await query(
     `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                              customer_id, is_fleet, fleet_last_qc)
-     VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,FALSE),$8) RETURNING *`,
+                              customer_id, is_fleet, fleet_last_qc, nickname)
+     VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,FALSE),$8,$9) RETURNING *`,
     [b.family, b.model || null, b.year || null, b.serial_no || null,
-      b.identifying_notes || null, b.customer_id || null, b.is_fleet, b.fleet_last_qc || null],
+      b.identifying_notes || null, b.customer_id || null, b.is_fleet, b.fleet_last_qc || null,
+      // N1: only the New Ticket page's "add a new instrument instead" form
+      // sends this today — see composeTicketTitle in routes/tickets.js.
+      b.nickname || null],
   );
   res.status(201).json(rows[0]);
 }));
@@ -198,13 +201,15 @@ router.patch('/:id', asyncHandler(async (req, res) => {
        identifying_notes = COALESCE($6, identifying_notes),
        customer_id = CASE WHEN $7::boolean THEN $8 ELSE customer_id END,
        is_fleet = COALESCE($9, is_fleet),
-       fleet_last_qc = COALESCE($10, fleet_last_qc)
+       fleet_last_qc = COALESCE($10, fleet_last_qc),
+       nickname = COALESCE($11, nickname)
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.family || null, b.model || null, b.year || null, b.serial_no || null,
       b.identifying_notes === undefined ? null : b.identifying_notes,
       b.customer_id !== undefined, b.customer_id || null,
       b.is_fleet === undefined ? null : b.is_fleet,
-      b.fleet_last_qc === undefined ? null : b.fleet_last_qc],
+      b.fleet_last_qc === undefined ? null : b.fleet_last_qc,
+      b.nickname || null],
   );
   if (!rows[0]) throw notFound('Instrument not found');
   res.json(rows[0]);

@@ -36,7 +36,6 @@ const form = ref({
   subcategory_other_text: '',
   priority_key: '',
   status_key: '',
-  tech_level_key: '',
   customer_id: '',
   instrument_id: '',
   technician_ids: [],
@@ -76,7 +75,7 @@ function pickSubcategory(key) {
 
 // Creating an instrument inline: retyping a customer's piano into a separate
 // screen first is friction nobody will tolerate at intake.
-const newInstrument = ref({ enabled: false, family: 'rhodes', model: '', year: '', serial_no: '' });
+const newInstrument = ref({ enabled: false, family: 'rhodes', model: '', year: '', serial_no: '', nickname: '' });
 
 // Creating a customer inline, same reasoning as the instrument above: a walk-in
 // customer shouldn't need a trip to the Customers page before we can open their ticket.
@@ -95,6 +94,27 @@ const selectedFamily = computed(() => {
   if (newInstrument.value.enabled) return newInstrument.value.family || '';
   const inst = instruments.value.find((i) => i.id === form.value.instrument_id);
   return inst ? inst.family : '';
+});
+
+// N1: mirrors composeTicketTitle in routes/tickets.js exactly — "[Client
+// Name] [\"Nickname\"] [Instrument Model]", whichever pieces are actually
+// present. Drives both the Title field's placeholder/required-ness below
+// and submit()'s own fallback check, so a title is never silently sent
+// blank when the auto-generated one would also be blank.
+const autoTitlePreview = computed(() => {
+  const parts = [];
+  const customerName = newCustomer.value.enabled
+    ? newCustomer.value.name.trim()
+    : (customers.value.find((c) => c.id === form.value.customer_id)?.name || '');
+  if (customerName) parts.push(customerName);
+
+  const inst = newInstrument.value.enabled
+    ? newInstrument.value
+    : instruments.value.find((i) => i.id === form.value.instrument_id);
+  if (inst?.nickname?.trim()) parts.push(`"${inst.nickname.trim()}"`);
+  if (inst?.model?.trim()) parts.push(inst.model.trim());
+
+  return parts.join(' ');
 });
 
 // Auto-fill on every *change* of instrument type — not on every keystroke
@@ -134,10 +154,21 @@ async function submit() {
     error.value = `Say what "${selectedSubcategory.value.label}" is.`;
     return;
   }
+  // N1: title itself is only required when there's nothing to auto-generate
+  // one from (see autoTitlePreview and composeTicketTitle in
+  // routes/tickets.js — this mirrors that exact rule).
+  if (!form.value.title.trim() && !autoTitlePreview.value) {
+    error.value = 'Give this ticket a title, or pick a customer/instrument to generate one.';
+    return;
+  }
   busy.value = true;
   try {
     const payload = { ...form.value };
     if (payload.subcategory_other_text) payload.subcategory_other_text = payload.subcategory_other_text.trim();
+    // A blank title is a real, valid submission now (N1) — POST /tickets
+    // composes one from the customer/instrument. Trim rather than send a
+    // whitespace-only title through as if it were meaningful.
+    payload.title = payload.title.trim() || null;
 
     if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
       const created = await api.post('/customers', {
@@ -155,6 +186,7 @@ async function submit() {
         model: newInstrument.value.model,
         year: newInstrument.value.year || null,
         serial_no: newInstrument.value.serial_no || null,
+        nickname: newInstrument.value.nickname.trim() || null,
         customer_id: payload.customer_id || null,
       });
       payload.instrument_id = created.id;
@@ -162,7 +194,7 @@ async function submit() {
 
     // Blank <select> values are '' — the API wants null. (technician_ids is
     // already a real array, so it doesn't need this treatment.)
-    for (const k of ['customer_id', 'instrument_id', 'tech_level_key', 'drop_off_date', 'due_date',
+    for (const k of ['customer_id', 'instrument_id', 'drop_off_date', 'due_date',
       'subcategory_key', 'subcategory_other_text']) {
       if (payload[k] === '') payload[k] = null;
     }
@@ -183,8 +215,18 @@ async function submit() {
 
     <form class="card" @submit.prevent="submit">
       <div class="field">
-        <label>Title *</label>
-        <input v-model="form.title" required placeholder="e.g. Steve Dawson — Wurlitzer 200A full resto" />
+        <label>Title{{ autoTitlePreview ? '' : ' *' }}</label>
+        <input
+          v-model="form.title"
+          :required="!autoTitlePreview"
+          :placeholder="autoTitlePreview || 'e.g. Steve Dawson — Wurlitzer 200A full resto'"
+        />
+        <!-- N1: only shown once there's actually something to preview — a
+             blank title plus no customer/instrument is still a hard error
+             (submit() above), same as before this packet. -->
+        <p v-if="autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
+          Left blank, this ticket will be titled "{{ autoTitlePreview }}".
+        </p>
       </div>
 
       <div class="field">
@@ -249,7 +291,7 @@ async function submit() {
           <select v-model="form.instrument_id" :disabled="newInstrument.enabled">
             <option value="">— none —</option>
             <option v-for="i in instruments" :key="i.id" :value="i.id">
-              {{ i.family }} · {{ i.model }}
+              {{ i.family }} · <template v-if="i.nickname">"{{ i.nickname }}" </template>{{ i.model }}
             </option>
           </select>
         </div>
@@ -314,20 +356,18 @@ async function submit() {
             <label>Serial</label>
             <input v-model="newInstrument.serial_no" />
           </div>
+          <div class="field">
+            <label>Nickname</label>
+            <input v-model="newInstrument.nickname" placeholder="e.g. Old Betsy" />
+          </div>
         </div>
       </div>
 
-      <div class="field-row">
-        <div class="field">
-          <label>Tech level required</label>
-          <select v-model="form.tech_level_key">
-            <option value="">— any —</option>
-            <option v-for="t in settings.active('tech_level')" :key="t.key" :value="t.key">
-              {{ t.label }}
-            </option>
-          </select>
-        </div>
-      </div>
+      <!-- N8: tech level moved to the per-task picker (TicketTasks.vue,
+           after the ticket exists) — a ticket's tasks can span more than
+           one level, which a single ticket-wide field never could. The
+           tech_level_key column stays on tickets (it costs nothing to
+           leave it), it just isn't set here anymore. -->
 
       <div class="field">
         <label>Assign to</label>

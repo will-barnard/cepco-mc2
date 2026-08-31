@@ -1354,6 +1354,100 @@ need testing against a ticket with no customer and no instrument once it
 exists — out of scope here, just recorded so it isn't forgotten.
 ---
 
+### 2.33 Wave 4 (boss-list scope) — auto-generated titles, tech level moves to tasks, QC "report an issue"
+
+N1, N8 and Q5 from the boss list, plus N5 and N6 — both settled as
+no-code-this-wave and documented here rather than silently dropped.
+
+**N1 — ticket titles auto-generate when none is typed.** `POST /tickets`
+used to flatly require a title; a walk-in ticket that already names a
+customer and/or instrument doesn't need one typed by hand too. Format is
+`[Client Name] ["Nickname"] [Instrument Model]` (`composeTicketTitle` in
+`routes/tickets.js`), using whichever pieces are actually present — a new
+`instruments.nickname` column (migration 030) supplies the middle one, set
+today only via the New Ticket page's "Add a new instrument instead" form.
+A title is still required when there's nothing to build one from (an
+internal SideQuest ticket with no customer or instrument, say) — this is
+deliberately scoped to just the one generic `POST /tickets` route:
+`resolveNewTicketFields`/`insertTicketRow` themselves are untouched, so the
+five other callers (fleet restorations, inventory purchases, Shopify
+orders, `create-shipping-ticket`, quote conversion) keep supplying their
+own explicit titles completely unaffected. `TicketNewView.vue` mirrors the
+exact same rule client-side (`autoTitlePreview`) so its own Title field
+only becomes required, and only shows the asterisk, once that preview
+would actually be empty — and previews what it'll be titled otherwise,
+so nobody's surprised by what shows up on the ticket.
+
+**N8 — tech level moves from the ticket to the task.** A ticket's ~10
+tasks are often a mix of skill levels (a bass reed swap and a full action
+rebuild landing on the same Wurlitzer job) — one `tech_level_key` per
+*ticket* could only ever describe one of them. Migration 031 adds
+`tech_level_key`/`tech_level_label_snapshot` to `ticket_tasks` instead,
+same key+snapshot convention as everywhere else; `routes/tasks.js`'s
+POST/PATCH resolve and validate it (PATCH supports an explicit clear to
+null, same idiom as `tickets.js`'s own settings-backed columns), and
+`TicketTasks.vue` grew a per-task tech-level picker alongside the existing
+technician-assignment select. `tickets.tech_level_key` itself is left
+completely alone — column, index, `routes/tickets.js` logic, all
+untouched, per the boss's own framing that "the column costs nothing" and
+ripping it out would mean backfilling historical tickets' tech level onto
+tasks that may not even exist for them. The two ticket-level pickers
+(`TicketNewView.vue`, `TicketDetailView.vue`) are simply gone; new tickets
+quietly stop populating a field nothing reads anymore.
+
+Also built, as the packet's own suggested nice-to-have: `standard_procedures`
+gained `default_tech_level_key`/`default_tech_level_label_snapshot`
+(same migration), editable from the Standard Procedures admin screen. A
+task created from a procedure that has one arrives pre-tagged with it —
+still just a starting point, overridable per-task the same as every other
+pre-fill in this app (`TicketNewView.vue`'s default-technicians-by-family,
+for one) — while a task with no procedure behind it, or from a procedure
+with no default set, starts at "any level" exactly as before.
+
+**Q5 — QC rounds: "report an issue" replaces "fail this round."**
+`qc_checks.passed = false` is still something the schema and
+`POST /qc/checks/:id/sign-off` support — nothing stops a future caller from
+using it — but there's no UI path to it from `TicketQc.vue` anymore. Per
+the packet's own suggested cleanest approach, a round that turns up a
+problem doesn't get stamped failed; it generates a task instead (a new
+"Found something? Add it as a task" field, open to anyone working the
+ticket, not gated to senior/admin the way sign-off is) and the round
+itself is left exactly alone — still open, still unsigned, sitting there
+until the work gets done and someone comes back and signs it off. "Sign
+off as passed" is renamed "Approve for next round" per the doc's own
+suggested naming; there is no longer a "sign off as failed" of any kind
+from this screen.
+
+One wrinkle this surfaced: `TicketTasks.vue` doesn't emit `changed` (its
+own docstring explains why — tasks aren't part of `GET /tickets/:id`'s
+payload for a parent reload to expose), so `TicketQc.vue` creating a task
+directly had no way to make the Tasks panel show it without a manual page
+reload. Rather than growing a wider cross-panel notification mechanism for
+what's still just this one case, `TicketTasks.vue` now exposes its own
+`load()` (`defineExpose`), and `TicketDetailView.vue` holds a template ref
+to it and calls straight into it on `TicketQc`'s new `task-created` emit —
+the one panel that actually needs to know refreshes, nothing else changes.
+
+**N5 — no code this wave.** The packet framed this as either "typeahead
+with create" on the customer field or Xero sync, and asked which one
+actually matters. Answer: Xero sync is the real goal — a typeahead search
+component is comparatively small standalone UI work, while Xero
+integration is its own multi-step epic (OAuth, an accounting-side contact
+model to reconcile against, sync direction and conflict handling) that
+deserves its own dedicated pass rather than being shoehorned into this
+wave alongside N1/N8/Q5. Recorded here so it isn't lost, not built.
+
+**N6 — no code this wave, checkboxes stay as they are.** Originally
+answered as "remove the customer checkbox only," but that answer was
+explicitly conditioned on N5's typeahead shipping this same wave (so a
+customer could always be found or created from one combined control).
+Once N5 came back as "Xero sync, not typeahead, this wave" the two
+answers contradicted each other — flagged back rather than silently
+picking one, and the boss's call was to keep both of the New Ticket page's
+inline "add instead" checkboxes (customer and instrument) exactly as they
+are. Removing the customer one without the typeahead in place would have
+broken walk-in customer creation outright.
+
 ## 4. Suggested first moves after deploy
 
 

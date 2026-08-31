@@ -11,6 +11,7 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const settings = require('../services/settings');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -65,17 +66,28 @@ router.post('/', requireRole('admin'), asyncHandler(async (req, res) => {
   if (!b.name || !String(b.name).trim()) throw badRequest('name is required');
   const pricing = resolvePricing(b);
 
+  // N8's nice-to-have: a procedure can name the tech level its own work
+  // usually calls for, so tasks created from it (routes/tasks.js) arrive
+  // pre-tagged. Optional, same as family — "applies at any level" for a
+  // procedure that doesn't specify one.
+  let defaultTechLevel = null;
+  if (b.default_tech_level_key) {
+    defaultTechLevel = await settings.resolveActive('tech_level', b.default_tech_level_key);
+  }
+
   const { rows: maxRow } = await query(
     'SELECT COALESCE(MAX(sort_order), 0) + 10 AS next FROM standard_procedures',
   );
   const { rows } = await query(
     `INSERT INTO standard_procedures
-       (name, family, pricing_type, min_hours, max_hours, flat_cost, description, sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+       (name, family, pricing_type, min_hours, max_hours, flat_cost, description, sort_order,
+        default_tech_level_key, default_tech_level_label_snapshot)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
     [
       String(b.name).trim(), b.family || null, pricing.pricing_type,
       pricing.min_hours, pricing.max_hours, pricing.flat_cost,
       b.description || null, maxRow[0].next,
+      defaultTechLevel ? defaultTechLevel.key : null, defaultTechLevel ? defaultTechLevel.label : null,
     ],
   );
   res.status(201).json(rows[0]);
@@ -101,6 +113,21 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
     })
     : null;
 
+  // Same explicit-touch-including-clear idiom as tickets.js's PATCH: only
+  // re-resolved when the request actually mentions it, so a PATCH that
+  // doesn't touch this field never silently drops an existing default.
+  let defaultTechLevelTouched = false;
+  let defaultTechLevelKey = null;
+  let defaultTechLevelLabel = null;
+  if (b.default_tech_level_key !== undefined && b.default_tech_level_key !== existing.default_tech_level_key) {
+    defaultTechLevelTouched = true;
+    if (b.default_tech_level_key) {
+      const techLevel = await settings.resolveActive('tech_level', b.default_tech_level_key);
+      defaultTechLevelKey = techLevel.key;
+      defaultTechLevelLabel = techLevel.label;
+    }
+  }
+
   const { rows } = await query(
     `UPDATE standard_procedures SET
        name         = COALESCE($2, name),
@@ -112,6 +139,9 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
        description  = COALESCE($10, description),
        active       = COALESCE($11, active),
        sort_order   = COALESCE($12, sort_order),
+       default_tech_level_key = CASE WHEN $13::boolean THEN $14 ELSE default_tech_level_key END,
+       default_tech_level_label_snapshot =
+         CASE WHEN $13::boolean THEN $15 ELSE default_tech_level_label_snapshot END,
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
     [
@@ -124,6 +154,7 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
       b.description === undefined ? null : b.description,
       b.active === undefined ? null : b.active,
       b.sort_order === undefined ? null : b.sort_order,
+      defaultTechLevelTouched, defaultTechLevelKey, defaultTechLevelLabel,
     ],
   );
   res.json(rows[0]);

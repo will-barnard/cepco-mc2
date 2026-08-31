@@ -56,6 +56,7 @@ const filtered = computed(() => procedures.value.filter((p) => (
 const showNew = ref(false);
 const blankForm = () => ({
   name: '', family: '', pricing_type: 'hours', min_hours: '', max_hours: '', flat_cost: '', description: '',
+  default_tech_level_key: '',
 });
 const form = ref(blankForm());
 
@@ -77,6 +78,9 @@ async function createProcedure() {
       max_hours: form.value.pricing_type === 'hours' ? form.value.max_hours : null,
       flat_cost: form.value.pricing_type === 'flat' ? form.value.flat_cost : null,
       description: form.value.description || null,
+      // N8: lets tasks created from this procedure (TicketTasks.vue) arrive
+      // pre-tagged with the level its work usually calls for.
+      default_tech_level_key: form.value.default_tech_level_key || null,
     });
     showNew.value = false;
     notice.value = 'Procedure created.';
@@ -176,6 +180,15 @@ function setPricingType(p, pricingType) {
           <label>Flat cost *</label>
           <input v-model="form.flat_cost" type="number" min="0" step="0.01" style="width: 110px" required />
         </div>
+        <div class="field" style="margin: 0">
+          <label>Default tech level</label>
+          <select v-model="form.default_tech_level_key">
+            <option value="">— any —</option>
+            <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
+              {{ lvl.label }}
+            </option>
+          </select>
+        </div>
         <div class="field" style="flex: none; margin: 0">
           <button class="primary" type="submit">Create</button>
         </div>
@@ -227,6 +240,17 @@ function setPricingType(p, pricingType) {
               @change="updateField(p, { flat_cost: $event.target.value })"
             />
           </template>
+
+          <select
+            class="small" style="max-width: 140px"
+            :value="p.default_tech_level_key || ''"
+            @change="updateField(p, { default_tech_level_key: $event.target.value || null })"
+          >
+            <option value="">Any tech level</option>
+            <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
+              {{ lvl.label }}
+            </option>
+          </select>
 
           <span :class="['pill', p.active ? 'green' : 'slate']">
             {{ p.active ? 'Active' : 'Retired' }}

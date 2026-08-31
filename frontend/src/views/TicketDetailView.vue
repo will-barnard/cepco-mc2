@@ -20,6 +20,9 @@ const settings = useSettings();
 const router = useRouter();
 
 const ticket = ref(null);
+// Q5: lets TicketQc.vue's "report an issue" flow refresh the Tasks panel
+// it doesn't otherwise talk to (see TicketTasks.vue's defineExpose).
+const ticketTasksRef = ref(null);
 const loading = ref(true);
 const error = ref('');
 const statusNote = ref('');
@@ -205,18 +208,11 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
                 </option>
               </select>
             </div>
-            <div class="field">
-              <label>Tech level required</label>
-              <select
-                :value="ticket.tech_level_key || ''"
-                @change="patch({ tech_level_key: $event.target.value || null })"
-              >
-                <option value="">— any —</option>
-                <option v-for="t in settings.active('tech_level')" :key="t.key" :value="t.key">
-                  {{ t.label }}
-                </option>
-              </select>
-            </div>
+            <!-- N8: tech level moved to the per-task picker (TicketTasks
+                 further down) — a ticket's own tasks can span more than one
+                 level, which this single ticket-wide field never could.
+                 ticket.tech_level_key stays in the DB (costs nothing to
+                 leave it there), it just isn't edited from here anymore. -->
           </div>
 
           <div class="field">
@@ -295,7 +291,7 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
         </div>
 
         <TicketSubTickets :ticket="ticket" @changed="load" />
-        <TicketTasks :ticket="ticket" />
+        <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
@@ -305,7 +301,10 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
 
       <!-- --------------------------------------- right: QC, photos, log -->
       <div class="stack">
-        <TicketQc v-if="!isShipping" :ticket="ticket" @changed="load" />
+        <TicketQc
+          v-if="!isShipping" :ticket="ticket"
+          @changed="load" @task-created="ticketTasksRef?.load()"
+        />
         <TicketPhotos :ticket-id="ticket.id" />
 
         <div class="card">
