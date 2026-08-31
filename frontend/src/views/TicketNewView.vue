@@ -19,10 +19,15 @@ const busy = ref(false);
 // is chosen; still just a starting point, edited same as any other field.
 const defaultTechsByFamily = ref({});
 
+// category_key/priority_key start blank and are filled in on mount from
+// whatever's actually active in Settings (see onMounted below) — hardcoding
+// 'servicing'/'standard_setup' here would silently break new-ticket
+// creation the moment either gets retired (N4a; both are on the chopping
+// block per the boss list's category/priority reshuffle).
 const form = ref({
   title: '',
-  category_key: 'servicing',
-  priority_key: 'standard_setup',
+  category_key: '',
+  priority_key: '',
   status_key: '',
   tech_level_key: '',
   customer_id: '',
@@ -75,6 +80,15 @@ onMounted(async () => {
   customers.value = custs;
   defaultTechsByFamily.value = techDefaults;
   form.value.status_key = settings.statuses.find((s) => !s.retired)?.key || '';
+  // Prefer the historical default if it's still active; otherwise fall
+  // back to whatever sorts first, same "don't assume a key survives"
+  // reasoning as status_key just above (N4a).
+  const activeCategories = settings.active('ticket_category');
+  form.value.category_key = activeCategories.find((c) => c.key === 'servicing')?.key
+    || activeCategories[0]?.key || '';
+  const activePriorities = settings.active('priority_tier');
+  form.value.priority_key = activePriorities.find((p) => p.key === 'standard_setup')?.key
+    || activePriorities[0]?.key || '';
 });
 
 async function submit() {

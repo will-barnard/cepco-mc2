@@ -1057,6 +1057,119 @@ tasks complete doesn't move the ticket itself — a shop lead still changes
 status by hand). Any of these can follow if it turns out to matter in
 practice.
 
+### 2.29 N4a — sweeping the hardcoded category/priority keys before Settings can break them
+
+The boss handed over a big list of changes (see the "MC2 Change Scope"
+write-up). Two of its packets are foundational and block everything else:
+this one, and §2.30 below. Both shipped together, ahead of any of the
+category/priority reshuffle the rest of the list calls for.
+
+**The problem:** `ticket_category` and `priority_tier` are admin-editable
+(§8) and about to be edited heavily — the boss list retires `shipping`,
+`servicing` and `inventory_restoration` as categories in favor of a merged
+Repairs & Restoration plus new Housekeeping/SideQuests categories, and
+replaces all five priority tiers with three new ones. But half a dozen code
+paths assumed one of the old keys would always exist: `TicketNewView.vue`
+and `EstimateNewView.vue` defaulted their forms to `'servicing'`/
+`'standard_setup'`; `FleetView.vue` created restoration tickets as
+`'inventory_restoration'`/`'standard_setup'`; `routes/tickets.js`'s
+create-shipping-ticket spun off a `'shipping'` ticket at
+`DEFAULT_SHIPPING_PRIORITY_KEY`; `routes/purchases.js` and
+`routes/quotes.js` had their own equivalent constants. `settings.resolveActive()`
+rejects a retired key outright, so the day an admin actually did the
+reshuffle, every one of these would start throwing 400s on ticket creation
+— not a hypothetical, since the reshuffle is packet N2b, a few chats away.
+
+**The fix, `settings.defaultKeyPreferring(category, ...preferredKeys)`:**
+tries each preferred key in order, returns the first that's still active,
+and falls back to whatever sorts first in the category (`firstActive()`) if
+none of them are. A hardcoded "usual" default becomes a *preference*
+instead of an assumption. Every backend call site above now goes through
+it for its fallback constant; a value the caller explicitly supplied (e.g.
+`purchases.js`'s optional `b.priority_key`) still goes straight to
+`resolveActive()` and fails loudly if it's actually invalid — only the
+"nobody said, pick something sensible" path got more forgiving. The
+frontend forms (`TicketNewView.vue`, `EstimateNewView.vue`, `FleetView.vue`)
+follow the same idea client-side: they start with a blank `category_key`/
+`priority_key` and fill in a real one on mount from `settings.active(...)`,
+preferring the historical key if it's still there.
+
+**`ticket_status.meta.applicable_categories` was backwards, so it became
+`excluded_categories`.** Five statuses (Reservation, QC, Invoice Sent,
+Invoice Paid, On Hold) carried an *allowlist* meaning "every category
+except Shipping" — spelled out as the literal four other keys. That reads
+exactly backwards once new categories exist: Housekeeping and SideQuests
+would silently have been missing from all five statuses the moment N2b
+created them, since they'd never appear in an allowlist written before they
+existed. Flipped to a denylist (`excluded_categories: ['shipping']`) so a
+category added later automatically keeps every status that hasn't
+specifically excluded it. Migration 023 converts existing rows
+data-drivenly (computing the actual complement rather than hardcoding
+`'shipping'`, in case an admin had already customized one). Not in the
+boss's list, but the same bug in spirit, and would have bitten on the same
+timeline as everything else here.
+
+`routes/purchases.js`, `routes/quotes.js`'s `createTicketsForEstimate` and
+`routes/shopifyWebhooks.js`'s category resolution got the same treatment.
+`importCsv.js` was deliberately left alone — it writes tickets with the
+*historical* keys via a raw `INSERT`, which is correct even after those
+keys are retired (retiring never touches existing rows, only blocks new
+assignment), since the whole point of that script is reproducing the
+sheets' own historical categorization.
+
+### 2.30 N2a — the sub-category mechanism
+
+Three separate asks on the boss list ("make Custom Shop a sub-category",
+the SideQuests tree of Hunt/R&D/Outreach/Other, and the instrument model
+tree) all needed some notion of a settings value having a parent, which the
+flat `settings` table had no room for. Built once here rather than three
+times.
+
+**`settings.meta.parent_key`** — no schema change, `meta` is already JSONB
+and this is the same per-row-flag mechanism as `hide_ship_button` or
+`default_assignee_id`. A row names another row in the *same category* as
+its parent. `services/settings.js`'s `validateParentKey()` enforces exactly
+one level of nesting (a parent can't itself have a parent; a row with
+children of its own can't become someone else's child) and that the named
+parent actually exists — checked on both `create()` and `update()`.
+`remove()` now also refuses to hard-delete a value that's still someone's
+parent (`countChildren()`), the same "retire instead" rule `countUsage()`
+already enforces for tickets.
+
+**`tickets.subcategory_key` / `subcategory_label_snapshot`** (migration
+024) follow the exact key-plus-snapshot convention every other
+configurable field on a ticket already uses. `routes/tickets.js`'s new
+`resolveSubcategory()` is called from both ticket creation and PATCH: it
+requires the chosen subcategory's `meta.parent_key` to actually match the
+ticket's own `category_key`, so a stale or mismatched pairing (a Custom
+Shop child on a Housekeeping ticket) fails loudly at write time instead of
+silently mislabeling the ticket. Changing a ticket's category clears its
+subcategory automatically if the old one doesn't belong to the new
+category — same "re-home or clear, don't leave stale" rule §2.19's status
+handling already follows.
+
+**The free-text "Other" leaf** (`tickets.subcategory_other_text`) mirrors
+the Parts/Supplies "Other" vendor ask (`parts_orders.vendor_other`): a
+sub-category row can be flagged `meta.allow_free_text`, and only then will
+`resolveSubcategory()` accept accompanying typed text instead of rejecting
+it.
+
+**Settings screen:** `ticket_category` rows get a "Parent" column — a
+picker offering every top-level (non-child, non-retired) category, or plain
+text on a row that already has children of its own (nesting it further
+isn't offered rather than offered-and-rejected). The "add new value" row
+gets the same picker so a child can be created directly under a parent.
+
+**Deliberately left out of this packet:** no UI in `TicketNewView.vue`
+itself for actually picking a two-level category/sub-category (that's
+N2c/N3's job — this just built the mechanism and the two new
+`stores.js` getters, `topLevel()`/`childrenOf()`, for them to consume); no
+attempt to reconcile this with N7's instrument model tree, which the boss
+list's own framing lumped in with "things that need a parent" but whose
+own packet describes a separate `instrument_models` table instead (ragged
+4-level depth doesn't fit a flat parent/child pair) — left for N7 to settle
+when it's picked up.
+
 ---
 
 ## 4. Suggested first moves after deploy

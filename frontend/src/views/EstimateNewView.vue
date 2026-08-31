@@ -27,8 +27,13 @@ const error = ref('');
 const busy = ref(false);
 
 const title = ref('');
-const categoryKey = ref('servicing');
-const priorityKey = ref('standard_setup');
+// Blank until onMounted resolves a real default from Settings (N4a) —
+// hardcoding 'servicing'/'standard_setup' here would leave the picker
+// pointed at a value Settings can retire at any time (both are on the
+// chopping block per the boss list's category/priority reshuffle), same
+// issue TicketNewView.vue had.
+const categoryKey = ref('');
+const priorityKey = ref('');
 const notes = ref('');
 
 const customerId = ref('');
@@ -57,6 +62,14 @@ onMounted(async () => {
     const res = await api.get('/estimates/labor-rate');
     laborRate.value = res.labor_rate;
   } catch { /* keep the fallback default */ }
+  // Prefer the historical default if it's still active; otherwise fall
+  // back to whatever sorts first (N4a — same reasoning as TicketNewView.vue).
+  const activeCategories = settings.active('ticket_category');
+  categoryKey.value = activeCategories.find((c) => c.key === 'servicing')?.key
+    || activeCategories[0]?.key || '';
+  const activePriorities = settings.active('priority_tier');
+  priorityKey.value = activePriorities.find((p) => p.key === 'standard_setup')?.key
+    || activePriorities[0]?.key || '';
 });
 
 function familyFor(block) {

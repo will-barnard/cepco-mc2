@@ -28,6 +28,11 @@ const CATEGORIES = [
 const error = ref('');
 const notice = ref('');
 const newLabel = ref({});
+// N2a: only ticket_category rows can have a parent today (the SideQuests
+// tree and "Custom Shop as a sub-category" are the two things asking for
+// it) — keyed by category the same way newLabel is, in case another
+// category ever wants this too.
+const newParentKey = ref({});
 
 // --- employees -------------------------------------------------------------
 const showNewEmployee = ref(false);
@@ -48,6 +53,25 @@ async function refresh() {
   await refData.load(true);
 }
 
+// N2a: values with no parent (retired ones excluded — you can't nest under
+// something hidden from new tickets) offered as parent choices when adding
+// or reparenting a row. Settings supports only one level of nesting
+// (backend/src/services/settings.js's validateParentKey), so a value that
+// already has a parent is never itself offered as one.
+function topLevelOptions(category, excludeKey) {
+  return (settings.data[category] || [])
+    .filter((r) => !r.retired && !r.meta?.parent_key && r.key !== excludeKey);
+}
+
+// A row that already has sub-values of its own can't also become a child —
+// that would chain to three levels of nesting, which validateParentKey on
+// the backend refuses (see settings.js). Used to swap the parent picker for
+// plain text on rows this applies to, rather than showing choices that
+// would just be rejected.
+function hasChildren(category, key) {
+  return (settings.data[category] || []).some((r) => r.meta?.parent_key === key);
+}
+
 async function addValue(category) {
   error.value = '';
   notice.value = '';
@@ -55,12 +79,25 @@ async function addValue(category) {
   if (!label) return;
   try {
     const rows = settings.data[category] || [];
+    const parentKey = newParentKey.value[category] || null;
     await api.post('/settings', {
       category,
       label,
       sort_order: (rows[rows.length - 1]?.sort_order || 0) + 10,
+      ...(parentKey ? { meta: { parent_key: parentKey } } : {}),
     });
     newLabel.value[category] = '';
+    newParentKey.value[category] = '';
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+async function setParent(row, parentKey) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, parent_key: parentKey || null } });
     await refresh();
   } catch (err) {
     error.value = err.message;
@@ -229,29 +266,26 @@ async function toggleUnlocksTasks(row) {
   }
 }
 
-// Which ticket categories a status applies to (empty/absent meta means
-// "every category" — see NOTES.md and services/settings.js). Returns null
-// for "every category" rather than expanding it, so the checkbox render
-// below can treat null as "show every box checked" without needing to know
-// the full category list up front.
-function categoriesForStatusRow(row) {
-  const allowed = row.meta?.applicable_categories;
-  return Array.isArray(allowed) && allowed.length ? allowed : null;
+// Which ticket categories a status is EXCLUDED from (empty/absent meta
+// means "every category" — see NOTES.md and services/settings.js). A
+// denylist, not an allowlist (N4a) — unchecking a box means "this category
+// is excluded," so a category added later in Settings is unaffected by
+// this status's existing exclusions and stays available by default,
+// instead of needing every status edited by hand to pick it up.
+function excludedCategoriesForStatusRow(row) {
+  const excluded = row.meta?.excluded_categories;
+  return Array.isArray(excluded) && excluded.length ? excluded : [];
 }
 
 async function toggleStatusCategory(row, categoryKey, checked) {
   error.value = '';
-  const allKeys = (settings.data.ticket_category || []).map((c) => c.key);
-  const current = categoriesForStatusRow(row) ?? allKeys;
-  let next = checked
-    ? Array.from(new Set([...current, categoryKey]))
-    : current.filter((k) => k !== categoryKey);
-  // Every box checked -> collapse back to "applies to all" (empty array) so
-  // a category added later automatically gets this status too, instead of
-  // needing every status edited by hand.
-  if (allKeys.length && allKeys.every((k) => next.includes(k))) next = [];
+  const current = excludedCategoriesForStatusRow(row);
+  // Checked means "applies to this category," i.e. NOT excluded.
+  const next = checked
+    ? current.filter((k) => k !== categoryKey)
+    : Array.from(new Set([...current, categoryKey]));
   try {
-    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, applicable_categories: next } });
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, excluded_categories: next } });
     await refresh();
   } catch (err) {
     error.value = err.message;
@@ -415,6 +449,7 @@ onMounted(refresh);
             <thead>
               <tr>
                 <th>Label</th><th>Key</th>
+                <th v-if="category === 'ticket_category'">Parent</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
@@ -433,6 +468,27 @@ onMounted(refresh);
                   />
                 </td>
                 <td><code class="muted small">{{ row.key }}</code></td>
+
+                <td v-if="category === 'ticket_category'">
+                  <select
+                    v-if="!hasChildren(category, row.key)"
+                    :value="row.meta.parent_key || ''"
+                    @change="setParent(row, $event.target.value)"
+                  >
+                    <option value="">— top level —</option>
+                    <option
+                      v-for="p in topLevelOptions(category, row.key)"
+                      :key="p.key" :value="p.key"
+                    >
+                      {{ p.label }}
+                    </option>
+                  </select>
+                  <!-- A row that's already a parent of something else can't
+                       become a child itself (one level of nesting only —
+                       see validateParentKey) — shown as plain text instead
+                       of a picker that would just reject every choice. -->
+                  <span v-else class="muted small">— top level —</span>
+                </td>
 
                 <td v-if="category === 'ticket_category'">
                   <select
@@ -489,7 +545,7 @@ onMounted(refresh);
                     >
                       <input
                         type="checkbox"
-                        :checked="!categoriesForStatusRow(row) || categoriesForStatusRow(row).includes(cat.key)"
+                        :checked="!excludedCategoriesForStatusRow(row).includes(cat.key)"
                         @change="toggleStatusCategory(row, cat.key, $event.target.checked)"
                       />
                       <span class="small">{{ cat.label }}</span>
@@ -531,6 +587,12 @@ onMounted(refresh);
             v-model="newLabel[category]" placeholder="New value label"
             style="max-width: 280px" @keyup.enter="addValue(category)"
           />
+          <select v-if="category === 'ticket_category'" v-model="newParentKey[category]">
+            <option value="">— top level —</option>
+            <option v-for="p in topLevelOptions(category)" :key="p.key" :value="p.key">
+              Under: {{ p.label }}
+            </option>
+          </select>
           <button @click="addValue(category)">Add</button>
         </div>
       </div>

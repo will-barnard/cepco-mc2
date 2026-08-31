@@ -77,15 +77,21 @@ async function resolveActive(category, key) {
 
 /**
  * True if a ticket_status row is usable by the given ticket_category.
- * `meta.applicable_categories` empty/absent means "every category" — the
- * default every pre-existing status keeps, so this is opt-in restriction,
- * not opt-in availability. Shipping (§ NOTES.md) is the first user: the
- * other statuses list every category except shipping, while Not
- * Started/In Progress/Done stay unrestricted.
+ * `meta.excluded_categories` empty/absent means "every category" — the
+ * default every pre-existing status keeps, so this is opt-out restriction,
+ * not opt-in availability. That direction matters: a category added later
+ * (Settings -> Ticket categories) automatically gets every status that
+ * doesn't specifically exclude it, rather than silently missing every
+ * status whose old allowlist predates it (see N4a in the boss-list scope —
+ * this used to be an allowlist called `applicable_categories`, which is
+ * exactly backwards for "every category except shipping"; migration 023
+ * converts existing rows). Shipping (§ NOTES.md) is the first user: the
+ * other statuses exclude just shipping, while Not Started/In Progress/Done
+ * stay unrestricted.
  */
 function statusAppliesToCategory(statusRow, categoryKey) {
-  const allowed = statusRow.meta && statusRow.meta.applicable_categories;
-  return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(categoryKey);
+  const excluded = statusRow.meta && statusRow.meta.excluded_categories;
+  return !Array.isArray(excluded) || !excluded.includes(categoryKey);
 }
 
 /** resolveActive('ticket_status', key), also enforced against the ticket's
@@ -108,6 +114,40 @@ async function defaultStatusForCategory(categoryKey) {
   return match;
 }
 
+/** The first non-retired value in a category, by sort order. The generic
+ * "safe default" fallback for a code path whose usual key might get
+ * retired out from under it (N4a: TicketNewView.vue, FleetView.vue,
+ * routes/tickets.js, routes/purchases.js and routes/shopifyWebhooks.js all
+ * used to hardcode a category or priority key that Settings can now retire
+ * at any time — see NOTES.md). Throws only if literally nothing in the
+ * category is active, which would already break ticket creation outright. */
+async function firstActive(category) {
+  const rows = await listCategory(category);
+  const match = rows.find((r) => !r.retired);
+  if (!match) throw badRequest(`No active ${category} values are configured`);
+  return match;
+}
+
+/**
+ * Resolve the first of `preferredKeys` that's still a valid, active value in
+ * `category`, falling back to firstActive() if none of them are (or none
+ * were given). Use this for a hardcoded "usual" default that Settings might
+ * retire — never for a value the caller explicitly supplied, which should
+ * still fail loudly via resolveActive() if it's invalid.
+ */
+async function defaultKeyPreferring(category, ...preferredKeys) {
+  for (const key of preferredKeys) {
+    if (!key) continue;
+    try {
+      const row = await resolveActive(category, key);
+      return row.key;
+    } catch (err) {
+      // not valid/active any more — try the next candidate
+    }
+  }
+  return (await firstActive(category)).key;
+}
+
 const slugify = (s) => String(s)
   .toLowerCase()
   .trim()
@@ -115,7 +155,46 @@ const slugify = (s) => String(s)
   .replace(/^_+|_+$/g, '')
   .slice(0, 60);
 
-async function create({ category, key, label, sort_order, meta }) {
+/**
+ * N2a: validate meta.parent_key, if present. A settings row can nest under
+ * another row in the *same* category (a ticket_category can nest under
+ * another ticket_category — see N2b's Custom Shop / SideQuests tree), but
+ * only one level deep: the parent itself must not have a parent. Nothing in
+ * the app (the two-level category picker, tickets.subcategory_key) expects
+ * arbitrary depth, so this is enforced here rather than left to whichever
+ * caller happens to remember.
+ */
+async function validateParentKey(category, key, meta) {
+  const parentKey = meta && meta.parent_key;
+  if (!parentKey) return;
+  if (parentKey === key) throw badRequest('A value cannot be its own parent');
+  const { rows } = await query(
+    'SELECT key, meta, retired FROM settings WHERE category = $1 AND key = $2',
+    [category, parentKey],
+  );
+  const parent = rows[0];
+  if (!parent) throw badRequest(`Parent '${parentKey}' does not exist in ${category}`);
+  if (parent.meta && parent.meta.parent_key) {
+    throw badRequest(
+      'Settings values support only one level of nesting — the parent cannot itself have a parent',
+    );
+  }
+  // A value that already has children of its own can't also become a
+  // child — that would chain to three levels (parentKey -> key -> its
+  // children) even though the check above, looking only at `parentKey`,
+  // wouldn't catch it.
+  const childCount = await countChildren(category, key);
+  if (childCount > 0) {
+    throw badRequest(
+      'This value already has sub-values of its own — it cannot also become a child '
+      + '(only one level of nesting is supported)',
+    );
+  }
+}
+
+async function create({
+  category, key, label, sort_order, meta,
+}) {
   if (!CATEGORIES.includes(category)) throw badRequest(`Unknown settings category: ${category}`);
   if (!label || !String(label).trim()) throw badRequest('label is required');
 
@@ -127,6 +206,8 @@ async function create({ category, key, label, sort_order, meta }) {
     [category, finalKey],
   );
   if (existing.rows.length) throw conflict(`A ${category} with key '${finalKey}' already exists`);
+
+  await validateParentKey(category, finalKey, meta);
 
   const { rows } = await query(
     `INSERT INTO settings (category, key, label, sort_order, meta)
@@ -141,7 +222,9 @@ async function create({ category, key, label, sort_order, meta }) {
  * Update label / order / meta / retired. The `key` is deliberately immutable —
  * that immutability is what makes renames safe for historical tickets.
  */
-async function update(id, { label, sort_order, meta, retired }) {
+async function update(id, {
+  label, sort_order, meta, retired,
+}) {
   const { rows: existing } = await query('SELECT * FROM settings WHERE id = $1', [id]);
   if (!existing[0]) throw notFound('Setting not found');
   const current = existing[0];
@@ -154,6 +237,8 @@ async function update(id, { label, sort_order, meta, retired }) {
       // No throw here — this is the documented "retire, don't delete" path.
     }
   }
+
+  if (meta !== undefined) await validateParentKey(current.category, current.key, meta);
 
   const { rows } = await query(
     `UPDATE settings SET
@@ -204,7 +289,19 @@ async function countUsage(category, key) {
   return rows[0].n;
 }
 
-/** Hard delete. Refused if any ticket still carries the key (§8). */
+/** N2a: how many other rows in this category name `key` as their
+ * meta.parent_key — used to block deleting a value that's still someone's
+ * parent, the same "retire instead" reasoning countUsage exists for. */
+async function countChildren(category, key) {
+  const { rows } = await query(
+    "SELECT count(*)::int AS n FROM settings WHERE category = $1 AND meta->>'parent_key' = $2",
+    [category, key],
+  );
+  return rows[0].n;
+}
+
+/** Hard delete. Refused if any ticket still carries the key (§8), or if any
+ * other value is nested under it as a sub-category (N2a). */
 async function remove(id) {
   const { rows: existing } = await query('SELECT * FROM settings WHERE id = $1', [id]);
   if (!existing[0]) throw notFound('Setting not found');
@@ -216,6 +313,14 @@ async function remove(id) {
       `'${setting.label}' is used by ${inUse} ticket(s). Retire it instead, `
       + 'or move those tickets to another value first.',
       { in_use: inUse },
+    );
+  }
+  const childCount = await countChildren(setting.category, setting.key);
+  if (childCount > 0) {
+    throw conflict(
+      `'${setting.label}' has ${childCount} sub-value(s) nested under it. Retire it instead, `
+      + 'or reparent those first.',
+      { child_count: childCount },
     );
   }
   await query('DELETE FROM settings WHERE id = $1', [id]);
@@ -231,10 +336,13 @@ module.exports = {
   statusAppliesToCategory,
   resolveStatusForCategory,
   defaultStatusForCategory,
+  firstActive,
+  defaultKeyPreferring,
   create,
   update,
   remove,
   countUsage,
+  countChildren,
   shopConfigNumber,
   shopConfigString,
   slugify,

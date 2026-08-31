@@ -65,14 +65,27 @@ export const useSettings = defineStore('settings', {
     priorities: (s) => s.data.priority_tier || [],
     techLevels: (s) => s.data.tech_level || [],
     active: (s) => (category) => (s.data[category] || []).filter((r) => !r.retired),
+    // N2a: a category can now nest one level (settings.meta.parent_key) —
+    // these split an active() list into the top level and a given parent's
+    // children, for any two-level picker to consume (N2c's category
+    // buttons, N3's SideQuests tree) rather of each inventing its own
+    // parent/child split over the flat active() list.
+    topLevel: (s) => (category) => (s.data[category] || [])
+      .filter((r) => !r.retired && !r.meta?.parent_key),
+    childrenOf: (s) => (category, parentKey) => (s.data[category] || [])
+      .filter((r) => !r.retired && r.meta?.parent_key === parentKey),
     // Ticket statuses, narrowed to whichever ones a given ticket_category is
-    // allowed to use (meta.applicable_categories — empty/absent means every
+    // allowed to use (meta.excluded_categories — empty/absent means every
     // category, e.g. Not Started/In Progress/Done; Shipping's the first
-    // category that's actually restricted — see NOTES.md).
+    // category that's actually restricted — see NOTES.md). A denylist
+    // rather than an allowlist so a category added later in Settings
+    // automatically keeps every status that hasn't specifically excluded
+    // it (N4a — see backend/src/services/settings.js's
+    // statusAppliesToCategory, which this mirrors).
     statusesForCategory: (s) => (categoryKey) => (s.data.ticket_status || []).filter((r) => {
       if (r.retired) return false;
-      const allowed = r.meta?.applicable_categories;
-      return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(categoryKey);
+      const excluded = r.meta?.excluded_categories;
+      return !Array.isArray(excluded) || !excluded.includes(categoryKey);
     }),
     labelFor: (s) => (category, key) => (s.data[category] || []).find((r) => r.key === key)?.label || key,
     colorFor: (s) => (key) => (s.data.ticket_status || []).find((r) => r.key === key)?.meta?.color || 'slate',
@@ -86,7 +99,7 @@ export const useSettings = defineStore('settings', {
     // Settings -> Ticket categories toggle per category (meta.hide_ship_button),
     // e.g. a Shipping-category ticket has no business offering to spin off
     // *another* shipping ticket. Absent/false meta means "shown," same
-    // default-is-permissive convention as applicable_categories above, so
+    // default-is-permissive convention as excluded_categories above, so
     // every category already behaves exactly as it does today until an
     // admin explicitly turns one off.
     shipButtonAllowed: (s) => (categoryKey) => (

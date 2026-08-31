@@ -7,8 +7,10 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
+import { useSettings } from '../stores';
 
 const router = useRouter();
+const settings = useSettings();
 
 const instruments = ref([]);
 const family = ref('');
@@ -29,14 +31,24 @@ async function load() {
   loading.value = false;
 }
 
-/** Spin up a restoration ticket against a fleet instrument. */
+/** Spin up a restoration ticket against a fleet instrument. Prefers the
+ * historical category/priority if Settings still has them active, else
+ * falls back to whatever sorts first — same "don't assume a key survives"
+ * reasoning as TicketNewView.vue (N4a; 'inventory_restoration' is on the
+ * chopping block per the boss list's category reshuffle). */
 async function createTicket(instrument) {
   error.value = '';
   try {
+    const activeCategories = settings.active('ticket_category');
+    const categoryKey = activeCategories.find((c) => c.key === 'inventory_restoration')?.key
+      || activeCategories[0]?.key;
+    const activePriorities = settings.active('priority_tier');
+    const priorityKey = activePriorities.find((p) => p.key === 'standard_setup')?.key
+      || activePriorities[0]?.key;
     const ticket = await api.post('/tickets', {
       title: `Fleet — ${instrument.model || instrument.family}`,
-      category_key: 'inventory_restoration',
-      priority_key: 'standard_setup',
+      category_key: categoryKey,
+      priority_key: priorityKey,
       instrument_id: instrument.id,
       notes: instrument.identifying_notes || null,
     });

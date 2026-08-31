@@ -15,7 +15,11 @@ router.use(requireAuth);
 // routes/purchases.js's and routes/shopifyWebhooks.js's own defaults:
 // shipping jobs are usually quick, and anyone can re-triage from the queue
 // if a particular one (crating, international) turns out to need more time.
-const DEFAULT_SHIPPING_PRIORITY_KEY = 'daily_todo';
+// These are *preferred* keys, not guaranteed ones — Settings can retire
+// either at any time (N4a), so both go through settings.defaultKeyPreferring()
+// below rather than being handed straight to resolveActive().
+const PREFERRED_SHIPPING_PRIORITY_KEY = 'daily_todo';
+const PREFERRED_SHIPPING_CATEGORY_KEY = 'shipping';
 
 const TICKET_SELECT = `
   SELECT t.*,
@@ -294,6 +298,27 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // defaults to the first non-retired one by sort order). Named distinctly
 // from PATCH's local `resolved` below — that one is partial/optional and
 // unrelated to this.
+// N2a: the sub-category mechanism. A sub-category is just another
+// ticket_category settings row whose meta.parent_key names this ticket's
+// actual category — see backend/src/services/settings.js. Resolving it
+// here (rather than trusting the client) means a stale/mismatched pairing
+// (picking a Custom Shop sub-category on a Housekeeping ticket, say) fails
+// loudly instead of silently mislabeling the ticket.
+async function resolveSubcategory(categoryKey, subcategoryKey, otherText) {
+  if (!subcategoryKey) {
+    if (otherText) throw badRequest('subcategory_other_text was given without a subcategory_key');
+    return null;
+  }
+  const sub = await settings.resolveActive('ticket_category', subcategoryKey);
+  if (!sub.meta || sub.meta.parent_key !== categoryKey) {
+    throw badRequest(`'${sub.label}' is not a sub-category of this ticket's category`);
+  }
+  if (otherText && !sub.meta.allow_free_text) {
+    throw badRequest(`'${sub.label}' does not accept free text`);
+  }
+  return sub;
+}
+
 async function resolveNewTicketFields(b) {
   if (!b.category_key) throw badRequest('category_key is required');
   if (!b.priority_key) throw badRequest('priority_key is required');
@@ -312,6 +337,8 @@ async function resolveNewTicketFields(b) {
     settings.resolveActive('ticket_category', b.category_key),
     settings.resolveActive('priority_tier', b.priority_key),
   ]);
+
+  const subcategory = await resolveSubcategory(category.key, b.subcategory_key, b.subcategory_other_text);
 
   // Status options are category-aware (e.g. Shipping only offers Not
   // Started/In Progress/Done — see NOTES.md) — resolve/default against this
@@ -338,7 +365,7 @@ async function resolveNewTicketFields(b) {
   }
 
   return {
-    category, priority, status, techLevel, defaultAssignedTechIds,
+    category, priority, status, techLevel, subcategory, defaultAssignedTechIds,
   };
 }
 
@@ -369,7 +396,7 @@ async function nextFamilyQueuePosition(client, family) {
 // failure partway through never leaves an orphaned ticket.
 async function insertTicketRow(client, b, resolved, createdById) {
   const {
-    category, priority, status, techLevel, defaultAssignedTechIds,
+    category, priority, status, techLevel, subcategory, defaultAssignedTechIds,
   } = resolved;
   const technicianIds = [...new Set(
     (Array.isArray(b.technician_ids) && b.technician_ids.length ? b.technician_ids : defaultAssignedTechIds)
@@ -401,13 +428,14 @@ async function insertTicketRow(client, b, resolved, createdById) {
        priority_key, priority_label_snapshot,
        status_key, status_label_snapshot,
        tech_level_key, tech_level_label_snapshot,
+       subcategory_key, subcategory_label_snapshot, subcategory_other_text,
        instrument_id, customer_id, shop_contact_id,
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
        family_queue_position
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-               COALESCE($17,'{}'::jsonb),$18,COALESCE($19,TRUE),$20,$21,$22,$23,$24)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -415,6 +443,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
       priority.key, priority.label,
       status.key, status.label,
       techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
+      subcategory ? subcategory.key : null,
+      subcategory ? subcategory.label : null,
+      b.subcategory_other_text || null,
       b.instrument_id || null,
       b.customer_id || null,
       b.shop_contact_id || null,
@@ -510,6 +541,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       : null;
   }
 
+  // N2a: sub-category. Same "explicit touch or category moved out from
+  // under it" shape as the status-reset logic above — a subcategory left
+  // unmentioned is only cleared if it stops belonging to the (possibly
+  // just-changed) category, never dropped just because *something* on the
+  // ticket changed.
+  let subcategoryChanged = false;
+  if (b.subcategory_key !== undefined && b.subcategory_key !== existing.subcategory_key) {
+    resolved.subcategory = await resolveSubcategory(
+      effectiveCategoryKey, b.subcategory_key, b.subcategory_other_text,
+    );
+    subcategoryChanged = true;
+  } else if (resolved.category && existing.subcategory_key) {
+    const currentSub = await settings.resolve('ticket_category', existing.subcategory_key);
+    if (!currentSub.meta || currentSub.meta.parent_key !== effectiveCategoryKey) {
+      resolved.subcategory = null;
+      subcategoryChanged = true;
+    }
+  }
+
   const updated = await withTransaction(async (client) => {
     // Changing a ticket's category moves it into a different queue — it
     // always joins that queue at the bottom (same rule as a brand-new
@@ -555,20 +605,23 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          status_label_snapshot   = COALESCE($8, status_label_snapshot),
          tech_level_key   = CASE WHEN $9::boolean THEN $10 ELSE tech_level_key END,
          tech_level_label_snapshot = CASE WHEN $9::boolean THEN $11 ELSE tech_level_label_snapshot END,
-         instrument_id    = CASE WHEN $12::boolean THEN $13 ELSE instrument_id END,
-         customer_id      = CASE WHEN $14::boolean THEN $15 ELSE customer_id END,
-         shop_contact_id  = CASE WHEN $16::boolean THEN $17 ELSE shop_contact_id END,
-         notes            = COALESCE($18, notes),
-         drop_off_date    = COALESCE($19, drop_off_date),
-         due_date         = COALESCE($20, due_date),
-         multi_instrument = COALESCE($21, multi_instrument),
-         vendor_tracks    = COALESCE($22, vendor_tracks),
-         qc_required      = COALESCE($23, qc_required),
-         archived         = COALESCE($24, archived),
-         category_queue_position = CASE WHEN $25::boolean THEN $26 ELSE category_queue_position END,
-         family_queue_position   = CASE WHEN $27::boolean THEN $28 ELSE family_queue_position END,
-         service_done_notes      = COALESCE($29, service_done_notes),
-         service_needed_notes    = COALESCE($30, service_needed_notes)
+         subcategory_key  = CASE WHEN $12::boolean THEN $13 ELSE subcategory_key END,
+         subcategory_label_snapshot = CASE WHEN $12::boolean THEN $14 ELSE subcategory_label_snapshot END,
+         subcategory_other_text     = CASE WHEN $12::boolean THEN $15 ELSE subcategory_other_text END,
+         instrument_id    = CASE WHEN $16::boolean THEN $17 ELSE instrument_id END,
+         customer_id      = CASE WHEN $18::boolean THEN $19 ELSE customer_id END,
+         shop_contact_id  = CASE WHEN $20::boolean THEN $21 ELSE shop_contact_id END,
+         notes            = COALESCE($22, notes),
+         drop_off_date    = COALESCE($23, drop_off_date),
+         due_date         = COALESCE($24, due_date),
+         multi_instrument = COALESCE($25, multi_instrument),
+         vendor_tracks    = COALESCE($26, vendor_tracks),
+         qc_required      = COALESCE($27, qc_required),
+         archived         = COALESCE($28, archived),
+         category_queue_position = CASE WHEN $29::boolean THEN $30 ELSE category_queue_position END,
+         family_queue_position   = CASE WHEN $31::boolean THEN $32 ELSE family_queue_position END,
+         service_done_notes      = COALESCE($33, service_done_notes),
+         service_needed_notes    = COALESCE($34, service_needed_notes)
        WHERE id = $1
        RETURNING *`,
       [
@@ -583,6 +636,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.tech_level_key !== undefined,
         resolved.techLevel ? resolved.techLevel.key : null,
         resolved.techLevel ? resolved.techLevel.label : null,
+        subcategoryChanged,
+        subcategoryChanged && resolved.subcategory ? resolved.subcategory.key : null,
+        subcategoryChanged && resolved.subcategory ? resolved.subcategory.label : null,
+        subcategoryChanged && resolved.subcategory ? (b.subcategory_other_text || null) : null,
         b.instrument_id !== undefined, b.instrument_id || null,
         b.customer_id !== undefined, b.customer_id || null,
         b.shop_contact_id !== undefined, b.shop_contact_id || null,
@@ -806,8 +863,8 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
   if (!source.instrument_id) throw badRequest('This ticket has no instrument to ship');
 
   const resolved = await resolveNewTicketFields({
-    category_key: 'shipping',
-    priority_key: DEFAULT_SHIPPING_PRIORITY_KEY,
+    category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_SHIPPING_CATEGORY_KEY),
+    priority_key: await settings.defaultKeyPreferring('priority_tier', PREFERRED_SHIPPING_PRIORITY_KEY),
   });
 
   const title = `Ship — ${source.instrument_family}`

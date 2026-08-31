@@ -27,8 +27,11 @@ const router = express.Router();
 router.use(requireAuth);
 
 const DEFAULT_LABOR_RATE = 185.00;
-const DEFAULT_CATEGORY_KEY = 'servicing';
-const DEFAULT_PRIORITY_KEY = 'standard_setup';
+// Preferred, not guaranteed (N4a) — Settings can retire either at any time,
+// so both go through settings.defaultKeyPreferring() below rather than
+// straight to resolveActive() when nothing more specific was supplied.
+const PREFERRED_CATEGORY_KEY = 'servicing';
+const PREFERRED_PRIORITY_KEY = 'standard_setup';
 
 const QUOTE_SELECT = `
   SELECT e.*, c.name AS customer_name, c.email AS customer_email
@@ -146,8 +149,10 @@ router.post('/', asyncHandler(async (req, res) => {
   const customer = customerRows[0];
   if (!customer) throw badRequest(`Customer #${b.customer_id} not found`);
 
-  const categoryKey = b.category_key || DEFAULT_CATEGORY_KEY;
-  const priorityKey = b.priority_key || DEFAULT_PRIORITY_KEY;
+  const categoryKey = b.category_key
+    || await settings.defaultKeyPreferring('ticket_category', PREFERRED_CATEGORY_KEY);
+  const priorityKey = b.priority_key
+    || await settings.defaultKeyPreferring('priority_tier', PREFERRED_PRIORITY_KEY);
   await settings.resolveActive('ticket_category', categoryKey);
   await settings.resolveActive('priority_tier', priorityKey);
 
@@ -380,8 +385,10 @@ async function createTicketsForEstimate(estimate, createdById) {
   // shouldn't have to compete for — a connection out of the same pool the
   // transaction below is holding one of.
   const resolved = await resolveNewTicketFields({
-    category_key: estimate.category_key || DEFAULT_CATEGORY_KEY,
-    priority_key: estimate.priority_key || DEFAULT_PRIORITY_KEY,
+    category_key: estimate.category_key
+      || await settings.defaultKeyPreferring('ticket_category', PREFERRED_CATEGORY_KEY),
+    priority_key: estimate.priority_key
+      || await settings.defaultKeyPreferring('priority_tier', PREFERRED_PRIORITY_KEY),
   });
 
   return withTransaction(async (client) => {

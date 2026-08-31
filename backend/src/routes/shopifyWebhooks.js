@@ -21,14 +21,18 @@ router.use((req, res, next) => {
 });
 
 // A freshly-arrived order has no priority picker of its own (mirrors
-// routes/purchases.js's DEFAULT_PRIORITY_KEY for the same reason) — Daily
+// routes/purchases.js's PREFERRED_PRIORITY_KEY for the same reason) — Daily
 // To-Do matches PLAN's description of routine Orders & Shipping work;
 // anything that turns out to need more time gets re-triaged from the queue
-// like any other ticket.
-const DEFAULT_ORDER_PRIORITY_KEY = 'daily_todo';
+// like any other ticket. Preferred, not guaranteed (N4a) — Settings can
+// retire it, so it's resolved through settings.defaultKeyPreferring() below.
+const PREFERRED_ORDER_PRIORITY_KEY = 'daily_todo';
 // Belt-and-suspenders alongside the shop_config-driven category below: if
 // that setting is ever unset, deleted, or points at a retired category,
 // orders still land somewhere sane instead of failing the webhook outright.
+// Also just a preference now, not a guarantee — resolveOrderCategoryKey()
+// falls all the way through to settings.firstActive() if even this is
+// retired, rather than handing a possibly-retired key to resolveActive().
 const FALLBACK_CATEGORY_KEY = 'orders_shipping';
 
 function customerNameFromOrder(order) {
@@ -98,15 +102,11 @@ function orderNotes(order) {
 
 // Reads the admin-configured default category (Settings -> Shop
 // configuration -> "Default category for Shopify orders"); falls back to
-// orders_shipping if it's missing, retired, or was never set.
+// orders_shipping if it's missing or retired, and all the way to whatever's
+// first active in sort order if even that's been retired since (N4a).
 async function resolveOrderCategoryKey() {
-  const configured = await settings.shopConfigString('shopify_default_category', FALLBACK_CATEGORY_KEY);
-  try {
-    await settings.resolveActive('ticket_category', configured);
-    return configured;
-  } catch (err) {
-    return FALLBACK_CATEGORY_KEY;
-  }
+  const configured = await settings.shopConfigString('shopify_default_category', null);
+  return settings.defaultKeyPreferring('ticket_category', configured, FALLBACK_CATEGORY_KEY);
 }
 
 async function handleOrderCreate(order) {
@@ -128,7 +128,7 @@ async function handleOrderCreate(order) {
   // creation path — see routes/tickets.js.
   const resolved = await resolveNewTicketFields({
     category_key: categoryKey,
-    priority_key: DEFAULT_ORDER_PRIORITY_KEY,
+    priority_key: await settings.defaultKeyPreferring('priority_tier', PREFERRED_ORDER_PRIORITY_KEY),
   });
 
   try {

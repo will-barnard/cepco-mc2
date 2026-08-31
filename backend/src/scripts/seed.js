@@ -27,7 +27,7 @@ const SETTINGS = [
 
   // Statuses, seeded from the values actually present in the sheets.
   ['ticket_status', 'reservation', 'Reservation', 10,
-    { color: 'slate', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+    { color: 'slate', excluded_categories: ['shipping'] }],
   ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate' }],
   // unlocks_tasks (migration 022, NOTES.md §2.28): the tech dashboard's
   // "My tasks" section only ever surfaces tasks belonging to a ticket
@@ -35,14 +35,14 @@ const SETTINGS = [
   // from here on (Settings -> Ticket statuses), not hardcoded to this key.
   ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue', unlocks_tasks: true }],
   ['ticket_status', 'qc', 'QC', 40,
-    { color: 'violet', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+    { color: 'violet', excluded_categories: ['shipping'] }],
   ['ticket_status', 'invoice_sent', 'Invoice Sent', 50,
-    { color: 'amber', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+    { color: 'amber', excluded_categories: ['shipping'] }],
   ['ticket_status', 'invoice_paid', 'Invoice Paid', 60,
-    { color: 'green', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+    { color: 'green', excluded_categories: ['shipping'] }],
   ['ticket_status', 'done', 'Done', 70, { color: 'green', terminal: true }],
   ['ticket_status', 'on_hold', 'On Hold', 80,
-    { color: 'red', applicable_categories: ['daily_todo', 'orders_shipping', 'servicing', 'inventory_restoration'] }],
+    { color: 'red', excluded_categories: ['shipping'] }],
 
   // Priority tiers, with the hour ranges from the sheet section headers.
   ['priority_tier', 'daily_todo', 'Daily To-Do', 10, { min_hours: 0, max_hours: 1 }],

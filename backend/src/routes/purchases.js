@@ -7,6 +7,7 @@ const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const { sendEmail } = require('../mailer');
 const { buildPurchaseReceiptEmail } = require('../templates/purchaseReceipt');
 const { FAMILIES } = require('./instruments');
+const settings = require('../services/settings');
 const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
 
 const router = express.Router();
@@ -15,7 +16,11 @@ router.use(requireAuth);
 // Matches TicketNewView's default priority for a fresh ticket — the intake
 // form doesn't expose a priority picker (not part of what was asked for),
 // so every inventory purchase lands here and gets triaged from the queue.
-const DEFAULT_PRIORITY_KEY = 'standard_setup';
+// Preferred, not guaranteed — Settings can retire it (N4a), so it goes
+// through settings.defaultKeyPreferring() below rather than straight to
+// resolveActive(). Same for the category key just below.
+const PREFERRED_PRIORITY_KEY = 'standard_setup';
+const PREFERRED_CATEGORY_KEY = 'inventory_restoration';
 
 function validPrice(value) {
   const n = Number(value);
@@ -44,8 +49,8 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!b.purchase_date) throw badRequest('purchase_date is required');
 
   const resolved = await resolveNewTicketFields({
-    category_key: 'inventory_restoration',
-    priority_key: b.priority_key || DEFAULT_PRIORITY_KEY,
+    category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_CATEGORY_KEY),
+    priority_key: b.priority_key || await settings.defaultKeyPreferring('priority_tier', PREFERRED_PRIORITY_KEY),
   });
 
   const result = await withTransaction(async (client) => {
