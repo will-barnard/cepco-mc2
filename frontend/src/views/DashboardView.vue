@@ -134,7 +134,7 @@ onMounted(async () => {
         <div class="row">
           <RouterLink
             v-for="s in summary.by_status" :key="s.key"
-            :to="{ name: 'tickets', query: { status: s.key } }"
+            :to="{ name: 'queue', query: { status: s.key } }"
             class="btn small"
           >
             <span :class="['pill', settings.colorFor(s.key)]">{{ s.label }}</span>

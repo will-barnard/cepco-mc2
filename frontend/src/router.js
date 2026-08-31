@@ -4,7 +4,10 @@ import { useAuth } from './stores';
 const routes = [
   { path: '/login', name: 'login', component: () => import('./views/LoginView.vue'), meta: { public: true } },
   { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
-  { path: '/tickets', name: 'tickets', component: () => import('./views/TicketsView.vue') },
+  // Tickets + Queue merged into one page (NOTES.md §2.27) — the queue view
+  // is the canonical list now, /tickets just redirects here (keeping the
+  // query string, e.g. DashboardView.vue's status-filtered links).
+  { path: '/tickets', redirect: (to) => ({ path: '/queue', query: to.query }) },
   { path: '/tickets/new', name: 'ticket-new', component: () => import('./views/TicketNewView.vue') },
   { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue') },
   { path: '/tickets/:id', name: 'ticket', component: () => import('./views/TicketDetailView.vue'), props: true },

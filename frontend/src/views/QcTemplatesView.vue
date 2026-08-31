@@ -3,27 +3,26 @@
  * QC checklist templates (Settings -> QC templates). Admin screen for
  * managing `qc_templates` rows — the actual checklist content (`items`:
  * [{label, note}]) a tech works through in TicketQc.vue and signs off on.
- * Settings' own "QC rigor tiers" table only configures the required-
- * rounds/two-reviewer *rules*; the checklist text itself previously had no
- * UI at all — it only existed via the seed script or raw API calls (see
- * NOTES.md).
+ *
+ * Rigor tiers are retired (migration 021): a template's stage in the
+ * progression is now `round_number`, scoped within its (family, kind) —
+ * e.g. Wurlitzer/qc round 1 is a different row from Wurlitzer/qc round 2.
+ * Rounds always run in that order on a ticket (routes/qc.js assigns the
+ * next round_number automatically; there's no picker that could start
+ * round 2 before round 1), so the templates list below is grouped and
+ * sorted the same way — round 1 always listed before round 2 for a given
+ * family, so the progression reads top-to-bottom exactly how it plays out
+ * on a ticket.
  *
  * `family` is nullable by design (migration 001): NULL means "applies to
  * every instrument family," a specific family means the template only
- * shows up for tickets on that family's instruments. TicketQc.vue's
- * template dropdown already requests `?family=<ticket's instrument
- * family>`, and GET /qc/templates already returns that family's rows
- * *and* the family-NULL ones together — so a different checklist per
- * instrument type was already fully supported by the data model. This
- * screen is what was missing: a way to actually create one per type
- * without touching the seed script or hand-rolling API calls.
+ * shows up for tickets on that family's instruments.
  */
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
-import { useSettings, useRefData } from '../stores';
+import { useRefData } from '../stores';
 
-const settings = useSettings();
 const refData = useRefData();
 
 const KINDS = [
@@ -54,16 +53,32 @@ async function load() {
 }
 onMounted(load);
 
-const filtered = computed(() => templates.value.filter((t) => (
-  (showInactive.value || t.active)
-  && (!familyFilter.value || t.family === familyFilter.value)
-  && (!kindFilter.value || t.kind === kindFilter.value)
-)));
+// Round order is the point: within a matching family+kind, round 1 always
+// sorts before round 2. family NULLS LAST mirrors the backend's own
+// family-specific-before-general precedence (routes/qc.js).
+const filtered = computed(() => templates.value
+  .filter((t) => (
+    (showInactive.value || t.active)
+    && (!familyFilter.value || t.family === familyFilter.value)
+    && (!kindFilter.value || t.kind === kindFilter.value)
+  ))
+  .sort((a, b) => {
+    // Family-agnostic (null) rows sort after every specific family, same
+    // NULLS LAST precedence as the backend uses when resolving a round's
+    // template (routes/qc.js) — this list reads in the same order a
+    // ticket's rounds would actually pick templates in.
+    if ((a.family || null) !== (b.family || null)) {
+      if (!a.family) return 1;
+      if (!b.family) return -1;
+      return a.family.localeCompare(b.family);
+    }
+    return a.kind.localeCompare(b.kind) || a.round_number - b.round_number;
+  }));
 
 // --- create --------------------------------------------------------------
 const showNew = ref(false);
 const blankForm = () => ({
-  name: '', family: '', kind: 'qc', tier_key: settings.active('qc_tier')[0]?.key || '',
+  name: '', family: '', kind: 'qc', round_number: 1,
 });
 const form = ref(blankForm());
 
@@ -76,13 +91,12 @@ async function createTemplate() {
   error.value = '';
   notice.value = '';
   if (!form.value.name.trim()) { error.value = 'Name is required'; return; }
-  if (!form.value.tier_key) { error.value = 'Rigor tier is required'; return; }
   try {
     const created = await api.post('/qc/templates', {
       name: form.value.name.trim(),
       family: form.value.family || null,
       kind: form.value.kind,
-      tier_key: form.value.tier_key,
+      round_number: Number(form.value.round_number) || 1,
       items: [],
     });
     showNew.value = false;
@@ -94,7 +108,7 @@ async function createTemplate() {
   }
 }
 
-// --- edit template's own fields (name/family/kind/tier), autosaved like ---
+// --- edit template's own fields (name/family/kind/round), autosaved like ---
 // --- Settings' other tables -----------------------------------------------
 async function updateField(t, patch) {
   error.value = '';
@@ -154,9 +168,10 @@ async function saveItems(t) {
       <div>
         <h1 style="margin-bottom: 4px">QC checklist templates</h1>
         <p class="muted small" style="margin: 0">
-          A template's items are what a tech checks off during a QC round or a
-          shipment pack-out. Give one a specific instrument type to have it show
-          up only for that type's tickets — leave it blank to apply to every type.
+          Every instrument type works through the same standardized round progression —
+          Round 1, Round 2, and so on, always in that order on a ticket. Give a round's
+          template a specific instrument type to have it show up only for that type;
+          leave it blank to apply to every type that doesn't have its own.
         </p>
       </div>
       <RouterLink class="btn small" :to="{ name: 'settings' }">← Settings</RouterLink>
@@ -166,27 +181,43 @@ async function saveItems(t) {
     <div v-if="notice" class="alert ok" style="margin-bottom: 16px">{{ notice }}</div>
 
     <div class="card" style="margin-bottom: 16px">
-      <div class="row">
-        <div class="field" style="margin: 0">
-          <label>Instrument type</label>
-          <select v-model="familyFilter" style="width: auto; min-width: 160px">
-            <option value="">All types</option>
-            <option v-for="f in refData.families" :key="f" :value="f">{{ f }}</option>
-          </select>
+      <div class="field" style="margin-bottom: 12px">
+        <label>Instrument type</label>
+        <div class="row">
+          <button
+            type="button" :class="familyFilter === '' ? 'primary' : 'small'"
+            @click="familyFilter = ''"
+          >All types</button>
+          <button
+            v-for="f in refData.families" :key="f" type="button"
+            :class="familyFilter === f ? 'primary' : 'small'"
+            @click="familyFilter = f"
+          >{{ f }}</button>
         </div>
-        <div class="field" style="margin: 0">
-          <label>Kind</label>
-          <select v-model="kindFilter" style="width: auto; min-width: 160px">
-            <option value="">All kinds</option>
-            <option v-for="[k, label] in KINDS" :key="k" :value="k">{{ label }}</option>
-          </select>
+      </div>
+
+      <div class="field" style="margin-bottom: 0">
+        <label>Category</label>
+        <div class="row">
+          <button
+            type="button" :class="kindFilter === '' ? 'primary' : 'small'"
+            @click="kindFilter = ''"
+          >All categories</button>
+          <button
+            v-for="[k, label] in KINDS" :key="k" type="button"
+            :class="kindFilter === k ? 'primary' : 'small'"
+            @click="kindFilter = k"
+          >{{ label }}</button>
         </div>
-        <label class="checkbox" style="margin-top: 18px">
+      </div>
+
+      <div class="row" style="margin-top: 14px">
+        <label class="checkbox">
           <input v-model="showInactive" type="checkbox" />
           <span class="small">Show retired</span>
         </label>
         <div class="spacer" />
-        <button class="small" style="margin-top: 18px" @click="showNew ? (showNew = false) : openNew()">
+        <button class="small" @click="showNew ? (showNew = false) : openNew()">
           {{ showNew ? 'Cancel' : '+ New template' }}
         </button>
       </div>
@@ -196,7 +227,7 @@ async function saveItems(t) {
       <div class="field-row" style="align-items: end">
         <div class="field" style="flex: 2; margin: 0">
           <label>Name *</label>
-          <input v-model="form.name" required placeholder="Rhodes — full restoration QC" />
+          <input v-model="form.name" required placeholder="Rhodes — round 1" />
         </div>
         <div class="field" style="margin: 0">
           <label>Instrument type</label>
@@ -206,18 +237,14 @@ async function saveItems(t) {
           </select>
         </div>
         <div class="field" style="margin: 0">
-          <label>Kind</label>
+          <label>Category</label>
           <select v-model="form.kind">
             <option v-for="[k, label] in KINDS" :key="k" :value="k">{{ label }}</option>
           </select>
         </div>
         <div class="field" style="margin: 0">
-          <label>Rigor tier *</label>
-          <select v-model="form.tier_key">
-            <option v-for="t in settings.active('qc_tier')" :key="t.key" :value="t.key">
-              {{ t.label }}
-            </option>
-          </select>
+          <label>Round *</label>
+          <input v-model="form.round_number" type="number" min="1" step="1" style="width: 90px" />
         </div>
         <div class="field" style="flex: none; margin: 0">
           <button class="primary" type="submit">Create</button>
@@ -245,11 +272,13 @@ async function saveItems(t) {
           <select :value="t.kind" @change="updateField(t, { kind: $event.target.value })">
             <option v-for="[k, label] in KINDS" :key="k" :value="k">{{ label }}</option>
           </select>
-          <select :value="t.tier_key" @change="updateField(t, { tier_key: $event.target.value })">
-            <option v-for="tier in settings.active('qc_tier')" :key="tier.key" :value="tier.key">
-              {{ tier.label }}
-            </option>
-          </select>
+          <span class="row" style="gap: 4px; flex: none">
+            <label class="small muted" style="margin: 0">Round</label>
+            <input
+              :value="t.round_number" type="number" min="1" step="1" style="width: 70px"
+              @change="updateField(t, { round_number: Number($event.target.value) || 1 })"
+            />
+          </span>
           <span :class="['pill', t.active ? 'green' : 'slate']">
             {{ t.active ? 'Active' : 'Retired' }}
           </span>

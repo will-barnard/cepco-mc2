@@ -16,11 +16,15 @@ const CATEGORIES = [
   'ticket_category',
   'ticket_status',
   'priority_tier',
-  'qc_tier',
   'tech_level',
   // Not a ticket enum — single-row shop-wide values (labor rate, etc.) that
   // shouldn't need a deploy to change.
   'shop_config',
+  // 'qc_tier' used to live here — retired in migration 021 (see
+  // routes/qc.js). Deliberately left out of CATEGORIES so a new one can't
+  // be created, but existing rows (retired, not deleted) still resolve()
+  // fine for historical qc_checks display, and listAll() still returns
+  // them since it groups by whatever category a row actually has.
 ];
 
 // Which ticket column each settings category backs — used to block deletion of

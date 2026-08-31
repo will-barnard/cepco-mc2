@@ -60,8 +60,11 @@ async function main() {
   // --- settings ------------------------------------------------------------
   const settings = await call('GET', '/api/settings');
   const statuses = settings.body.ticket_status || [];
-  check('all five settings categories are seeded',
-    ['ticket_category', 'ticket_status', 'priority_tier', 'qc_tier', 'tech_level']
+  // qc_tier used to be a fifth category here — retired in migration 021
+  // (routes/qc.js's standardized round progression replaced it), so a
+  // fresh seed never creates one at all.
+  check('all four settings categories are seeded',
+    ['ticket_category', 'ticket_status', 'priority_tier', 'tech_level']
       .every((c) => (settings.body[c] || []).length > 0),
     Object.keys(settings.body).join(','));
   check('historical statuses seeded (8)', statuses.length === 8, `got ${statuses.length}`);
@@ -167,7 +170,7 @@ async function main() {
   check('estimate variance is visible (11.5 actual vs 10 est)',
     Number(withHours.body.estimated_hours) === 10);
 
-  // --- QC gates invoicing --------------------------------------------------
+  // --- QC: standardized round progression, 2-reviewer sign-off (§021) -----
   const earlyInvoice = await call('POST', '/api/invoices', { ticket_id: tid });
   check('invoicing is blocked before QC passes', earlyInvoice.status === 400,
     JSON.stringify(earlyInvoice.body));
@@ -176,42 +179,52 @@ async function main() {
   check('wurlitzer QC templates seeded from the sheets', templates.body.length >= 2,
     `got ${templates.body.length}`);
 
-  const roundOne = await call('POST', '/api/qc/checks', {
-    ticket_id: tid,
-    tier_key: 'standard',
-    template_id: templates.body.find((t) => t.name.includes('Round 1')).id,
-  });
-  check('QC round started with checklist snapshot',
-    roundOne.status === 201 && roundOne.body.results.length === 17,
-    `${roundOne.body.results?.length} items`);
+  // No tier, no template picker — the backend always resolves the next
+  // round number and its standardized template for this ticket's
+  // instrument family (routes/qc.js). This is round 1, so it's Wurlitzer's
+  // "QC Round 1" template.
+  const roundOne = await call('POST', '/api/qc/checks', { ticket_id: tid });
+  check('QC round 1 auto-resolves the standardized Wurlitzer template',
+    roundOne.status === 201 && roundOne.body.round_number === 1 && roundOne.body.results.length === 17,
+    `round ${roundOne.body.round_number}, ${roundOne.body.results?.length} items`);
 
-  const earlySignOff = await call('POST', `/api/qc/checks/${roundOne.body.id}/sign-off`, { passed: true });
-  check('sign-off blocked while items are unchecked', earlySignOff.status === 400,
-    JSON.stringify(earlySignOff.body));
+  await call('PATCH', `/api/qc/checks/${roundOne.body.id}`, { notes: 'Round 1 looks good.' });
+  const signOffRound1 = await call('POST', `/api/qc/checks/${roundOne.body.id}/sign-off`, { passed: true });
+  check('round 1 signs off', signOffRound1.status === 200 && signOffRound1.body.check.passed);
+  check('one passing round is not enough on its own anymore (2 are required)',
+    signOffRound1.body.ticket_qc_passed === false && signOffRound1.body.rounds_passed === 1,
+    JSON.stringify(signOffRound1.body));
 
-  await call('PATCH', `/api/qc/checks/${roundOne.body.id}`, {
-    results: roundOne.body.results.map((r) => ({ ...r, checked: true })),
+  const stillBlocked = await call('POST', '/api/invoices', { ticket_id: tid });
+  check('invoicing still blocked after one round', stillBlocked.status === 400);
+
+  // Round 2 always follows round 1 (there's no way to ask for it first),
+  // and clearing QC needs a *different* reviewer to sign it off — sign
+  // this one off from a second employee's session.
+  const roundTwo = await call('POST', '/api/qc/checks', { ticket_id: tid });
+  check('round 2 auto-resolves the standardized "QC Final" template',
+    roundTwo.status === 201 && roundTwo.body.round_number === 2 && roundTwo.body.results.length === 19,
+    `round ${roundTwo.body.round_number}, ${roundTwo.body.results?.length} items`);
+
+  const qcAdminCookie = cookie;
+  await call('POST', '/api/employees', {
+    name: 'QC Reviewer Two', email: 'qc.reviewer.two@example.com',
+    password: 'reviewer-password-1', role: 'senior',
   });
-  const signOff = await call('POST', `/api/qc/checks/${roundOne.body.id}/sign-off`, { passed: true });
-  check('QC round signs off once complete', signOff.status === 200 && signOff.body.check.passed);
-  check('standard tier passes the ticket after one round',
-    signOff.body.ticket_qc_passed === true, JSON.stringify(signOff.body));
+  await call('POST', '/api/auth/login', {
+    email: 'qc.reviewer.two@example.com', password: 'reviewer-password-1',
+  });
+  const signOffRound2 = await call('POST', `/api/qc/checks/${roundTwo.body.id}/sign-off`, { passed: true });
+  cookie = qcAdminCookie; // back to the admin session for everything after this
+
+  check('a second, distinct reviewer\'s pass clears QC',
+    signOffRound2.body.ticket_qc_passed === true
+      && signOffRound2.body.rounds_passed === 2
+      && signOffRound2.body.distinct_reviewers === 2,
+    JSON.stringify(signOffRound2.body));
 
   const invoice = await call('POST', '/api/invoices', { ticket_id: tid, amount: 2000 });
   check('invoicing allowed after QC passes', invoice.status === 201, JSON.stringify(invoice.body));
-
-  // --- two-round tier (the Phase 2 rule, already enforced) -----------------
-  const ticket2 = await call('POST', '/api/tickets', {
-    title: 'Smoke test — perfectionist QC',
-    category_key: 'servicing', priority_key: 'custom_shop',
-  });
-  const p1 = await call('POST', '/api/qc/checks', { ticket_id: ticket2.body.id, tier_key: 'perfectionist' });
-  const p1Sign = await call('POST', `/api/qc/checks/${p1.body.id}/sign-off`, { passed: true });
-  check('perfectionist tier does NOT pass after a single round',
-    p1Sign.body.ticket_qc_passed === false
-      && p1Sign.body.rounds_required === 2
-      && p1Sign.body.distinct_reviewers_required === 2,
-    JSON.stringify(p1Sign.body));
 
   // --- status audit trail --------------------------------------------------
   await call('PATCH', `/api/tickets/${tid}`, { status_key: 'in_progress', status_note: 'Started work' });

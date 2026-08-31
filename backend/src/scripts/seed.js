@@ -47,12 +47,9 @@ const SETTINGS = [
   ['priority_tier', 'deep_dive', 'Deep Dive', 40, { min_hours: 10, max_hours: null }],
   ['priority_tier', 'custom_shop', 'Custom Shop', 50, { min_hours: 15, max_hours: null }],
 
-  // QC rigor tiers. Phase 1 ships single-round; Phase 2 flips required_rounds
-  // to 2 and require_distinct_reviewers to true — settings change, not a deploy.
-  ['qc_tier', 'standard', 'Standard Setup QC', 10,
-    { required_rounds: 1, require_distinct_reviewers: false }],
-  ['qc_tier', 'perfectionist', 'Perfectionist / Custom Shop QC', 20,
-    { required_rounds: 2, require_distinct_reviewers: true }],
+  // QC rigor tiers used to live here (retired — migration 021). Every
+  // ticket now follows the same standardized round progression instead of
+  // a per-tier rule; see backend/src/routes/qc.js.
 
   // Tech levels.
   ['tech_level', 'junior', 'Junior Tech', 10,
@@ -98,10 +95,14 @@ const item = (label, note = null) => ({ label, note });
 
 const QC_TEMPLATES = [
   {
+    // round_number 1 of 2 in Wurlitzer/qc's standardized progression — see
+    // migration 021. Always runs before "QC Final" below; routes/qc.js
+    // assigns round_number sequentially, so there's no way to start Final
+    // first.
     name: 'Wurlitzer — QC Round 1',
     family: 'wurlitzer',
-    tier_key: 'standard',
     kind: 'qc',
+    round_number: 1,
     items: [
       item('Tuning'), item('Voicing / Volume'), item('Key Bed Level'),
       item('Friction / Warping'), item('Lazy Dampers'), item('Damper Drop'),
@@ -112,10 +113,13 @@ const QC_TEMPLATES = [
     ],
   },
   {
+    // round_number 2 of 2 — the closing pass. Under the standardized rule
+    // (migration 021) both rounds must pass, signed off by two different
+    // people, before a Wurlitzer ticket clears QC.
     name: 'Wurlitzer — QC Final',
     family: 'wurlitzer',
-    tier_key: 'perfectionist',
     kind: 'qc',
+    round_number: 2,
     items: [
       item('Tuning'), item('Voicing / Tone'), item('Volume'),
       item('Key Bed', 'Squaring, leveling, cleaning'),
@@ -130,10 +134,12 @@ const QC_TEMPLATES = [
   {
     // Generalised from the Wurlitzer sheet (PLAN §7) — applies to any family
     // until a family-specific template is added, since family IS NULL matches all.
+    // Not part of the round progression (kind='shipping', not 'qc') — see
+    // routes/shipments.js, which reads this by kind alone.
     name: 'Shipping Checklist — General',
     family: null,
-    tier_key: 'standard',
     kind: 'shipping',
+    round_number: 1,
     items: [
       item('Legs'), item('Sustain Pedal / Cable'),
       item('Accessories (Music Stand, Bench)'), item('IEC or Ext. Cable'),
@@ -142,17 +148,36 @@ const QC_TEMPLATES = [
     ],
   },
   {
-    // Baseline QC for families without their own sheet yet. Derived from the
-    // Wurlitzer round-1 list, trimmed to the checks that generalise.
+    // Round 1 of 2 for families without their own sheet yet. Derived from
+    // the Wurlitzer round-1 list, trimmed to the checks that generalise.
     name: 'General Setup QC',
     family: null,
-    tier_key: 'standard',
     kind: 'qc',
+    round_number: 1,
     items: [
       item('Tuning'), item('Voicing / Tone'), item('Key Bed Level'),
       item('Action Regulation'), item('Dampers'), item('Hammers / Tips'),
       item('Sustain Pedal / Cable'), item('Electronics / Output'),
       item('Grounding & Shielding'), item('Cosmetics'), item('Legs / Hardware'),
+    ],
+  },
+  {
+    // Round 2 of 2 for families without their own sheet yet — every family
+    // needs a closing round under the standardized rule (migration 021),
+    // not just Wurlitzer, so this is the family-agnostic counterpart to
+    // "Wurlitzer — QC Final" above until a shop lead writes a family-
+    // specific one from Settings -> QC checklist templates.
+    name: 'General Final QC',
+    family: null,
+    kind: 'qc',
+    round_number: 2,
+    items: [
+      item('Tuning'), item('Voicing / Tone'), item('Action Regulation'),
+      item('Dampers', 'Re-check after round 1 adjustments'),
+      item('Hammers / Tips'), item('Sustain Pedal / Cable'),
+      item('Electronics / Output'), item('Grounding & Shielding'),
+      item('Cosmetics', 'Customer-ready condition'), item('Legs / Hardware'),
+      item('Final Playtest'),
     ],
   },
 ];
@@ -186,9 +211,9 @@ async function seedTemplates() {
     if (rows.length) continue;
     // eslint-disable-next-line no-await-in-loop
     await query(
-      `INSERT INTO qc_templates (name, family, tier_key, kind, items)
+      `INSERT INTO qc_templates (name, family, kind, round_number, items)
        VALUES ($1,$2,$3,$4,$5)`,
-      [t.name, t.family, t.tier_key, t.kind, JSON.stringify(t.items)],
+      [t.name, t.family, t.kind, t.round_number, JSON.stringify(t.items)],
     );
     inserted += 1;
   }

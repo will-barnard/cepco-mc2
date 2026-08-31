@@ -109,7 +109,7 @@ async function createInvoice() {
 async function archive() {
   if (!confirm('Archive this ticket? It stays searchable under "Show archived".')) return;
   await patch({ archived: true });
-  router.push({ name: 'tickets' });
+  router.push({ name: 'queue' });
 }
 
 const when = (ts) => new Date(ts).toLocaleString();

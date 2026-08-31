@@ -15,11 +15,13 @@ import { useSettings, useRefData } from '../stores';
 const settings = useSettings();
 const refData = useRefData();
 
+// QC rigor tiers used to be a category here — retired in migration 021.
+// Every ticket now follows the same standardized round progression
+// instead (Settings -> QC checklist templates handles that content).
 const CATEGORIES = [
   ['ticket_category', 'Ticket categories'],
   ['ticket_status', 'Ticket statuses'],
   ['priority_tier', 'Priority tiers'],
-  ['qc_tier', 'QC rigor tiers'],
   ['tech_level', 'Tech levels'],
 ];
 
@@ -203,30 +205,6 @@ async function toggleStatusNotes(row) {
   try {
     await api.patch(`/settings/${row.id}`, {
       meta: { ...row.meta, show_status_notes: !row.meta.show_status_notes },
-    });
-    await refresh();
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
-async function setRequiredRounds(row, value) {
-  error.value = '';
-  try {
-    await api.patch(`/settings/${row.id}`, {
-      meta: { ...row.meta, required_rounds: Number(value) },
-    });
-    await refresh();
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
-async function toggleDistinct(row) {
-  error.value = '';
-  try {
-    await api.patch(`/settings/${row.id}`, {
-      meta: { ...row.meta, require_distinct_reviewers: !row.meta.require_distinct_reviewers },
     });
     await refresh();
   } catch (err) {
@@ -420,8 +398,6 @@ onMounted(refresh);
             <thead>
               <tr>
                 <th>Label</th><th>Key</th>
-                <th v-if="category === 'qc_tier'">Rounds required</th>
-                <th v-if="category === 'qc_tier'">Two reviewers</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
@@ -439,22 +415,6 @@ onMounted(refresh);
                   />
                 </td>
                 <td><code class="muted small">{{ row.key }}</code></td>
-
-                <td v-if="category === 'qc_tier'">
-                  <input
-                    type="number" min="1" max="5" style="width: 80px"
-                    :value="row.meta.required_rounds || 1"
-                    @change="setRequiredRounds(row, $event.target.value)"
-                  />
-                </td>
-                <td v-if="category === 'qc_tier'">
-                  <label class="checkbox">
-                    <input
-                      type="checkbox" :checked="row.meta.require_distinct_reviewers"
-                      @change="toggleDistinct(row)"
-                    />
-                  </label>
-                </td>
 
                 <td v-if="category === 'ticket_category'">
                   <select

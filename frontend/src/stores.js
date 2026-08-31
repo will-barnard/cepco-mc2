@@ -63,7 +63,6 @@ export const useSettings = defineStore('settings', {
     categoriesForQueuePicker: (s) => (s.data.ticket_category || [])
       .filter((r) => !r.retired && !r.meta?.hide_from_category_queue),
     priorities: (s) => s.data.priority_tier || [],
-    qcTiers: (s) => s.data.qc_tier || [],
     techLevels: (s) => s.data.tech_level || [],
     active: (s) => (category) => (s.data[category] || []).filter((r) => !r.retired),
     // Ticket statuses, narrowed to whichever ones a given ticket_category is

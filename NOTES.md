@@ -936,6 +936,45 @@ ticket still joins the back of the tech's queue the same as always
 server-side (unused now, but harmless) rather than removed, in case that
 capability is wanted back later.
 
+### 2.27 Tickets and Queue merge into one page, defaulting to "All instruments"
+
+The separate Tickets page (`TicketsView.vue`, filtering/searching) and Queue
+page (`QueueView.vue`, drag-reorder) are now one page at `/queue` —
+`TicketsView.vue` is gone, `/tickets` redirects to `/queue` (keeping its
+query string, so e.g. DashboardView's status-count links still land on a
+filtered list), and the topbar's separate "Tickets" link is gone too
+(`App.vue`); "New ticket" moved into the merged page's header. `router.js`'s
+`ticket-new`/`ticket`/quote/status-report routes are untouched.
+
+The merged page defaults to "All instruments" (a new button, alongside the
+existing instrument-type/category ones) rather than the first instrument
+family the Queue page used to pre-select — same reasoning as always leading
+with the primary axis (§2.26), just inverted now that browsing everything
+is the more common first landing than any one queue.
+
+The old Tickets page's entire filter bar (search, status, category,
+priority, instrument, tech, sort, hide-statuses, archived, "Clear filters")
+now lives below the instrument/category buttons, wired to the exact same
+`filters.category`/`filters.instrument_family` the buttons set — picking
+either one clears the other, so there's still only ever one queue picked at
+a time. Filters stay mirrored into the URL, same as the old Tickets page.
+
+Drag-to-reorder only ever worked against one *complete* queue — `POST
+/tickets/reorder-queue` checks the dragged status section's full membership
+against what the server has — so now that the filter bar can narrow a queue
+down (or "All instruments" can remove the notion of a queue entirely),
+`QueueView.vue`'s new `canReorder` gates dragging off whenever that
+completeness isn't guaranteed: search text, a priority filter, or "Show
+archived" can each hide a ticket that legitimately belongs in the section
+being dragged, and picking both an instrument and a category (or an
+explicit "Sort by" override) isn't a real single-axis queue to begin with.
+The single-status filter and "Hide statuses" are fine, since both only ever
+drop *whole* status sections rather than part of one. Whenever dragging is
+off, the list falls back to `TicketTable.vue` (the old Tickets page's
+table), status-grouped when the backend is still returning one queue's
+order (`isQueueOrdered`) and flat otherwise — matching the old Tickets
+page's plain view for the true "browse everything, unfiltered" case.
+
 ---
 
 ## 4. Suggested first moves after deploy

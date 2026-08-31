@@ -1,12 +1,16 @@
 <script setup>
 /**
- * QC rounds (PLAN §6). Phase 1 runs one round at Standard tier; the same UI
- * covers Phase 2's two-round / two-reviewer requirement, because the rule lives
- * in the qc_tier settings row rather than in this component.
+ * QC rounds (PLAN §6, migration 021). Rigor tiers are retired: every
+ * ticket now follows the same standardized round progression and the same
+ * fixed pass rule (2 rounds, signed off by 2 different reviewers — see
+ * routes/qc.js's REQUIRED_ROUNDS/REQUIRE_DISTINCT_REVIEWERS). There's
+ * nothing to pick when starting a round — the backend always resolves the
+ * next round number and its standardized template for this ticket's
+ * instrument family, so "Start round N" is the only control.
  */
 import { ref, computed, onMounted } from 'vue';
 import api from '../api';
-import { useAuth, useSettings } from '../stores';
+import { useAuth } from '../stores';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -14,33 +18,30 @@ const props = defineProps({
 const emit = defineEmits(['changed']);
 
 const auth = useAuth();
-const settings = useSettings();
 
-const templates = ref([]);
-const tierKey = ref('standard');
-const templateId = ref('');
 const error = ref('');
 const busy = ref(false);
 
-const checks = computed(() => props.ticket.qc_checks || []);
+// Checklist items are reference-only, not tracked completion state (see
+// NOTES.md — that was deliberately removed in favor of the notes field
+// below). Clicking one just gives it a focus/active highlight for this
+// viewing session, nothing saved — a plain, local Set of "round id ::
+// item index" strings, reset on reload like any other transient UI state.
+const activeItems = ref(new Set());
+function toggleItem(checkId, index) {
+  const key = `${checkId}:${index}`;
+  const next = new Set(activeItems.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  activeItems.value = next;
+}
 
-onMounted(async () => {
-  templates.value = await api.get('/qc/templates', {
-    family: props.ticket.instrument_family || '',
-    kind: 'qc',
-  });
-  if (templates.value.length) templateId.value = templates.value[0].id;
-});
+const checks = computed(() => props.ticket.qc_checks || []);
 
 async function startRound() {
   error.value = '';
   busy.value = true;
   try {
-    await api.post('/qc/checks', {
-      ticket_id: props.ticket.id,
-      tier_key: tierKey.value,
-      template_id: templateId.value || null,
-    });
+    await api.post('/qc/checks', { ticket_id: props.ticket.id });
     emit('changed');
   } catch (err) {
     error.value = err.message;
@@ -69,32 +70,33 @@ async function signOff(check, passed) {
     }
     emit('changed');
   } catch (err) {
-    // (No more "N items still incomplete" case — sign-off no longer gates
-    // on checklist completion now that items aren't checkable.)
     error.value = err.message;
   } finally {
     busy.value = false;
   }
 }
-
 </script>
 
 <template>
   <div class="card">
-    <div class="row" style="margin-bottom: 12px">
+    <div class="row" style="margin-bottom: 4px">
       <h2 style="margin: 0">Quality control</h2>
       <div class="spacer" />
       <span v-if="ticket.qc_passed_at" class="pill green">QC passed</span>
       <span v-else-if="!ticket.qc_required" class="pill slate">QC not required</span>
       <span v-else class="pill amber">QC outstanding</span>
     </div>
+    <p class="muted small" style="margin: 0 0 12px">
+      Rounds always happen in order — Round 2 can't start before Round 1 is open, and each
+      round's checklist is standardized for this instrument type. Every ticket needs 2 rounds
+      passed, signed off by 2 different reviewers, to clear QC.
+    </p>
 
     <div v-if="error" class="alert" style="margin-bottom: 12px">{{ error }}</div>
 
     <div v-for="check in checks" :key="check.id" class="card tight" style="margin-bottom: 12px">
       <div class="row">
         <strong>Round {{ check.round_number }}</strong>
-        <span class="tag">{{ check.tier_label || check.tier_key }}</span>
         <span class="muted small">{{ check.results.length }} item(s)</span>
         <div class="spacer" />
         <span v-if="check.signed_off_at" :class="['pill', check.passed ? 'green' : 'red']">
@@ -102,14 +104,22 @@ async function signOff(check, passed) {
         </span>
       </div>
 
-      <!-- Reference checklist — items are display-only now (no per-item
-           checkboxes); the tech records what they actually found in the
-           notes field below instead. Laid out in three columns so a
-           longer template doesn't turn into a tall scroll. -->
+      <!-- Reference checklist — items carry no persisted completion state
+           (see NOTES.md); a tech records what they actually found in the
+           notes field below instead. Each item is a real, focusable
+           button rather than static text, so it's clickable/tappable and
+           keyboard-navigable while working down the list — clicking one
+           just highlights it for this viewing session. -->
       <ul class="qc-checklist" style="margin-top: 10px">
         <li v-for="(r, i) in check.results" :key="i">
-          {{ r.label }}
-          <span v-if="r.note" class="item-note">{{ r.note }}</span>
+          <button
+            type="button"
+            :class="['qc-item', { active: activeItems.has(`${check.id}:${i}`) }]"
+            @click="toggleItem(check.id, i)"
+          >
+            {{ r.label }}
+            <span v-if="r.note" class="item-note">{{ r.note }}</span>
+          </button>
         </li>
       </ul>
 
@@ -134,25 +144,31 @@ async function signOff(check, passed) {
     </div>
 
     <div class="card tight">
-      <h3>Start a new QC round</h3>
-      <div class="field-row">
-        <div>
-          <label>Rigor tier</label>
-          <select v-model="tierKey">
-            <option v-for="t in settings.active('qc_tier')" :key="t.key" :value="t.key">
-              {{ t.label }}
-            </option>
-          </select>
-        </div>
-        <div>
-          <label>Checklist template</label>
-          <select v-model="templateId">
-            <option value="">— blank —</option>
-            <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
-          </select>
-        </div>
+      <div class="row">
+        <h3 style="margin: 0">Round {{ checks.length + 1 }}</h3>
+        <div class="spacer" />
+        <button :disabled="busy" @click="startRound">Start round {{ checks.length + 1 }}</button>
       </div>
-      <button :disabled="busy" @click="startRound">Start round {{ checks.length + 1 }}</button>
+      <p class="muted small" style="margin: 8px 0 0">
+        Pulls whatever checklist is standardized for round {{ checks.length + 1 }} on this
+        instrument type (Settings → QC checklist templates) — blank if none is set up yet.
+      </p>
     </div>
   </div>
 </template>
+
+<style scoped>
+.qc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  min-height: 0;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+}
+.qc-item:hover { background: var(--surface-2); }
+.qc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.qc-item.active { background: rgba(212, 129, 63, 0.12); border-color: var(--accent-dim); }
+</style>
