@@ -21,13 +21,29 @@
 -- that keyed off it) depends on migration 028's is_shipping column having
 -- already run.
 
+-- Every INSERT below is ON CONFLICT (category, key) DO NOTHING (matching
+-- 002_labor_rate_setting.sql's precedent): settings rows are admin-editable
+-- at any time (README "Configurable by admin, not by deploy"), so by the
+-- time this deploys, staff may already have hand-created a category/tier
+-- with the exact slug this packet formalizes (create() derives the key by
+-- slugifying the label the same way this file spells it out, e.g. "Custom
+-- Shop" -> 'custom_shop', "Repairs & Restoration" -> 'repairs_restoration').
+-- A plain INSERT then hits settings_category_key_key and crash-loops the
+-- backend on every boot. DO NOTHING means an admin-created row wins as-is
+-- (label/sort_order/meta untouched) instead of the migration erroring out
+-- or silently overwriting whatever they set up; if that leaves a row
+-- missing the parent_key/allow_free_text meta this packet intends (e.g.
+-- Custom Shop not actually nested under Repairs & Restoration), fix that
+-- one row by hand in /settings after this deploy.
+
 -- ---------------------------------------------------------------------
 -- Ticket categories
 -- ---------------------------------------------------------------------
 
 -- New top-level "Repairs & Restoration" — the merge target for Servicing.
 INSERT INTO settings (category, key, label, sort_order, meta)
-VALUES ('ticket_category', 'repairs_restoration', 'Repairs & Restoration', 30, '{}'::jsonb);
+VALUES ('ticket_category', 'repairs_restoration', 'Repairs & Restoration', 30, '{}'::jsonb)
+ON CONFLICT (category, key) DO NOTHING;
 
 -- Servicing retires into it; every ticket sitting on the old key moves
 -- onto the new one (the boss's call — see header).
@@ -58,7 +74,8 @@ UPDATE settings
 -- row of the same name retires in the priority-tier block below.
 INSERT INTO settings (category, key, label, sort_order, meta)
 VALUES ('ticket_category', 'custom_shop', 'Custom Shop', 20,
-        jsonb_build_object('parent_key', 'repairs_restoration'));
+        jsonb_build_object('parent_key', 'repairs_restoration'))
+ON CONFLICT (category, key) DO NOTHING;
 
 -- The legacy standalone "Shipping" category (distinct from "Orders &
 -- Shipping", which stays) is safe to retire now that migration 028 gave
@@ -72,7 +89,8 @@ UPDATE settings SET retired = TRUE WHERE category = 'ticket_category' AND key = 
 -- New top-level categories.
 INSERT INTO settings (category, key, label, sort_order, meta) VALUES
   ('ticket_category', 'housekeeping', 'Housekeeping', 40, '{}'::jsonb),
-  ('ticket_category', 'sidequests', 'SideQuests', 50, '{}'::jsonb);
+  ('ticket_category', 'sidequests', 'SideQuests', 50, '{}'::jsonb)
+ON CONFLICT (category, key) DO NOTHING;
 
 -- N3: SideQuests' four children. "Other" takes a typed name instead of a
 -- fixed label (meta.allow_free_text — see resolveSubcategory() in
@@ -85,7 +103,8 @@ INSERT INTO settings (category, key, label, sort_order, meta) VALUES
   ('ticket_category', 'sidequest_outreach', 'Outreach', 30,
      jsonb_build_object('parent_key', 'sidequests')),
   ('ticket_category', 'sidequest_other', 'Other', 40,
-     jsonb_build_object('parent_key', 'sidequests', 'allow_free_text', true));
+     jsonb_build_object('parent_key', 'sidequests', 'allow_free_text', true))
+ON CONFLICT (category, key) DO NOTHING;
 
 -- A ticket_status row's meta.excluded_categories had exactly one member,
 -- ever: 'shipping'. Now that shipping sub-tickets are identified by
@@ -122,4 +141,5 @@ UPDATE settings SET retired = TRUE
 INSERT INTO settings (category, key, label, sort_order, meta) VALUES
   ('priority_tier', 'expedited_sos', 'Expedited / SOS', 10, '{}'::jsonb),
   ('priority_tier', 'standard_priority', 'Standard Priority', 20, '{}'::jsonb),
-  ('priority_tier', 'low_priority', 'Low Priority', 30, '{}'::jsonb);
+  ('priority_tier', 'low_priority', 'Low Priority', 30, '{}'::jsonb)
+ON CONFLICT (category, key) DO NOTHING;
