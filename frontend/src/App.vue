@@ -14,7 +14,7 @@ const route = useRoute();
 
 // Mobile nav: the topbar's nav + account row collapse behind a hamburger
 // button under the .topbar-collapse breakpoint (styles.css) — there are too
-// many nav links (10) plus the account row to fit a phone width, so below
+// many nav links (11) plus the account row to fit a phone width, so below
 // that width they render as a stacked panel instead of the desktop's single
 // scrollable-if-needed row. headerEl backs the click-outside handler below.
 const mobileMenuOpen = ref(false);
@@ -108,6 +108,7 @@ async function signOut() {
         <RouterLink to="/tickets">Tickets</RouterLink>
         <RouterLink to="/queue">Queue</RouterLink>
         <RouterLink to="/estimates">Estimates</RouterLink>
+        <RouterLink to="/status-reports">Status Reports</RouterLink>
         <RouterLink to="/customers">Customers</RouterLink>
         <RouterLink to="/fleet">Fleet</RouterLink>
         <RouterLink to="/inventory">Inventory</RouterLink>

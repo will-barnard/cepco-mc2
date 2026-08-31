@@ -47,6 +47,8 @@ app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/estimates', require('./routes/estimates'));
 app.use('/api/quotes', require('./routes/quotes'));
 app.use('/api/public/quotes', require('./routes/publicQuotes'));
+app.use('/api/status-reports', require('./routes/statusReports'));
+app.use('/api/public/status-reports', require('./routes/publicStatusReports'));
 app.use('/api/procedures', require('./routes/procedures'));
 app.use('/api/hours', require('./routes/hours'));
 app.use('/api/qc', require('./routes/qc'));

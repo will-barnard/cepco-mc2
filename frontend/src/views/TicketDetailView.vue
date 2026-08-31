@@ -33,6 +33,8 @@ const savingNotes = ref(false);
 const serviceDoneDraft = ref('');
 const serviceNeededDraft = ref('');
 const savingStatusNotes = ref(false);
+const statusReport = ref(null);
+const generatingReport = ref(false);
 
 async function load() {
   loading.value = true;
@@ -41,6 +43,8 @@ async function load() {
     notesDraft.value = ticket.value.notes || '';
     serviceDoneDraft.value = ticket.value.service_done_notes || '';
     serviceNeededDraft.value = ticket.value.service_needed_notes || '';
+    const reports = await api.get('/status-reports', { ticket_id: props.id });
+    statusReport.value = reports[0] || null;
   } finally {
     loading.value = false;
   }
@@ -77,6 +81,19 @@ async function saveStatusNotes() {
     service_needed_notes: serviceNeededDraft.value,
   });
   savingStatusNotes.value = false;
+}
+
+async function generateReport() {
+  generatingReport.value = true;
+  error.value = '';
+  try {
+    statusReport.value = await api.post('/status-reports', { ticket_id: ticket.value.id });
+    router.push({ name: 'status-report', params: { id: statusReport.value.id } });
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    generatingReport.value = false;
+  }
 }
 
 async function createInvoice() {
@@ -284,6 +301,35 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
       <div class="stack">
         <TicketQc v-if="!isShipping" :ticket="ticket" @changed="load" />
         <TicketPhotos :ticket-id="ticket.id" />
+
+        <div class="card">
+          <div class="row" style="margin-bottom: 12px">
+            <h2 style="margin: 0">Customer status report</h2>
+          </div>
+          <div v-if="!statusReport" class="row">
+            <p class="muted small" style="margin: 0; flex: 1">
+              Pulls the status notes and photos above into a report you can email the customer.
+            </p>
+            <button class="small" :disabled="generatingReport" @click="generateReport">
+              {{ generatingReport ? 'Generating…' : 'Generate status report' }}
+            </button>
+          </div>
+          <div v-else class="row">
+            <span :class="['pill', statusReport.status === 'sent' ? 'green' : 'slate']">
+              {{ statusReport.status === 'sent' ? 'Sent' : 'Draft' }}
+            </span>
+            <span v-if="statusReport.sent_at" class="muted small">
+              Sent {{ new Date(statusReport.sent_at).toLocaleString() }}
+            </span>
+            <span v-if="statusReport.viewed_at" class="muted small">
+              · Viewed {{ new Date(statusReport.viewed_at).toLocaleString() }}
+            </span>
+            <div class="spacer" />
+            <RouterLink class="btn small" :to="{ name: 'status-report', params: { id: statusReport.id } }">
+              View report →
+            </RouterLink>
+          </div>
+        </div>
 
         <div v-if="!isShipping" class="card">
           <div class="row" style="margin-bottom: 12px">

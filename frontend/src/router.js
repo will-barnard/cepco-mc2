@@ -11,6 +11,11 @@ const routes = [
   { path: '/estimates', name: 'estimates', component: () => import('./views/EstimatesView.vue') },
   { path: '/estimates/new', name: 'estimate-new', component: () => import('./views/EstimateNewView.vue') },
   { path: '/estimates/:id', name: 'estimate', component: () => import('./views/EstimateDetailView.vue'), props: true },
+  { path: '/status-reports', name: 'status-reports', component: () => import('./views/StatusReportsView.vue') },
+  {
+    path: '/status-reports/:id', name: 'status-report',
+    component: () => import('./views/StatusReportDetailView.vue'), props: true,
+  },
   { path: '/customers', name: 'customers', component: () => import('./views/CustomersView.vue') },
   { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
   { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryRestorationsView.vue') },
@@ -34,6 +39,14 @@ const routes = [
   {
     path: '/quote/:token', name: 'quote-confirm',
     component: () => import('./views/QuoteConfirmView.vue'),
+    props: true, meta: { public: true, alwaysPublic: true },
+  },
+  // Public: opened from the "View full status report" link in a status
+  // report email (backend/src/templates/statusReportEmail.js). Same
+  // alwaysPublic reasoning as /quote/:token above.
+  {
+    path: '/status-report/:token', name: 'status-report-view',
+    component: () => import('./views/StatusReportPublicView.vue'),
     props: true, meta: { public: true, alwaysPublic: true },
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
