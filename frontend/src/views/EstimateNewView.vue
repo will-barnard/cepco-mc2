@@ -28,10 +28,10 @@ const busy = ref(false);
 
 const title = ref('');
 // Blank until onMounted resolves a real default from Settings (N4a) —
-// hardcoding 'servicing'/'standard_setup' here would leave the picker
-// pointed at a value Settings can retire at any time (both are on the
-// chopping block per the boss list's category/priority reshuffle), same
-// issue TicketNewView.vue had.
+// hardcoding either here would leave the picker pointed at a value
+// Settings can retire at any time, same issue TicketNewView.vue had. Both
+// actually did retire (N2b/N4b): 'servicing' is now 'repairs_restoration'
+// and 'standard_setup' is now 'standard_priority', below.
 const categoryKey = ref('');
 const priorityKey = ref('');
 const notes = ref('');
@@ -65,10 +65,10 @@ onMounted(async () => {
   // Prefer the historical default if it's still active; otherwise fall
   // back to whatever sorts first (N4a — same reasoning as TicketNewView.vue).
   const activeCategories = settings.active('ticket_category');
-  categoryKey.value = activeCategories.find((c) => c.key === 'servicing')?.key
+  categoryKey.value = activeCategories.find((c) => c.key === 'repairs_restoration')?.key
     || activeCategories[0]?.key || '';
   const activePriorities = settings.active('priority_tier');
-  priorityKey.value = activePriorities.find((p) => p.key === 'standard_setup')?.key
+  priorityKey.value = activePriorities.find((p) => p.key === 'standard_priority')?.key
     || activePriorities[0]?.key || '';
 });
 

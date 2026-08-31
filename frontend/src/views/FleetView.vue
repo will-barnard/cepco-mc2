@@ -34,8 +34,11 @@ async function load() {
 /** Spin up a restoration ticket against a fleet instrument. Prefers the
  * historical category/priority if Settings still has them active, else
  * falls back to whatever sorts first — same "don't assume a key survives"
- * reasoning as TicketNewView.vue (N4a; 'inventory_restoration' is on the
- * chopping block per the boss list's category reshuffle). */
+ * reasoning as TicketNewView.vue (N4a). 'inventory_restoration' itself
+ * survived the N2b reshuffle (it's now a sub-category of Repairs &
+ * Restoration rather than retiring — see migration 029), so this key is
+ * unchanged; 'standard_setup' didn't survive N4b's priority-tier
+ * replacement, so that one now prefers 'standard_priority'. */
 async function createTicket(instrument) {
   error.value = '';
   try {
@@ -43,7 +46,7 @@ async function createTicket(instrument) {
     const categoryKey = activeCategories.find((c) => c.key === 'inventory_restoration')?.key
       || activeCategories[0]?.key;
     const activePriorities = settings.active('priority_tier');
-    const priorityKey = activePriorities.find((p) => p.key === 'standard_setup')?.key
+    const priorityKey = activePriorities.find((p) => p.key === 'standard_priority')?.key
       || activePriorities[0]?.key;
     const ticket = await api.post('/tickets', {
       title: `Fleet — ${instrument.model || instrument.family}`,

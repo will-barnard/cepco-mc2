@@ -19,7 +19,7 @@ router.use(requireAuth);
 // Preferred, not guaranteed — Settings can retire it (N4a), so it goes
 // through settings.defaultKeyPreferring() below rather than straight to
 // resolveActive(). Same for the category key just below.
-const PREFERRED_PRIORITY_KEY = 'standard_setup';
+const PREFERRED_PRIORITY_KEY = 'standard_priority'; // N4b replaced the old tiers
 const PREFERRED_CATEGORY_KEY = 'inventory_restoration';
 
 function validPrice(value) {

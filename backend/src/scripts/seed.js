@@ -18,16 +18,54 @@ const config = require('../config');
 // Configurable enums (PLAN §4, §8)
 // ---------------------------------------------------------------------------
 const SETTINGS = [
-  // The five top-level ticket categories.
+  // Ticket categories. 'daily_todo' and 'orders_shipping' are the original
+  // two untouched by the N2b reshuffle. 'servicing' and the standalone
+  // 'shipping' (distinct from orders_shipping) retired in migration 029 —
+  // left out of this array entirely, same as qc_tier after migration 021,
+  // so a fresh database doesn't recreate them; existing databases got them
+  // retired-not-deleted by that migration, still resolvable for history.
+  // One accepted gap from removing them here: backend/src/scripts/
+  // importCsv.js's historical Wurlitzer/Rhodes/etc. importer still
+  // references 'servicing'/'shipping'/the old priority-tier keys by name
+  // and would fail against a brand-new database that never had them — it's
+  // a one-time tool for the original spreadsheet migration, already run
+  // against production, and not expected to run again.
   ['ticket_category', 'daily_todo', "Daily To-Do's", 10, {}],
   ['ticket_category', 'orders_shipping', 'Orders & Shipping', 20, {}],
-  ['ticket_category', 'servicing', 'Servicing', 30, {}],
-  ['ticket_category', 'inventory_restoration', 'Inventory Restorations', 40, { internal_only: true }],
-  ['ticket_category', 'shipping', 'Shipping', 50, {}],
+  // Repairs & Restoration (N2b) — the merge target for the old Servicing
+  // category.
+  ['ticket_category', 'repairs_restoration', 'Repairs & Restoration', 30, {}],
+  // Inventory Restorations survives the reshuffle as a *child* of Repairs
+  // & Restoration rather than retiring into the flat merge like Servicing
+  // did — frontend/src/views/InventoryRestorationsView.vue depends on this
+  // exact key for its own dedicated "instruments we bought to flip" queue
+  // (a finding put back to the boss separately; see migration 029).
+  ['ticket_category', 'inventory_restoration', 'Inventory Restorations', 10,
+    { internal_only: true, parent_key: 'repairs_restoration' }],
+  // Custom Shop (N2b) — used to be a priority tier (see the retired
+  // priority_tier list below); now it's a sub-category of Repairs &
+  // Restoration instead, since a job's type and its urgency are different
+  // axes.
+  ['ticket_category', 'custom_shop', 'Custom Shop', 20, { parent_key: 'repairs_restoration' }],
+  ['ticket_category', 'housekeeping', 'Housekeeping', 40, {}],
+  ['ticket_category', 'sidequests', 'SideQuests', 50, {}],
+  // N3: SideQuests' four children. "Other" takes a typed name instead of a
+  // fixed label (meta.allow_free_text — see resolveSubcategory() in
+  // routes/tickets.js, and the parallel parts_orders.vendor_other / P3).
+  ['ticket_category', 'sidequest_hunt', 'Hunt', 10, { parent_key: 'sidequests' }],
+  ['ticket_category', 'sidequest_rnd', 'R&D', 20, { parent_key: 'sidequests' }],
+  ['ticket_category', 'sidequest_outreach', 'Outreach', 30, { parent_key: 'sidequests' }],
+  ['ticket_category', 'sidequest_other', 'Other', 40,
+    { parent_key: 'sidequests', allow_free_text: true }],
 
   // Statuses, seeded from the values actually present in the sheets.
+  // excluded_for_shipping (migration 029) replaced excluded_categories:
+  // ['shipping'] — its only-ever member — once shipping sub-tickets became
+  // identified by tickets.is_shipping (migration 028) instead of a
+  // dedicated category. See backend/src/services/settings.js's
+  // statusAppliesToCategory.
   ['ticket_status', 'reservation', 'Reservation', 10,
-    { color: 'slate', excluded_categories: ['shipping'] }],
+    { color: 'slate', excluded_for_shipping: true }],
   ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate' }],
   // unlocks_tasks (migration 022, NOTES.md §2.28): the tech dashboard's
   // "My tasks" section only ever surfaces tasks belonging to a ticket
@@ -35,21 +73,24 @@ const SETTINGS = [
   // from here on (Settings -> Ticket statuses), not hardcoded to this key.
   ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue', unlocks_tasks: true }],
   ['ticket_status', 'qc', 'QC', 40,
-    { color: 'violet', excluded_categories: ['shipping'] }],
+    { color: 'violet', excluded_for_shipping: true }],
   ['ticket_status', 'invoice_sent', 'Invoice Sent', 50,
-    { color: 'amber', excluded_categories: ['shipping'] }],
+    { color: 'amber', excluded_for_shipping: true }],
   ['ticket_status', 'invoice_paid', 'Invoice Paid', 60,
-    { color: 'green', excluded_categories: ['shipping'] }],
+    { color: 'green', excluded_for_shipping: true }],
   ['ticket_status', 'done', 'Done', 70, { color: 'green', terminal: true }],
   ['ticket_status', 'on_hold', 'On Hold', 80,
-    { color: 'red', excluded_categories: ['shipping'] }],
+    { color: 'red', excluded_for_shipping: true }],
 
-  // Priority tiers, with the hour ranges from the sheet section headers.
-  ['priority_tier', 'daily_todo', 'Daily To-Do', 10, { min_hours: 0, max_hours: 1 }],
-  ['priority_tier', 'expedited', 'Expedited / Quick Setup', 20, { min_hours: 3, max_hours: 6 }],
-  ['priority_tier', 'standard_setup', 'Standard Setup', 30, { min_hours: 7, max_hours: 15 }],
-  ['priority_tier', 'deep_dive', 'Deep Dive', 40, { min_hours: 10, max_hours: null }],
-  ['priority_tier', 'custom_shop', 'Custom Shop', 50, { min_hours: 15, max_hours: null }],
+  // Priority tiers (N4b). The old sheet-inherited tiers (with their
+  // min_hours/max_hours job-size bands) retired in migration 029, replaced
+  // by three urgency-based tiers with no hour bands — left out of this
+  // array entirely, same reasoning as the retired categories above.
+  // Expedited sorts first: sort_order here drives the dashboard's task
+  // ranking (routes/tickets.js's default ORDER BY on pr.sort_order).
+  ['priority_tier', 'expedited_sos', 'Expedited / SOS', 10, {}],
+  ['priority_tier', 'standard_priority', 'Standard Priority', 20, {}],
+  ['priority_tier', 'low_priority', 'Low Priority', 30, {}],
 
   // QC rigor tiers used to live here (retired — migration 021). Every
   // ticket now follows the same standardized round progression instead of

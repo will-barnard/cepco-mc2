@@ -1243,6 +1243,115 @@ rediscovered the hard way later: the doc claims the nominations table
 migration 019 renamed the table to `ceppy_nominations`. Migration 027
 targets the real, current name; see its own header comment.
 
+### 2.32 Wave 3 (boss-list scope) — category reshuffle, priority tiers, sub-category buttons, SideQuests
+
+N2b, N4b, N2c and N3, the second half of the promised category/priority
+overhaul (N2a/N4a in §2.29/§2.30 were the foundations). Three separate
+things came up mid-implementation that the scope doc either flagged as an
+open decision or didn't anticipate at all — all three went back to the
+actual person running this before any code changed, rather than guessed.
+
+**Decision 1 — Custom Shop.** It existed only as a *priority* tier
+(`priority_tier.custom_shop`) before this packet, which never made sense —
+a job's type and its urgency are different axes, and that conflation is
+exactly what N4b's tier cleanup (below) undoes elsewhere. **Answer:
+retire the tier entirely** — Custom Shop is now purely a ticket
+sub-category, a child of the new "Repairs & Restoration" (migration 029).
+
+**Decision 2 — the ~118 tickets on Servicing/Inventory Restorations.**
+**Answer: re-point them.** In practice this split into two different
+outcomes once the third decision (below) came up: Servicing's tickets are
+re-pointed onto the new `repairs_restoration` key (migration 029's
+`UPDATE tickets ... WHERE category_key = 'servicing'`); Inventory
+Restorations' tickets need no re-pointing at all, because that category's
+own *key* never changes — see decision 3.
+
+**Decision 3 — Inventory Restorations, found mid-build.** The doc's
+target list says "retire Servicing and Inventory Restorations into the
+merged one," as if they were symmetric. They aren't:
+`frontend/src/views/InventoryRestorationsView.vue` is a dedicated page
+that queues *only* instruments the shop bought to flip, filtered strictly
+on `category_key = 'inventory_restoration'`. Flattening it into the merge
+like Servicing would have made that page start showing every Repairs &
+Restoration ticket, customer jobs included, with no way left to tell them
+apart. **Answer: keep it as a sub-category** instead of retiring it —
+`inventory_restoration` becomes a *child* of the new `repairs_restoration`
+parent (`meta.parent_key`, same N2a mechanism as Custom Shop), keeping its
+own key untouched. The page didn't need a single code change: its filter
+already asks for exactly that key, which is still active, just nested now.
+
+**Decision 4 — the "retire Shipping" landmine, also found mid-build.**
+The doc lists "retire Shipping" as a plain settings-screen bullet, but the
+standalone `shipping` ticket_category (distinct from "Orders & Shipping,"
+which stays) is not a leftover duplicate — it's the specific category the
+"Ship this instrument" button auto-assigns to spun-off pack-and-send
+sub-tickets, and three places keyed real behavior directly off
+`category_key === 'shipping'`: `TicketDetailView.vue` hid the
+Estimate/Hours/QC/Invoicing cards on those tickets, `TicketSubTickets.vue`
+used it to stop a second "Ship this instrument" sub-ticket being spun up,
+and five ticket-status rows excluded it via `meta.excluded_categories` so
+a shipping ticket couldn't be set to a status that assumes billable work.
+Retiring the category as written would have silently broken all three.
+**Answer: retire it, and build the replacement** — migration 028 adds
+`tickets.is_shipping` (backfilled `TRUE` for every ticket already on the
+old category), and every one of those three call sites now checks that
+flag instead of the category. The status-exclusion mechanism grew a
+parallel `meta.excluded_for_shipping` boolean alongside the existing
+`meta.excluded_categories` array (`statusAppliesToCategory()` in
+`services/settings.js` checks both), since a status's "not valid for a
+shipping job" rule is now about the flag, not a category name. New
+shipping sub-tickets land in "Orders & Shipping" going forward
+(`PREFERRED_SHIPPING_CATEGORY_KEY`); their priority default moved from the
+retired `daily_todo` tier to `low_priority`, its closest successor among
+the three new ones. One more thing this uncovered: `POST /tickets` used to
+hand the raw request body straight to `resolveNewTicketFields`/
+`insertTicketRow`, which meant a client could set `is_shipping: true` on
+an ordinary ticket directly — nothing else does this (every other caller
+builds its own object rather than forwarding a request body), so that one
+route now explicitly pins `is_shipping: false` regardless of what's in the
+body, leaving `create-shipping-ticket` as the only path that can set it.
+
+**N4b — the three new priority tiers.** Expedited / SOS, Standard
+Priority, Low Priority replace all five of the old sheet-inherited ones
+(`daily_todo`, `expedited`, `standard_setup`, `deep_dive`, plus
+`custom_shop` retiring here from decision 1). Per the boss's call, they
+carry no `min_hours`/`max_hours` metadata — those bands described job
+*size*, and these tiers are about urgency, a different question entirely.
+Expedited sorts first (`sort_order`), since that drives the dashboard's
+task ranking. Every hardcoded `'standard_setup'`/`'daily_todo'`-as-priority
+default across the app (`TicketNewView.vue`, `EstimateNewView.vue`,
+`FleetView.vue`, `routes/purchases.js`, `routes/quotes.js`,
+`routes/shopifyWebhooks.js`) was swept to point at the new equivalent —
+same `defaultKeyPreferring()` resilience N4a built, just re-aimed.
+Existing tickets keep their original (now-retired) priority key and label
+snapshot; nothing re-points them; there's no single obvious new tier each
+old one maps onto, unlike the category merge above.
+
+**N2c — category buttons instead of a dropdown.** `TicketNewView.vue`'s
+Category field is now a row of toggle buttons over
+`settings.topLevel('ticket_category')`, matching the pattern
+`QueueView.vue` already used for its instrument-type/category pickers. A
+second, conditional row appears underneath once the chosen category
+actually has children (`settings.childrenOf`) — Repairs & Restoration's
+Custom Shop/Inventory Restorations, SideQuests' four. Sub-category is
+optional (the parent is a perfectly good bucket on its own), and picking a
+new top-level category clears any previously-chosen child, mirroring the
+backend's own "re-home or clear" rule for an existing ticket's category
+change (§2.30). A child flagged `meta.allow_free_text` (SideQuests'
+"Other") swaps in a text input for `subcategory_other_text`. Losing the
+native `<select required>` meant category and the free-text requirement
+both needed an explicit check in `submit()` instead.
+
+**N3 — SideQuests.** Four children seeded under a new top-level
+`sidequests` category: Hunt, R&D, Outreach, and Other (`meta.
+allow_free_text: true`, the same mechanism P3's vendor-other and N2b's
+Custom Shop/Inventory-Restorations nesting all share). No ticket-creation
+changes were needed beyond N2c's picker — the new-ticket form's
+customer/instrument fields were already optional ("— none (internal /
+fleet) —"), so a SideQuest ticket with neither works today. Worth flagging
+forward, per the doc's own note: N1's title generator (not yet built) will
+need testing against a ticket with no customer and no instrument once it
+exists — out of scope here, just recorded so it isn't forgotten.
 ---
 
 ## 4. Suggested first moves after deploy

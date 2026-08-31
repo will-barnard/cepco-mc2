@@ -18,8 +18,16 @@ router.use(requireAuth);
 // These are *preferred* keys, not guaranteed ones — Settings can retire
 // either at any time (N4a), so both go through settings.defaultKeyPreferring()
 // below rather than being handed straight to resolveActive().
-const PREFERRED_SHIPPING_PRIORITY_KEY = 'daily_todo';
-const PREFERRED_SHIPPING_CATEGORY_KEY = 'shipping';
+//
+// N4b retired the old 'daily_todo' priority tier in favor of three
+// urgency-based ones — 'low_priority' is its closest successor (routine,
+// no rush). N2b retired the dedicated 'shipping' *category* entirely
+// (these tickets are now identified by is_shipping below instead — see
+// migration 028's header comment for why that key wasn't just a harmless
+// duplicate of 'orders_shipping'), so new shipping sub-tickets land in the
+// real "Orders & Shipping" category now.
+const PREFERRED_SHIPPING_PRIORITY_KEY = 'low_priority';
+const PREFERRED_SHIPPING_CATEGORY_KEY = 'orders_shipping';
 
 const TICKET_SELECT = `
   SELECT t.*,
@@ -267,7 +275,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     // forward to all of its children, not just each child linking back via
     // source_ticket_id/source_ticket_title.
     query(`SELECT c.id, c.title, c.category_key, c.category_label_snapshot,
-                  c.status_key, c.status_label_snapshot,
+                  c.status_key, c.status_label_snapshot, c.is_shipping,
                   COALESCE(techs.technicians, '[]'::json) AS technicians
              FROM tickets c
              LEFT JOIN LATERAL (
@@ -345,12 +353,14 @@ async function resolveNewTicketFields(b) {
 
   const subcategory = await resolveSubcategory(category.key, b.subcategory_key, b.subcategory_other_text);
 
-  // Status options are category-aware (e.g. Shipping only offers Not
-  // Started/In Progress/Done — see NOTES.md) — resolve/default against this
-  // ticket's actual category rather than the raw settings list.
+  // Status options are category- *and* is_shipping-aware (e.g. a shipping
+  // sub-ticket only offers Not Started/In Progress/Done — see NOTES.md and
+  // migration 028) — resolve/default against this ticket's actual category
+  // and shipping flag rather than the raw settings list.
+  const isShipping = b.is_shipping === true;
   const status = b.status_key
-    ? await settings.resolveStatusForCategory(b.status_key, category.key)
-    : await settings.defaultStatusForCategory(category.key);
+    ? await settings.resolveStatusForCategory(b.status_key, category.key, isShipping)
+    : await settings.defaultStatusForCategory(category.key, isShipping);
 
   let techLevel = null;
   if (b.tech_level_key) techLevel = await settings.resolveActive('tech_level', b.tech_level_key);
@@ -438,9 +448,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
-       family_queue_position
+       family_queue_position, is_shipping
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27)
+               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27,$28)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -466,6 +476,10 @@ async function insertTicketRow(client, b, resolved, createdById) {
       b.source_ticket_id || null,
       b.source_estimate_id || null,
       familyQueuePosition,
+      // Set only by the "Ship this instrument" flow below — not a normal
+      // POST /tickets field (see resolveNewTicketFields's isShipping,
+      // which reads this same b.is_shipping to pick the right status set).
+      b.is_shipping === true,
     ],
   );
   const created = rows[0];
@@ -500,8 +514,17 @@ router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.title || !String(b.title).trim()) throw badRequest('title is required');
 
-  const resolved = await resolveNewTicketFields(b);
-  const ticket = await withTransaction((client) => insertTicketRow(client, b, resolved, req.user.id));
+  // is_shipping is an internal flag meant to be set only by the "Ship this
+  // instrument" flow below (create-shipping-ticket) — not something a
+  // normal ticket-creation request should be able to set on itself, since
+  // it silences the Estimate/Hours/QC/Invoicing cards and loosens which
+  // statuses apply (see migration 028). Every other caller of
+  // resolveNewTicketFields/insertTicketRow builds its own plain object
+  // rather than forwarding a raw request body, so this is the one place
+  // that needs to say so explicitly.
+  const fields = { ...b, is_shipping: false };
+  const resolved = await resolveNewTicketFields(fields);
+  const ticket = await withTransaction((client) => insertTicketRow(client, fields, resolved, req.user.id));
 
   res.status(201).json(ticket);
 }));
@@ -525,18 +548,22 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     resolved.priority = await settings.resolveActive('priority_tier', b.priority_key);
   }
   const effectiveCategoryKey = resolved.category ? resolved.category.key : existing.category_key;
+  // is_shipping is set once, at creation (insertTicketRow) — not something
+  // PATCH can change, so this always reads the existing ticket's value.
+  const isShipping = existing.is_shipping === true;
   let statusAutoReset = false;
   if (b.status_key && b.status_key !== existing.status_key) {
-    resolved.status = await settings.resolveStatusForCategory(b.status_key, effectiveCategoryKey);
+    resolved.status = await settings.resolveStatusForCategory(b.status_key, effectiveCategoryKey, isShipping);
   } else if (resolved.category) {
     // Category is changing but no explicit new status was given — if the
     // ticket's current status isn't valid for the new category (e.g. a
-    // Servicing ticket sitting at "QC" moving into Shipping, which doesn't
-    // have a QC status), re-home it to that category's default rather than
-    // silently leaving it stuck on a status the new category can't display.
+    // Servicing ticket sitting at "QC" moving into Housekeeping, which
+    // doesn't have a QC status), re-home it to that category's default
+    // rather than silently leaving it stuck on a status the new category
+    // can't display.
     const currentStatus = await settings.resolve('ticket_status', existing.status_key);
-    if (!settings.statusAppliesToCategory(currentStatus, effectiveCategoryKey)) {
-      resolved.status = await settings.defaultStatusForCategory(effectiveCategoryKey);
+    if (!settings.statusAppliesToCategory(currentStatus, effectiveCategoryKey, isShipping)) {
+      resolved.status = await settings.defaultStatusForCategory(effectiveCategoryKey, isShipping);
       statusAutoReset = true;
     }
   }
@@ -867,9 +894,14 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
   if (!source) throw notFound('Ticket not found');
   if (!source.instrument_id) throw badRequest('This ticket has no instrument to ship');
 
+  // is_shipping (migration 028) is what makes this a stripped-down
+  // pack-and-send ticket now, not its category — see PREFERRED_SHIPPING_
+  // CATEGORY_KEY's comment above and migration 028/029's headers for why
+  // the old dedicated 'shipping' category couldn't just keep doing this.
   const resolved = await resolveNewTicketFields({
     category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_SHIPPING_CATEGORY_KEY),
     priority_key: await settings.defaultKeyPreferring('priority_tier', PREFERRED_SHIPPING_PRIORITY_KEY),
+    is_shipping: true,
   });
 
   const title = `Ship — ${source.instrument_family}`
@@ -886,6 +918,7 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
         instrument_id: source.instrument_id,
         customer_id: source.customer_id,
         source_ticket_id: source.id,
+        is_shipping: true,
       },
       resolved,
       req.user.id,

@@ -93,20 +93,30 @@ async function resolveActive(category, key) {
  * status whose old allowlist predates it (see N4a in the boss-list scope —
  * this used to be an allowlist called `applicable_categories`, which is
  * exactly backwards for "every category except shipping"; migration 023
- * converts existing rows). Shipping (§ NOTES.md) is the first user: the
- * other statuses exclude just shipping, while Not Started/In Progress/Done
- * stay unrestricted.
+ * converts existing rows).
+ *
+ * Shipping tickets (§ NOTES.md) were the first, and until N2b's category
+ * reshuffle the *only*, user of this — but shipping sub-tickets are no
+ * longer their own category (migration 029 retired the dedicated
+ * 'shipping' key; see tickets.is_shipping, migration 028), so their
+ * exclusion moved from a category name in excluded_categories to a plain
+ * boolean, meta.excluded_for_shipping, checked against the ticket's
+ * is_shipping flag instead of its category_key. Both checks are
+ * independent and either can exclude a status; most rows use at most one.
  */
-function statusAppliesToCategory(statusRow, categoryKey) {
+function statusAppliesToCategory(statusRow, categoryKey, isShipping = false) {
   const excluded = statusRow.meta && statusRow.meta.excluded_categories;
-  return !Array.isArray(excluded) || !excluded.includes(categoryKey);
+  if (Array.isArray(excluded) && excluded.includes(categoryKey)) return false;
+  if (isShipping && statusRow.meta && statusRow.meta.excluded_for_shipping) return false;
+  return true;
 }
 
 /** resolveActive('ticket_status', key), also enforced against the ticket's
- * category — e.g. a Shipping ticket can't be set to QC or On Hold. */
-async function resolveStatusForCategory(key, categoryKey) {
+ * category and its is_shipping flag — e.g. a shipping sub-ticket can't be
+ * set to QC or On Hold. */
+async function resolveStatusForCategory(key, categoryKey, isShipping = false) {
   const status = await resolveActive('ticket_status', key);
-  if (!statusAppliesToCategory(status, categoryKey)) {
+  if (!statusAppliesToCategory(status, categoryKey, isShipping)) {
     throw badRequest(`'${status.label}' isn't a valid status for this ticket's category`);
   }
   return status;
@@ -115,9 +125,9 @@ async function resolveStatusForCategory(key, categoryKey) {
 /** The first non-retired status usable by this category, in sort order —
  * used to default a new ticket's status, and to re-home a ticket whose
  * status stops being valid after its category changes. */
-async function defaultStatusForCategory(categoryKey) {
+async function defaultStatusForCategory(categoryKey, isShipping = false) {
   const rows = await listCategory('ticket_status');
-  const match = rows.find((r) => !r.retired && statusAppliesToCategory(r, categoryKey));
+  const match = rows.find((r) => !r.retired && statusAppliesToCategory(r, categoryKey, isShipping));
   if (!match) throw badRequest('No ticket statuses are configured for this category');
   return match;
 }

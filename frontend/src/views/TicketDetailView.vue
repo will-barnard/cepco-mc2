@@ -122,7 +122,11 @@ const assignedTechIds = computed(() => (ticket.value?.technicians || []).map((t)
 // Shipping tickets are pack-and-send jobs, not billable repair work — no QC
 // round, no labor estimate, no hours logging, no invoice. Just the shared
 // Details card plus the Shipment card (TicketShipment.vue). See NOTES.md.
-const isShipping = computed(() => ticket.value?.category_key === 'shipping');
+// Driven by the ticket's own is_shipping flag (migration 028), not its
+// category — N2b retired the old dedicated 'shipping' category, so this
+// can no longer be a category_key check (see that migration's header for
+// why the category and this flag aren't the same thing).
+const isShipping = computed(() => !!ticket.value?.is_shipping);
 </script>
 
 <template>
@@ -165,7 +169,7 @@ const isShipping = computed(() => ticket.value?.category_key === 'shipping');
               <label>Status</label>
               <select :value="ticket.status_key" @change="changeStatus">
                 <option
-                  v-for="s in settings.statusesForCategory(ticket.category_key)"
+                  v-for="s in settings.statusesForCategory(ticket.category_key, ticket.is_shipping)"
                   :key="s.key" :value="s.key"
                 >
                   {{ s.label }}

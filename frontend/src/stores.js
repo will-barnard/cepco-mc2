@@ -82,11 +82,19 @@ export const useSettings = defineStore('settings', {
     // automatically keeps every status that hasn't specifically excluded
     // it (N4a — see backend/src/services/settings.js's
     // statusAppliesToCategory, which this mirrors).
-    statusesForCategory: (s) => (categoryKey) => (s.data.ticket_status || []).filter((r) => {
-      if (r.retired) return false;
-      const excluded = r.meta?.excluded_categories;
-      return !Array.isArray(excluded) || !excluded.includes(categoryKey);
-    }),
+    // is_shipping (migration 028) narrows this further for shipping
+    // sub-tickets — see backend/src/services/settings.js's
+    // statusAppliesToCategory, which this mirrors. Optional/defaulted so
+    // every other call site (which has no is_shipping to pass) keeps
+    // working unchanged.
+    statusesForCategory: (s) => (categoryKey, isShipping = false) => (s.data.ticket_status || [])
+      .filter((r) => {
+        if (r.retired) return false;
+        const excluded = r.meta?.excluded_categories;
+        if (Array.isArray(excluded) && excluded.includes(categoryKey)) return false;
+        if (isShipping && r.meta?.excluded_for_shipping) return false;
+        return true;
+      }),
     labelFor: (s) => (category, key) => (s.data[category] || []).find((r) => r.key === key)?.label || key,
     colorFor: (s) => (key) => (s.data.ticket_status || []).find((r) => r.key === key)?.meta?.color || 'slate',
     // Whether a ticket sitting in this status should have its tasks show

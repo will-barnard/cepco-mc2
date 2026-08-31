@@ -30,8 +30,10 @@ const DEFAULT_LABOR_RATE = 185.00;
 // Preferred, not guaranteed (N4a) — Settings can retire either at any time,
 // so both go through settings.defaultKeyPreferring() below rather than
 // straight to resolveActive() when nothing more specific was supplied.
-const PREFERRED_CATEGORY_KEY = 'servicing';
-const PREFERRED_PRIORITY_KEY = 'standard_setup';
+// N2b retired 'servicing' into the merged 'repairs_restoration'; N4b
+// replaced 'standard_setup' with the new urgency-based tiers.
+const PREFERRED_CATEGORY_KEY = 'repairs_restoration';
+const PREFERRED_PRIORITY_KEY = 'standard_priority';
 
 const QUOTE_SELECT = `
   SELECT e.*, c.name AS customer_name, c.email AS customer_email

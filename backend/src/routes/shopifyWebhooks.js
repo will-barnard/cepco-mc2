@@ -21,12 +21,15 @@ router.use((req, res, next) => {
 });
 
 // A freshly-arrived order has no priority picker of its own (mirrors
-// routes/purchases.js's PREFERRED_PRIORITY_KEY for the same reason) — Daily
-// To-Do matches PLAN's description of routine Orders & Shipping work;
-// anything that turns out to need more time gets re-triaged from the queue
-// like any other ticket. Preferred, not guaranteed (N4a) — Settings can
-// retire it, so it's resolved through settings.defaultKeyPreferring() below.
-const PREFERRED_ORDER_PRIORITY_KEY = 'daily_todo';
+// routes/purchases.js's PREFERRED_PRIORITY_KEY for the same reason) — the
+// old 'daily_todo' tier matched PLAN's description of routine Orders &
+// Shipping work; N4b retired it along with the rest of the old tiers, and
+// 'low_priority' (routine, no rush) is its closest successor among the
+// three new urgency-based ones. Anything that turns out to need more time
+// gets re-triaged from the queue like any other ticket. Preferred, not
+// guaranteed (N4a) — Settings can retire it, so it's resolved through
+// settings.defaultKeyPreferring() below.
+const PREFERRED_ORDER_PRIORITY_KEY = 'low_priority';
 // Belt-and-suspenders alongside the shop_config-driven category below: if
 // that setting is ever unset, deleted, or points at a retired category,
 // orders still land somewhere sane instead of failing the webhook outright.

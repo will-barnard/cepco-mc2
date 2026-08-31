@@ -46,7 +46,10 @@ const showForm = ref(false);
 const creating = ref(false);
 
 const children = computed(() => props.ticket.child_tickets || []);
-const hasShippingChild = computed(() => children.value.some((c) => c.category_key === 'shipping'));
+// Driven by is_shipping (migration 028), not category_key — N2b retired
+// the old dedicated 'shipping' category (see that migration's header),
+// so a shipping sub-ticket is no longer identifiable by category alone.
+const hasShippingChild = computed(() => children.value.some((c) => c.is_shipping));
 // Settings -> Ticket categories -> "Ship button" lets an admin turn this
 // quick-action off per category (e.g. a Shipping ticket has no business
 // offering to spin off *another* shipping ticket) — see stores.js's
