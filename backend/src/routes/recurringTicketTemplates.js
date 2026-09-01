@@ -54,11 +54,30 @@ async function resolveTemplateFields(b, existing) {
   };
 }
 
+/** Validates an optional fixed-assignee employee id. `undefined` means
+ * "field not sent, leave whatever's there alone" — callers distinguish
+ * that from an explicit null/'' ("clear the pin") themselves, since the
+ * right response differs between POST (defaults to null) and PATCH
+ * (COALESCE would need a separate touched flag either way). Returns the
+ * numeric id, or null for anything falsy. Checked against a live FK
+ * lookup rather than letting a bad id surface as a raw constraint
+ * violation — same reasoning as resolveTemplateFields' category/priority
+ * checks above. */
+async function resolveFixedAssignee(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const id = Number(value);
+  if (!Number.isFinite(id)) throw badRequest('fixed_assignee_employee_id must be a number');
+  const { rows } = await query('SELECT id FROM employees WHERE id = $1', [id]);
+  if (!rows.length) throw badRequest('fixed_assignee_employee_id does not match an existing employee');
+  return id;
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT t.*, e.name AS rotation_last_employee_name
+    `SELECT t.*, e.name AS rotation_last_employee_name, fa.name AS fixed_assignee_name
        FROM recurring_ticket_templates t
-       LEFT JOIN employees e ON e.id = t.rotation_last_employee_id
+       LEFT JOIN employees e  ON e.id = t.rotation_last_employee_id
+       LEFT JOIN employees fa ON fa.id = t.fixed_assignee_employee_id
       ORDER BY t.sort_order, t.id`,
   );
   res.json(rows);
@@ -68,6 +87,7 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.title || !String(b.title).trim()) throw badRequest('title is required');
   const resolved = await resolveTemplateFields(b, null);
+  const fixedAssigneeId = await resolveFixedAssignee(b.fixed_assignee_employee_id);
 
   const { rows: maxRow } = await query(
     'SELECT COALESCE(MAX(sort_order), 0) + 10 AS next FROM recurring_ticket_templates',
@@ -75,12 +95,12 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
   const { rows } = await query(
     `INSERT INTO recurring_ticket_templates
        (title, category_key, priority_key, cadence, day_of_week, time_of_day, notes,
-        rotate_among_active_techs, sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        rotate_among_active_techs, fixed_assignee_employee_id, sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
     [
       String(b.title).trim(), b.category_key, b.priority_key,
       resolved.cadence, resolved.day_of_week, resolved.time_of_day,
-      b.notes || null, b.rotate_among_active_techs === true, maxRow[0].next,
+      b.notes || null, b.rotate_among_active_techs === true, fixedAssigneeId, maxRow[0].next,
     ],
   );
   res.status(201).json(rows[0]);
@@ -100,6 +120,9 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
   const touchesSchedule = ['cadence', 'day_of_week', 'time_of_day', 'category_key', 'priority_key']
     .some((k) => b[k] !== undefined);
   const resolved = touchesSchedule ? await resolveTemplateFields(b, existing) : null;
+  const touchesFixedAssignee = b.fixed_assignee_employee_id !== undefined;
+  const fixedAssigneeId = touchesFixedAssignee
+    ? await resolveFixedAssignee(b.fixed_assignee_employee_id) : null;
 
   const { rows } = await query(
     `UPDATE recurring_ticket_templates SET
@@ -113,6 +136,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
        rotate_among_active_techs  = COALESCE($11, rotate_among_active_techs),
        active                     = COALESCE($12, active),
        sort_order                 = COALESCE($13, sort_order),
+       fixed_assignee_employee_id = CASE WHEN $14::boolean THEN $15 ELSE fixed_assignee_employee_id END,
        updated_at                 = now()
      WHERE id = $1 RETURNING *`,
     [
@@ -127,6 +151,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       b.rotate_among_active_techs === undefined ? null : b.rotate_among_active_techs,
       b.active === undefined ? null : b.active,
       b.sort_order === undefined ? null : b.sort_order,
+      touchesFixedAssignee, fixedAssigneeId,
     ],
   );
   res.json(rows[0]);

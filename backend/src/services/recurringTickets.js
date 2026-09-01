@@ -16,6 +16,12 @@
  * only thing that differs about a chore template's firing versus one of
  * A1's plain daily tickets; the day/time/already-fired-today logic is
  * identical either way.
+ *
+ * fixed_assignee_employee_id (migration 039) is a later, independent
+ * override: any template — daily or weekly, rotating or not — can be
+ * pinned to one specific person from Settings -> Recurring tickets. A pin
+ * always wins over rotation when both are set; leaving it unset (the
+ * default) is exactly today's behavior. See fireTemplate() below.
  */
 
 const { query, withTransaction } = require('../db');
@@ -79,7 +85,15 @@ async function fireTemplate(templateId) {
 
     let technicianIds = [];
     let rotationNext = t.rotation_last_employee_id;
-    if (t.rotate_among_active_techs) {
+    if (t.fixed_assignee_employee_id) {
+      // A pinned assignee (Settings -> Recurring tickets) always wins,
+      // independent of rotate_among_active_techs — a template can have
+      // both set (rotation configured, then overridden) and the pin still
+      // takes it. rotation_last_employee_id is deliberately left alone
+      // here: if the pin is cleared later, a weekly rotation resumes
+      // right where it left off instead of restarting from scratch.
+      technicianIds = [t.fixed_assignee_employee_id];
+    } else if (t.rotate_among_active_techs) {
       const employeeId = await nextRotationEmployee(client, t.rotation_last_employee_id);
       // No eligible employee (everyone excluded or inactive) still creates
       // the ticket, just unassigned — a missed chore is more visible than

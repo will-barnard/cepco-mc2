@@ -1939,6 +1939,41 @@ rendered, section for section. `POST /reorder-queue` renumbers positions
 *within* one status's section only, never across statuses, so it's
 unaffected by which end of `sort_order` the section itself sorts from.
 
+### 2.44 Pin a recurring ticket to one specific person
+
+Extends A1/A2's recurring-ticket engine (§2.40's neighbors, migrations
+032/033) with a per-template override: any recurring ticket — daily or
+weekly, rotating or not — can now be pinned to one specific employee from
+Settings → Recurring tickets, instead of either rotating or falling back to
+the category's default assignee.
+
+Migration 039 adds `recurring_ticket_templates.fixed_assignee_employee_id`
+(nullable, `ON DELETE SET NULL` so retiring a staff account doesn't block
+on a stale pin — it just silently falls back, same posture
+`nextRotationEmployee()` already takes when nobody's left in the rotation
+pool). `services/recurringTickets.js`'s `fireTemplate()` checks it first,
+ahead of `rotate_among_active_techs`: a pin always wins when both are set.
+Deliberately, setting a pin does *not* touch `rotation_last_employee_id` —
+clearing the pin later resumes a weekly rotation exactly where it left
+off rather than restarting from the first eligible employee.
+
+`routes/recurringTicketTemplates.js` validates the id against a live
+employee lookup (`resolveFixedAssignee()`) rather than letting a bad id
+surface as a raw FK-violation 500, and `GET /` now also joins in
+`fixed_assignee_name` alongside the existing `rotation_last_employee_name`
+so the frontend never has to cross-reference the employee list itself.
+PATCH treats "field not sent" (leave alone) and "field sent as null/''"
+(explicitly clear the pin) as different things, same touched-flag pattern
+`notes` already used on this endpoint.
+
+`RecurringTicketsView.vue` gets a "Fixed assignee" dropdown on the create
+form and inline on every daily and weekly row (active employees only,
+same filter every other assignee picker in the app uses), autosaving on
+change like every other field on this screen. A weekly row's "next up: …"
+label now shows "fixed: …" instead whenever a pin is set, since the
+rotation name would otherwise be misleading (it's not who's actually
+getting the next ticket while a pin is active).
+
 ## 4. Suggested first moves after deploy
 
 

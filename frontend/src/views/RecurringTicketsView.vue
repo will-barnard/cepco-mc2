@@ -11,9 +11,10 @@
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
-import { useSettings } from '../stores';
+import { useSettings, useRefData } from '../stores';
 
 const settings = useSettings();
+const refData = useRefData();
 
 const templates = ref([]);
 const loading = ref(true);
@@ -23,12 +24,22 @@ const notice = ref('');
 async function load() {
   loading.value = true;
   try {
-    templates.value = await api.get('/recurring-ticket-templates');
+    const [tpls] = await Promise.all([api.get('/recurring-ticket-templates'), refData.load()]);
+    templates.value = tpls;
   } finally {
     loading.value = false;
   }
 }
 onMounted(load);
+
+// Active roster only — same "who's pickable as an assignee" filter every
+// other assignee dropdown in the app uses (Settings -> Staff accounts'
+// default-technician pickers, CeppysView's recipient list, etc.).
+const activeEmployees = computed(() => refData.employees.filter((e) => e.active));
+
+function onFixedAssigneeChange(t, value) {
+  updateField(t, { fixed_assignee_employee_id: value ? Number(value) : null });
+}
 
 const daily = computed(() => templates.value.filter((t) => t.cadence === 'daily'));
 const weekly = computed(() => templates.value.filter((t) => t.cadence === 'weekly'));
@@ -39,7 +50,7 @@ const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 const showNew = ref(false);
 const blankForm = () => ({
   title: '', category_key: '', priority_key: '', cadence: 'daily', day_of_week: 1, time_of_day: '08:00',
-  rotate_among_active_techs: false, notes: '',
+  rotate_among_active_techs: false, fixed_assignee_employee_id: '', notes: '',
 });
 const form = ref(blankForm());
 
@@ -63,6 +74,8 @@ async function createTemplate() {
       day_of_week: form.value.cadence === 'weekly' ? Number(form.value.day_of_week) : null,
       time_of_day: form.value.time_of_day,
       rotate_among_active_techs: form.value.rotate_among_active_techs,
+      fixed_assignee_employee_id: form.value.fixed_assignee_employee_id
+        ? Number(form.value.fixed_assignee_employee_id) : null,
       notes: form.value.notes || null,
     });
     showNew.value = false;
@@ -110,7 +123,9 @@ function fmtLastGenerated(t) {
           Fires automatically once a day/week at the configured shop-local time — see the four
           daily sweeps and four weekly chores seeded by default. A weekly template with "Rotate
           among active techs" on assigns whoever's next in line, skipping anyone checked "Skip
-          chores" on Settings → Staff accounts.
+          chores" on Settings → Staff accounts. Pin "Fixed assignee" on any template — daily or
+          weekly — to always assign the same person instead; a pin always wins over rotation,
+          and clearing it later just resumes rotation where it left off.
         </p>
       </div>
       <div class="row">
@@ -172,6 +187,13 @@ function fmtLastGenerated(t) {
         <span class="small">Rotate among active techs (weekly chores) instead of the category's default assignee</span>
       </label>
       <div class="field" style="margin-top: 12px; margin-bottom: 0">
+        <label>Fixed assignee (optional — overrides rotation/default when set)</label>
+        <select v-model="form.fixed_assignee_employee_id">
+          <option value="">— none, use rotation / default assignee —</option>
+          <option v-for="e in activeEmployees" :key="e.id" :value="e.id">{{ e.name }}</option>
+        </select>
+      </div>
+      <div class="field" style="margin-top: 12px; margin-bottom: 0">
         <label>Notes (copied onto every generated ticket)</label>
         <input v-model="form.notes" />
       </div>
@@ -202,6 +224,13 @@ function fmtLastGenerated(t) {
               :value="t.time_of_day" type="time" style="width: 110px"
               @change="updateField(t, { time_of_day: $event.target.value })"
             />
+            <select
+              :value="t.fixed_assignee_employee_id || ''" title="Fixed assignee"
+              @change="onFixedAssigneeChange(t, $event.target.value)"
+            >
+              <option value="">No pin — rotation / default assignee</option>
+              <option v-for="e in activeEmployees" :key="e.id" :value="e.id">{{ e.name }}</option>
+            </select>
             <span class="muted small">last: {{ fmtLastGenerated(t) }}</span>
             <span :class="['pill', t.active ? 'green' : 'slate']">{{ t.active ? 'Active' : 'Paused' }}</span>
             <div class="spacer" />
@@ -229,7 +258,17 @@ function fmtLastGenerated(t) {
               :value="t.time_of_day" type="time" style="width: 110px"
               @change="updateField(t, { time_of_day: $event.target.value })"
             />
-            <span class="muted small">next up: {{ t.rotation_last_employee_name || '—' }}</span>
+            <select
+              :value="t.fixed_assignee_employee_id || ''" title="Fixed assignee — wins over rotation when set"
+              @change="onFixedAssigneeChange(t, $event.target.value)"
+            >
+              <option value="">No pin — rotation / default assignee</option>
+              <option v-for="e in activeEmployees" :key="e.id" :value="e.id">{{ e.name }}</option>
+            </select>
+            <span v-if="t.fixed_assignee_employee_id" class="muted small">
+              fixed: {{ t.fixed_assignee_name }}
+            </span>
+            <span v-else class="muted small">next up: {{ t.rotation_last_employee_name || '—' }}</span>
             <span class="muted small">last: {{ fmtLastGenerated(t) }}</span>
             <span :class="['pill', t.active ? 'green' : 'slate']">{{ t.active ? 'Active' : 'Paused' }}</span>
             <div class="spacer" />
