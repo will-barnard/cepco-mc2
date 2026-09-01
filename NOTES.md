@@ -1829,6 +1829,81 @@ than nudging today's values relatively, so it corrects things regardless
 of how they drifted and is a no-op if a given key was already right. Any
 extra ticket_status an admin has since added is left untouched.
 
+### 2.42 Standalone shipping tickets, direct from New Ticket
+
+Three related complaints, one underlying gap: the only way to get a
+ticket onto the simplified, non-billable `is_shipping` track (migration
+028 — hides Estimate/Hours/QC/Invoicing, narrows the status list to Not
+Started/In Progress/Done) was `POST /tickets/:id/create-shipping-ticket`,
+which requires an existing ticket with a known instrument to spin off
+from. That has no answer for an *inbound* shipment — an instrument being
+shipped *to* the shop, with no prior ticket, sometimes not even fully on
+file yet — so anyone in that situation had to create a plain ticket
+instead, and a plain ticket defaults to a full-service billable job:
+`is_shipping` was previously always forced `false` on `POST /tickets`,
+and the New Ticket form's status dropdown was rendering the entire
+`ticket_status` list unfiltered rather than `statusesForCategory()` (the
+helper `TicketDetailView.vue`'s own edit dropdown already used), so QC
+and every other non-shipping status were pickable there too — and would
+have 400'd at submit if actually chosen, since `resolveStatusForCategory`
+does enforce the real rule.
+
+`POST /tickets` now accepts `is_shipping: true` from the client, but only
+honors it when the ticket's resolved category is `orders_shipping` — the
+same category real "Ship this instrument" tickets already land in
+(`PREFERRED_SHIPPING_CATEGORY_KEY`). Every other category still gets a
+hard `false` regardless of what's in the request body, preserving the
+original point of locking this down (a client can't silently get QC/
+Invoicing waived on an ordinary repair ticket) while finally giving
+Orders & Shipping — which also carries real billable Shopify orders, so
+this had to stay opt-in, not automatic — a way to make a ticket that's
+*genuinely* just packing/logistics from scratch. `TicketNewView.vue`
+shows a "This is a shipping/logistics ticket" checkbox once that category
+is picked; checking it hides the QC-required checkbox (forced `false`,
+since the whole QC story is inert once `is_shipping` hides those cards
+anyway) and reveals a "Shipping to / contact info" field.
+
+When `is_shipping` is set this way, `POST /tickets` also creates the
+ticket's `shipments` row in the same transaction — mirroring
+`create-shipping-ticket` exactly (checklist auto-seeded from a
+shipping-kind QC template for the instrument's family) — so
+`TicketShipment.vue`'s card actually has something to render instead of
+a ticket stuck in the simplified UI with nowhere to record a destination
+or tracking number. The contact-info field's value is what seeds that
+row's `contact_info`.
+
+That contact-info field doubles as the answer to "multiple instruments
+going to the same place": N9's existing multi-instrument sibling-tickets
+mechanism (checkbox + "Additional instruments" rows) was already
+category-agnostic, so it works here without changes — what was missing
+was `is_shipping`/`shipping_contact_info` in the sibling `POST /tickets`
+payload the primary ticket's `submit()` sends per instrument. Both are
+now copied onto every sibling exactly like `qc_required`/`notes` already
+were, so checking "shipping ticket," filling in one destination, and
+adding three more instruments produces four linked tickets (one per
+instrument, `source_ticket_id` back to the primary, same as any other
+multi-instrument job) each with its own shipment record pre-filled with
+the same destination — editable independently after that, since tracking
+numbers and ship dates will differ per package even when the address
+doesn't.
+
+The New Ticket form's status `<select>` now uses `statusesForCategory()`
+generally (not just for the new shipping checkbox), with a watcher that
+re-homes an already-picked status to that combination's default if
+switching category (or toggling the shipping checkbox) makes the current
+pick invalid — the same "don't leave a stale, now-invalid choice sitting
+in the form" pattern N2c's category buttons already apply to
+sub-category. This was a real, independent bug beyond the shipping
+scenario: any category could previously show QC/Invoice Sent/Invoice
+Paid/On Hold as pickable status options regardless of whether they
+actually applied.
+
+Not touched: `TicketSubTickets.vue`'s "Ship this instrument" button still
+only ships a single already-known instrument off a single existing
+ticket — bundling several *existing* tickets' instruments into one
+outbound shipment together is a different, bigger feature nobody's asked
+for yet, separate from today's inbound-shipment gap this closes.
+
 ## 4. Suggested first moves after deploy
 
 

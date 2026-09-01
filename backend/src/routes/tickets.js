@@ -586,17 +586,45 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!title) title = await composeTicketTitle(b.customer_id || null, b.instrument_id || null);
   if (!title) throw badRequest('title is required');
 
-  // is_shipping is an internal flag meant to be set only by the "Ship this
-  // instrument" flow below (create-shipping-ticket) — not something a
-  // normal ticket-creation request should be able to set on itself, since
-  // it silences the Estimate/Hours/QC/Invoicing cards and loosens which
-  // statuses apply (see migration 028). Every other caller of
-  // resolveNewTicketFields/insertTicketRow builds its own plain object
-  // rather than forwarding a raw request body, so this is the one place
-  // that needs to say so explicitly.
-  const fields = { ...b, title, is_shipping: false };
+  // is_shipping used to be settable only by the "Ship this instrument"
+  // flow below (create-shipping-ticket) — a normal ticket-creation request
+  // couldn't set it on itself, since it silences the Estimate/Hours/QC/
+  // Invoicing cards and loosens which statuses apply (see migration 028).
+  // That's still true for every OTHER category — a client can't sneak
+  // is_shipping: true onto a Repairs & Restoration ticket — but Orders &
+  // Shipping is the one category real "Ship this instrument" tickets
+  // already land in too (PREFERRED_SHIPPING_CATEGORY_KEY above), and a
+  // shop arranging an *inbound* shipment has no existing ticket to spin
+  // one off from. TicketNewView.vue's "This is a shipping/logistics
+  // ticket" checkbox — shown only once Orders & Shipping is picked — is
+  // the one place that sends is_shipping: true here; every other caller
+  // of resolveNewTicketFields/insertTicketRow still builds its own plain
+  // object rather than forwarding a raw request body.
+  const category = await settings.resolveActive('ticket_category', b.category_key);
+  const isShipping = b.is_shipping === true && category.key === 'orders_shipping';
+
+  const fields = { ...b, title, is_shipping: isShipping };
   const resolved = await resolveNewTicketFields(fields);
-  const ticket = await withTransaction((client) => insertTicketRow(client, fields, resolved, req.user.id));
+  const ticket = await withTransaction(async (client) => {
+    const created = await insertTicketRow(client, fields, resolved, req.user.id);
+    // Mirrors create-shipping-ticket below: any ticket landing on
+    // is_shipping gets its own blank shipment record (checklist
+    // auto-seeded from a shipping-kind template for the instrument's
+    // family, same as that route) so TicketShipment.vue's card actually
+    // has something to render — otherwise the ticket would carry the
+    // simplified is_shipping UI with nowhere to record a destination or
+    // tracking number. shipping_contact_info lets one "shipping to" note
+    // get typed once here and land on every sibling ticket too (N9) when
+    // several instruments are going out together to the same place.
+    if (isShipping) {
+      const shipment = await createShipment(client, {
+        ticketId: created.id,
+        contactInfo: b.shipping_contact_info || null,
+      });
+      return { ...created, shipments: [shipment] };
+    }
+    return created;
+  });
 
   res.status(201).json(ticket);
 }));
