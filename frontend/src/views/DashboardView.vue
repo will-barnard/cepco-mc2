@@ -57,6 +57,18 @@ async function loadMyTasks() {
   });
 }
 
+// Settings -> Priority tiers' "Highlight in tasks" toggle (see stores.js's
+// highlightTasksForPriority) splits one flat list into two boxes rather
+// than just re-sorting it — a priority already sorts to the top via
+// sort_order, so a separate box is the actual ask here: visually pull it
+// out, not just rank it first among everything else.
+const priorityTasks = computed(
+  () => myTasks.value.filter((t) => settings.highlightTasksForPriority(t.priority_key)),
+);
+const regularTasks = computed(
+  () => myTasks.value.filter((t) => !settings.highlightTasksForPriority(t.priority_key)),
+);
+
 async function toggleMyTask(task) {
   await api.patch(`/tasks/${task.id}`, { done: !task.done });
   await loadMyTasks();
@@ -165,8 +177,8 @@ onMounted(async () => {
         <p class="muted small" style="margin: 0 0 10px">
           Short-lived work items from your tickets, ranked by that ticket's priority.
         </p>
-        <ul v-if="myTasks.length" class="checklist">
-          <li v-for="t in myTasks" :key="t.id">
+        <ul v-if="regularTasks.length" class="checklist">
+          <li v-for="t in regularTasks" :key="t.id">
             <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
             <div style="flex: 1; min-width: 0">
               <RouterLink :to="{ name: 'ticket', params: { id: t.ticket_id } }">{{ t.title }}</RouterLink>
@@ -175,6 +187,25 @@ onMounted(async () => {
           </li>
         </ul>
         <div v-else class="empty">No open tasks right now.</div>
+      </div>
+
+      <div
+        v-if="priorityTasks.length" class="card"
+        style="margin-bottom: 24px; border-color: var(--red)"
+      >
+        <h2>Priority tasks</h2>
+        <p class="muted small" style="margin: 0 0 10px">
+          From tickets at a priority level flagged to stand out — see Settings → Priority tiers.
+        </p>
+        <ul class="checklist">
+          <li v-for="t in priorityTasks" :key="t.id">
+            <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
+            <div style="flex: 1; min-width: 0">
+              <RouterLink :to="{ name: 'ticket', params: { id: t.ticket_id } }">{{ t.title }}</RouterLink>
+              <div class="muted small">{{ t.ticket_title }} · {{ t.priority_label }}</div>
+            </div>
+          </li>
+        </ul>
       </div>
 
       <div class="card" style="margin-bottom: 24px">

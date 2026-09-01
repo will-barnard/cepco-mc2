@@ -581,6 +581,28 @@ async function insertTicketRow(client, b, resolved, createdById) {
     );
   }
 
+  // Housekeeping (NOTES.md): a Housekeeping ticket's whole point is
+  // usually its own title ("Clean bathroom", "AM Inbox Clearing") — auto-
+  // creating one ticket_tasks row from that title means it shows up on
+  // its assignee's dashboard the moment the ticket's status unlocks tasks
+  // (meta.unlocks_tasks — migration 022), the same way any other task
+  // does, rather than needing someone to open the ticket and add one by
+  // hand before a recurring chore or daily sweep is visible there at all.
+  // Every Housekeeping-creation path funnels through this one function
+  // (manual creation, the "+ Add sub-ticket" form, and — the most common
+  // case by volume — services/recurringTickets.js's daily/weekly firings),
+  // so this one insert covers all of them instead of repeating the same
+  // check at each call site. position 10 since a fresh ticket has no
+  // other tasks yet to sit behind (same MAX(...)+10 convention as
+  // category_queue_position, just starting from empty).
+  if (category.key === 'housekeeping') {
+    await client.query(
+      `INSERT INTO ticket_tasks (ticket_id, title, technician_id, position, created_by)
+       VALUES ($1, $2, $3, 10, $4)`,
+      [created.id, created.title, technicianIds[0] || null, createdById],
+    );
+  }
+
   return created;
 }
 
@@ -627,17 +649,17 @@ router.post('/', asyncHandler(async (req, res) => {
   // couldn't set it on itself, since it silences the Estimate/Hours/QC/
   // Invoicing cards and loosens which statuses apply (see migration 028).
   // That's still true for every OTHER category — a client can't sneak
-  // is_shipping: true onto a Repairs & Restoration ticket — but Orders &
-  // Shipping is the one category real "Ship this instrument" tickets
-  // already land in too (PREFERRED_SHIPPING_CATEGORY_KEY above), and a
-  // shop arranging an *inbound* shipment has no existing ticket to spin
-  // one off from. TicketNewView.vue's "This is a shipping/logistics
-  // ticket" checkbox — shown only once Orders & Shipping is picked — is
-  // the one place that sends is_shipping: true here; every other caller
-  // of resolveNewTicketFields/insertTicketRow still builds its own plain
+  // is_shipping: true onto a Repairs & Restoration ticket — but every
+  // ticket manually created under Orders & Shipping *is* one: there's no
+  // longer a checkbox asking (see NOTES.md), because in practice nobody
+  // was creating a real billable order by hand through this form — those
+  // arrive automatically via the Shopify webhook (routes/shopifyWebhooks.js,
+  // which calls insertTicketRow directly and never sets is_shipping, so
+  // this line has no effect on that path at all). Every other caller of
+  // resolveNewTicketFields/insertTicketRow still builds its own plain
   // object rather than forwarding a raw request body.
   const category = await settings.resolveActive('ticket_category', b.category_key);
-  const isShipping = b.is_shipping === true && category.key === 'orders_shipping';
+  const isShipping = category.key === 'orders_shipping';
 
   const fields = { ...b, title, is_shipping: isShipping };
   const resolved = await resolveNewTicketFields(fields);

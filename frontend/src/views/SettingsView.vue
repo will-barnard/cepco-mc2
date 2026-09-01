@@ -265,6 +265,21 @@ async function toggleStatusReport(row) {
   }
 }
 
+// Per-priority "Highlight in tasks" toggle on the dashboard's My tasks
+// card (see stores.js's highlightTasksForPriority) — same pattern as
+// toggleStatusNotes, off by default.
+async function toggleHighlightTasks(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, highlight_in_tasks: !row.meta.highlight_in_tasks },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-status "Unlocks tasks" flag (migration 022, NOTES.md §2.28) — whether
 // a ticket sitting in this status has its tasks surfaced on anyone's
 // dashboard (stores.js's unlocksTasks). Same on/off-meta-flag pattern as
@@ -475,6 +490,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th v-if="category === 'ticket_status'">Unlocks tasks</th>
+                <th v-if="category === 'priority_tier'">Highlight in tasks</th>
                 <th>Order</th><th>State</th><th />
               </tr>
             </thead>
@@ -586,6 +602,15 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!!row.meta.unlocks_tasks"
                       @change="toggleUnlocksTasks(row)"
+                    />
+                  </label>
+                </td>
+
+                <td v-if="category === 'priority_tier'">
+                  <label class="checkbox" title="Pull this priority's tasks into their own separate box on the dashboard's My tasks card">
+                    <input
+                      type="checkbox" :checked="!!row.meta.highlight_in_tasks"
+                      @change="toggleHighlightTasks(row)"
                     />
                   </label>
                 </td>

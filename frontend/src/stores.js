@@ -132,6 +132,16 @@ export const useSettings = defineStore('settings', {
     statusReportAllowed: (s) => (categoryKey) => (
       !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_status_report
     ),
+    // DashboardView.vue's "My tasks" — a priority tier flagged this way
+    // (Settings -> Priority tiers' "Highlight in tasks" column) gets its
+    // tasks pulled into their own separate box below the regular list
+    // instead of just sorting to the top of it, to make that priority
+    // level's work impossible to miss. Off by default, same opt-in
+    // convention as statusNotesAllowed (migration 042 flags Expedited /
+    // SOS on as the one sensible starting example).
+    highlightTasksForPriority: (s) => (priorityKey) => (
+      !!(s.data.priority_tier || []).find((r) => r.key === priorityKey)?.meta?.highlight_in_tasks
+    ),
   },
   actions: {
     async load(force = false) {

@@ -50,14 +50,19 @@ const form = ref({
   due_date: '',
   multi_instrument: false,
   qc_required: true,
-  // Only ever sent true when category_key is 'orders_shipping' — see the
-  // "This is a shipping/logistics ticket" checkbox below and NOTES.md.
-  // Lets a ticket for an *inbound* shipment (nothing serviced here yet,
-  // so no existing ticket to "Ship this instrument" from) get the same
-  // simplified, non-billable treatment as one spun off that way.
-  is_shipping: false,
+  // Every Orders & Shipping ticket is a shipping/logistics job now — no
+  // checkbox to ask (see NOTES.md) — so this is only ever meaningful once
+  // isShippingCategory (below) is true. Lets a ticket for an *inbound*
+  // shipment (nothing serviced here yet, so no existing ticket to "Ship
+  // this instrument" from) carry a destination the same as one spun off
+  // that way.
   shipping_contact_info: '',
 });
+
+// True exactly when this ticket will land as an is_shipping ticket —
+// mirrors the backend's own POST /tickets rule (routes/tickets.js) one
+// to one, now that the category *is* the whole decision.
+const isShippingCategory = computed(() => form.value.category_key === 'orders_shipping');
 
 // N2c: category buttons instead of a dropdown, same row-of-buttons pattern
 // QueueView.vue already uses for its instrument-type/category pickers.
@@ -70,12 +75,19 @@ function pickCategory(key) {
   form.value.category_key = key;
   form.value.subcategory_key = '';
   form.value.subcategory_other_text = '';
-  // The shipping checkbox/fields only ever show under Orders & Shipping
-  // (below) — clear them on the way out so switching categories and back
-  // doesn't leave a stale is_shipping/contact-info pair the user never
-  // actually confirmed under the new category.
-  if (key !== 'orders_shipping') {
-    form.value.is_shipping = false;
+  if (key === 'orders_shipping') {
+    // qc_required is meaningless once is_shipping hides the whole QC/
+    // Invoicing story (its checkbox is hidden below too) — keep the
+    // stored value honest rather than leaving a stale `true` sitting
+    // unused. Safe to set unconditionally here since the checkbox is
+    // unreachable while this category is picked, so nothing overwrites it
+    // afterward.
+    form.value.qc_required = false;
+  } else {
+    // The contact-info field only ever shows under Orders & Shipping
+    // (below) — clear it on the way out so switching categories and back
+    // doesn't leave a stale destination the user never actually confirmed
+    // under the new category.
     form.value.shipping_contact_info = '';
   }
 }
@@ -86,12 +98,12 @@ function pickCategory(key) {
 // e.g. "QC" for a Daily To-Do's or a shipping-flagged ticket, which would
 // then fail at submit() with a 400 the form never explained.
 const statusOptions = computed(
-  () => settings.statusesForCategory(form.value.category_key, form.value.is_shipping),
+  () => settings.statusesForCategory(form.value.category_key, isShippingCategory.value),
 );
-// If the category (or the shipping checkbox) changes out from under the
-// currently-picked status, re-home it to that combination's default
-// rather than silently submitting a status the backend will reject.
-watch([() => form.value.category_key, () => form.value.is_shipping], () => {
+// If the category changes out from under the currently-picked status,
+// re-home it to that combination's default rather than silently
+// submitting a status the backend will reject.
+watch(() => form.value.category_key, () => {
   if (!statusOptions.value.some((s) => s.key === form.value.status_key)) {
     form.value.status_key = statusOptions.value[0]?.key || '';
   }
@@ -144,13 +156,6 @@ function removeSibling(index) {
 // nothing here is meant to persist once the checkbox that shows it is off.
 watch(() => form.value.multi_instrument, (on) => {
   if (!on) siblingInstruments.value = [];
-});
-
-// qc_required is meaningless once is_shipping hides the whole QC/
-// Invoicing story (its checkbox above is hidden too) — keep the stored
-// value honest rather than leaving a stale `true` sitting unused.
-watch(() => form.value.is_shipping, (on) => {
-  if (on) form.value.qc_required = false;
 });
 
 async function loadCustomerInstruments() {
@@ -323,7 +328,6 @@ async function submit() {
             due_date: payload.due_date,
             multi_instrument: true,
             qc_required: payload.qc_required,
-            is_shipping: payload.is_shipping,
             shipping_contact_info: payload.shipping_contact_info,
             source_ticket_id: ticket.id,
           });
@@ -539,25 +543,18 @@ async function submit() {
           <input v-model="form.multi_instrument" type="checkbox" />
           <span>Multi-instrument job</span>
         </label>
-        <label v-if="!form.is_shipping" class="checkbox" style="margin: 0">
+        <label v-if="!isShippingCategory" class="checkbox" style="margin: 0">
           <input v-model="form.qc_required" type="checkbox" />
           <span>QC required before invoicing</span>
         </label>
       </div>
 
-      <!-- Orders & Shipping also covers real billable orders (e.g. a
-           Shopify sale), so this stays opt-in rather than automatic —
-           only a ticket that's actually just packing/logistics (nothing
-           to QC, estimate, or bill hours against) should check it. Covers
-           the case "Ship this instrument" can't: an *inbound* shipment,
-           where there's no existing ticket yet to launch that from. -->
-      <div v-if="form.category_key === 'orders_shipping'" class="field">
-        <label class="checkbox">
-          <input v-model="form.is_shipping" type="checkbox" />
-          <span>This is a shipping/logistics ticket — hides QC, Estimate &amp; Hours, and only offers Not Started/In Progress/Done</span>
-        </label>
-      </div>
-      <div v-if="form.is_shipping" class="field">
+      <!-- Every Orders & Shipping ticket is a shipping/logistics job now
+           (see NOTES.md) — no checkbox to ask, just the destination for
+           it. Covers the case "Ship this instrument" can't: an *inbound*
+           shipment, where there's no existing ticket yet to launch that
+           from. -->
+      <div v-if="isShippingCategory" class="field">
         <label>Shipping to / contact info</label>
         <input
           v-model="form.shipping_contact_info"

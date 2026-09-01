@@ -2080,6 +2080,49 @@ shipping ticket that somehow carries a shipment (never happens today —
 every path that creates one also sets `is_shipping`) still shows it, just
 in the new spot.
 
+### 2.47 Orders/shipping always shipping, Housekeeping auto-task, priority "highlight in tasks" flag
+
+Three independent requests that came in together.
+
+**"This is a shipping/logistics ticket" checkbox removed — Orders & Shipping
+tickets are always shipping now.** The checkbox on the New Ticket form was
+the only way `is_shipping` ever got set to `false` on a manually-created
+Orders & Shipping ticket, and in practice nobody wanted that — the category
+exists specifically for shipping work, plus the handful of real billable
+Shopify orders that flow in through the webhook. `POST /tickets`'s
+`isShipping` derivation is now just `category.key === 'orders_shipping'`,
+with the checkbox, its form field, and the standalone `qc_required`-forcing
+watch removed from `TicketNewView.vue` (QC still gets force-cleared when you
+pick the category, same as before, just via the category-change handler
+instead of a separate watcher). This only touches the manual `POST /tickets`
+path — `shopifyWebhooks.js` creates its tickets through `insertTicketRow`
+directly and never sets `is_shipping` at all, so real Shopify orders are
+unaffected.
+
+**Housekeeping tickets get an automatic task at creation.** Added a check
+inside `insertTicketRow` (the one helper shared by every ticket-creation
+path — manual, sub-tickets, recurring-ticket firings, fleet QC, quote
+conversion, purchases) that, when `category.key === 'housekeeping'`, inserts
+a `ticket_tasks` row titled after the ticket itself, assigned to the same
+technician if one was set at creation. Housekeeping tickets are almost
+always fired by the recurring-ticket scheduler with nobody watching the
+tickets list, so previously the only way to notice one existed was to go
+looking; now it shows up on the assignee's dashboard "My tasks" the moment
+it's created, same as any other unlocked task.
+
+**New Settings flag: highlight a priority tier's tasks on the dashboard.**
+Added `highlight_in_tasks` to `priority_tier` rows' `meta` (Settings →
+Priority tiers gets a new checkbox column, same generic per-row-flag
+mechanism as `hide_ship_button`/`unlocks_tasks`) and a `stores.js` getter
+`highlightTasksForPriority(priorityKey)` to read it. `DashboardView.vue`'s
+"My tasks" card now splits `myTasks` into `regularTasks` and
+`priorityTasks` by that flag; flagged tasks move into a new "Priority
+tasks" card directly below the main one, styled with a red border so it's
+visually impossible to miss. Migration 042 turns the flag on for
+Expedited/SOS by default — Standard and Low Priority stay off, same
+opt-in convention as `show_status_notes`. Turning it off for a tier just
+folds its tasks back into the regular list, no code change needed.
+
 ## 4. Suggested first moves after deploy
 
 
