@@ -1768,6 +1768,67 @@ picker's own dropdown logic produces), rename inline, toggle
 page's own description rather than a confirm dialog). No bulk import
 yet — that's the CSV step, deferred along with the real data.
 
+### 2.40 Consolidate the amp/rarity families into "other"
+
+Boss's call, after Wave 5 shipped: the `amp` and `rarity` instrument
+families weren't pulling their weight as separate buckets, so they're now
+one `other` family. `routes/instruments.js`'s `FAMILIES` drops from 7 keys
+to 6 (`rhodes, wurlitzer, hohner, strings, organ, other`), and
+`FAMILY_LABELS` follows suit — no more separate "Amplifier"/"Other"
+labels, just one `other: 'Other'`.
+
+Migration 037 reassigns every existing `family = 'amp'` or `'rarity'` row
+to `'other'`, across every table that stores this key: `instruments`,
+`qc_templates`, `standard_procedures`, `instrument_default_technicians`,
+and N7's new `instrument_models` (no seed rows there yet for either
+family, but future-proofed anyway). `instrument_default_technicians` has
+a real `(family, employee_id)` PRIMARY KEY (migration 014), so the
+migration deletes the redundant side first if the same employee was
+already a default tech for both families — otherwise the merge would hit
+a PK violation. `qc_templates` and `standard_procedures` have no such
+constraint, so if the shop had ever set up its own custom template or
+procedure specifically for `amp` and a different one for `rarity`, both
+now sit side by side under `other` rather than being silently merged or
+one being deleted — this migration can't guess which one's content should
+win, and `qc.js`'s "resolve this round's template" query just takes
+whichever sorts first, so the other becomes an invisible duplicate.
+Flagging this in "Suggested first moves after deploy" below: worth a scan
+of Settings → QC templates and Settings → Standard procedures for any
+leftover pair that needs reconciling.
+
+`importCsv.js` (the one-time Google Sheets importer, still runnable with
+`--reset`) had its `classifyFamily()` amp-vs-rarity regex split removed —
+both branches just return `'other'` now, since the distinction no longer
+maps to anything. Nothing in the frontend hardcoded `'amp'`/`'rarity'`
+anywhere — every family dropdown/filter across the app (Fleet, QC
+templates, Queue, Ticket forms, Estimate/Purchase forms, the N7 model
+picker) already reads its list from `refData.families` /
+`FAMILIES.includes(...)`, so removing two keys from that one array is
+everywhere it needed to be removed. Also applied N7's `familyLabel()`
+helper to QueueView's two family filters (buttons and the mobile
+`<select>`) while in this code — those were still showing raw family
+keys and hadn't made the "highest-visibility spots" cut in §2.39, but
+Queue is arguably the single most-used family filter in the app.
+
+### 2.41 Fix: new tickets were defaulting to "Done"
+
+Settings → Ticket statuses and `defaultStatusForCategory` (the function
+`routes/tickets.js` calls to pick a new ticket's starting status) both
+walk `ticket_status` rows in the same order — lowest `sort_order` first —
+so the row sitting at the top of that Settings list *is* what every new
+ticket starts on, by construction, not two things that can drift apart.
+Somewhere along the way `done` picked up a lower `sort_order` than the
+in-progress statuses that should precede it, so both symptoms (Done
+showing first in Settings, new tickets landing on Done) were the same
+underlying data issue.
+
+Migration 038 re-pins all 8 seeded `ticket_status` rows to seed.js's
+canonical order (`reservation, not_started, in_progress, qc,
+invoice_sent, invoice_paid, done, on_hold` — 10 through 80) by key, rather
+than nudging today's values relatively, so it corrects things regardless
+of how they drifted and is a no-op if a given key was already right. Any
+extra ticket_status an admin has since added is left untouched.
+
 ## 4. Suggested first moves after deploy
 
 
@@ -1779,3 +1840,6 @@ yet — that's the CSV step, deferred along with the real data.
 4. Walk `/fleet` and fix any instrument families the classifier got wrong (§2.6).
 5. Map the `shop_contact_raw` initials onto real employees (§2.5).
 6. Get the GCS bucket up (§3) before the shop starts relying on photos.
+7. After the amp/rarity consolidation (§2.40), scan Settings → QC templates
+   and Settings → Standard procedures for any leftover amp- or rarity-specific
+   row that now duplicates one under "other" and needs reconciling.

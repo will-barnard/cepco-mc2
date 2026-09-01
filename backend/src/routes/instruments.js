@@ -8,15 +8,24 @@ const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const router = express.Router();
 router.use(requireAuth);
 
-// Instrument taxonomy (PLAN §5), extended per SHOWROOM QC.
-const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'organ', 'amp', 'rarity'];
+// Instrument taxonomy (PLAN §5), extended per SHOWROOM QC. 'amp' and
+// 'rarity' were consolidated into a single 'other' family (see migration
+// 037 and NOTES.md) — the shop didn't have enough of either to justify
+// separate buckets, and "amp" vs. "rarity" was a fairly arbitrary split to
+// begin with (see importCsv.js's old classifier, which just fell through
+// to whichever wasn't clearly an amp). Existing rows carrying the old keys
+// are reassigned to 'other' by that migration in every table that stores
+// a family (instruments, qc_templates, standard_procedures,
+// instrument_default_technicians, instrument_models) — there's nothing
+// left anywhere in the schema still writing 'amp' or 'rarity'.
+const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'organ', 'other'];
 
 router.get('/families', (req, res) => res.json(FAMILIES));
 
-// N7 (boss-list scope, scaffold): a few of the 7 family keys read fine as
+// N7 (boss-list scope, scaffold): a few of these family keys read fine as
 // raw strings in a <select> ("rhodes", "wurlitzer") but the rest don't
-// ("strings", "amp", "rarity" are internal shorthand, not what a customer
-// or even a tech would call the category out loud). Additive only — the
+// ("strings" and "other" are internal shorthand, not what a customer or
+// even a tech would call the category out loud). Additive only — the
 // existing /families endpoint above keeps its plain-string-array shape so
 // none of its ~11 existing frontend consumers (`v-for="f in
 // refData.families"` etc.) need to change; this is a second, optional
@@ -27,8 +36,7 @@ const FAMILY_LABELS = {
   hohner: 'Hohner',
   strings: 'Electric String Pianos',
   organ: 'Combo Organ',
-  amp: 'Amplifier',
-  rarity: 'Other',
+  other: 'Other',
 };
 
 router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));

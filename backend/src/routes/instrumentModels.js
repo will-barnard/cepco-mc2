@@ -3,7 +3,7 @@
 /**
  * N7 (boss-list scope, scaffold — see migration 036 and NOTES.md). Admin
  * CRUD plus a read endpoint over `instrument_models`, the ragged tree of
- * model names sitting beneath each of instruments.FAMILIES' 7 keys. Those
+ * model names sitting beneath each of instruments.FAMILIES' keys. Those
  * keys themselves are untouched by this file — `family` here is just
  * whichever of those strings a node belongs to, validated against the
  * same list `routes/instruments.js` already exports.

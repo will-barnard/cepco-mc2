@@ -312,7 +312,7 @@ function dropOffDate(t) {
             type="button" class="small" :class="{ primary: filters.instrument_family === f }"
             @click="pickFamily(f)"
           >
-            {{ f }}
+            {{ refData.familyLabel(f) }}
           </button>
         </div>
       </div>
@@ -371,7 +371,7 @@ function dropOffDate(t) {
           <label>Instrument</label>
           <select :value="filters.instrument_family" @change="pickFamily($event.target.value)">
             <option value="">All</option>
-            <option v-for="f in refData.families" :key="f" :value="f">{{ f }}</option>
+            <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
           </select>
         </div>
         <div>

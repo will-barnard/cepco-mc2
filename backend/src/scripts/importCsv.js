@@ -97,8 +97,10 @@ function classifyFamily(sheetFamily, instrumentText) {
     if (/organ|vox|farfisa|acetone|gibson g\d|rmi|continental|combo|hammond|leslie|philicorda|top \d/.test(s)) {
       return 'organ';
     }
-    if (/amp|twin|reverb|ampeg|leslie/.test(s)) return 'amp';
-    return 'rarity';
+    // amp and rarity consolidated into 'other' (see migration 037 and
+    // NOTES.md) — telling an amp from "everything else non-organ" no
+    // longer matters when both land on the same family.
+    return 'other';
   }
   if (sheetFamily === 'job_queue') {
     if (/rhodes|mkii|mk ii|mki\b/.test(s)) return 'rhodes';
@@ -106,8 +108,7 @@ function classifyFamily(sheetFamily, instrumentText) {
     if (/clavinet|pianet|cembalet|hohner/.test(s)) return 'hohner';
     if (/cp-?\d|helpinstill|yamaha cp/.test(s)) return 'strings';
     if (/organ|vox|farfisa|acetone|continental|hammond/.test(s)) return 'organ';
-    if (/amp|twin|reverb|ampeg/.test(s)) return 'amp';
-    return 'rarity';
+    return 'other';
   }
   return sheetFamily; // rhodes | wurlitzer
 }
@@ -365,8 +366,9 @@ const FLEET_SECTIONS = {
   WURLITZER: 'wurlitzer',
   'HOHNER + STRINGS': 'hohner',
   ORGANS: 'organ',
-  'MELLOTRON, SYNTH, & RARITIES': 'rarity',
-  AMPLIFIERS: 'amp',
+  // Both consolidated into 'other' — see migration 037 and NOTES.md.
+  'MELLOTRON, SYNTH, & RARITIES': 'other',
+  AMPLIFIERS: 'other',
 };
 
 async function importShowroomQc(file) {
