@@ -2035,6 +2035,51 @@ this is the *other* path, for when a shipping ticket already exists and
 needs to absorb one more instrument rather than being the thing that
 creates it. The two are complementary, not a replacement of each other.
 
+### 2.46 Ticket detail page cleanup: technicians widget, status report gating, shipping column order
+
+Three small UI requests against `TicketDetailView.vue`, grouped together
+since they all came in as one pass.
+
+**Assigned technicians collapses once populated.** It used to always
+render `TechnicianPicker` inline — a lot of vertical space on a ticket
+that already has people on it. Now it starts expanded only when nobody's
+assigned yet (nothing to collapse, and it's the field you'd want to fill
+in first); once someone is, it collapses behind a one-line summary (names,
+comma-separated) and a "Show"/"Hide" toggle. The expand/collapse state is
+only (re-)initialized once per ticket — `lastInitializedTicketId` in
+`load()` — rather than on every reload, specifically so that assigning
+the *first* technician doesn't yank the picker away mid-edit the moment
+`patch()`'s own `load()` call re-fetches the ticket: the id hasn't
+changed, so the guard leaves `showTechnicians` alone and the picker stays
+open for adding more people. Revisiting the ticket later re-evaluates from
+scratch, same as a fresh page load.
+
+**Customer status report hidden for non-repair categories.** Added
+`hide_status_report` to the same per-category `meta` mechanism as
+`hide_ship_button`/`show_status_notes` (`stores.js`'s new
+`statusReportAllowed` getter, default-permissive like `hide_ship_button`)
+rather than hardcoding category keys in the template, so any category can
+be opted out later from Settings → Ticket categories' new "Status report"
+column with no deploy. Migration 041 opts Housekeeping out by default —
+inbox sweeps and weekly chores have no customer to report to. Shipping
+tickets are gated separately, through the existing `is_shipping` check
+(`showStatusReport` combines both) rather than through this same
+category flag, since Orders & Shipping also carries real billable Shopify
+orders that should keep their report — the category itself can't be the
+signal here, same reasoning migration 028's header already gives for why
+`is_shipping` exists at all.
+
+**Shipping tickets: Shipment card moved above Photos.** `TicketShipment`
+used to sit in the left column, between Purchase and Estimate/Hours.
+Moved it to the right column, directly above `TicketPhotos` — for a
+shipping ticket specifically, that puts the packing checklist as the
+first thing in that column (QC is already hidden there via `!isShipping`),
+ahead of photos, matching how that ticket type actually gets worked. Its
+render condition (`ticket.shipments?.length`) is unchanged, so a non-
+shipping ticket that somehow carries a shipment (never happens today —
+every path that creates one also sets `is_shipping`) still shows it, just
+in the new spot.
+
 ## 4. Suggested first moves after deploy
 
 

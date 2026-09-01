@@ -39,6 +39,15 @@ const serviceNeededDraft = ref('');
 const savingStatusNotes = ref(false);
 const statusReport = ref(null);
 const generatingReport = ref(false);
+// "Assigned technicians" takes up a lot of space once a ticket has people
+// on it, so it starts collapsed behind a summary + "Show" toggle whenever
+// someone's already assigned, and expanded when nobody is (there's nothing
+// to summarize, and it's the thing you'd want to fill in first). Only
+// initialized once per ticket — see lastInitializedTicketId below — so
+// assigning the first tech mid-edit doesn't yank the picker away right
+// as it re-fetches after that save.
+const showTechnicians = ref(true);
+const lastInitializedTicketId = ref(null);
 
 async function load() {
   loading.value = true;
@@ -47,6 +56,10 @@ async function load() {
     notesDraft.value = ticket.value.notes || '';
     serviceDoneDraft.value = ticket.value.service_done_notes || '';
     serviceNeededDraft.value = ticket.value.service_needed_notes || '';
+    if (lastInitializedTicketId.value !== ticket.value.id) {
+      showTechnicians.value = !(ticket.value.technicians || []).length;
+      lastInitializedTicketId.value = ticket.value.id;
+    }
     const reports = await api.get('/status-reports', { ticket_id: props.id });
     statusReport.value = reports[0] || null;
   } finally {
@@ -130,6 +143,14 @@ const assignedTechIds = computed(() => (ticket.value?.technicians || []).map((t)
 // can no longer be a category_key check (see that migration's header for
 // why the category and this flag aren't the same thing).
 const isShipping = computed(() => !!ticket.value?.is_shipping);
+
+// Customer status report card (right column) — no customer to report to
+// on a non-repair ticket. is_shipping covers Shipping specifically (see
+// isShipping above); settings.statusReportAllowed covers every other
+// opted-out category (Housekeeping by default — migration 041).
+const showStatusReport = computed(() => (
+  !isShipping.value && settings.statusReportAllowed(ticket.value?.category_key)
+));
 </script>
 
 <template>
@@ -226,8 +247,19 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
           </div>
 
           <div class="field">
-            <label>Assigned technicians</label>
+            <div class="row" style="margin-bottom: 4px">
+              <label style="margin: 0">Assigned technicians</label>
+              <span v-if="!showTechnicians" class="muted small">
+                {{ ticket.technicians.map((t) => t.name).join(', ') }}
+              </span>
+              <div class="spacer" />
+              <button
+                v-if="assignedTechIds.length" class="small"
+                @click="showTechnicians = !showTechnicians"
+              >{{ showTechnicians ? 'Hide' : 'Show' }}</button>
+            </div>
             <TechnicianPicker
+              v-if="showTechnicians"
               :model-value="assignedTechIds"
               @update:model-value="(ids) => patch({ technician_ids: ids })"
             />
@@ -304,7 +336,6 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
         <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
-        <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
         <TicketEstimate v-if="!isShipping" :ticket="ticket" @changed="load" />
         <TicketHours v-if="!isShipping" :ticket="ticket" @changed="load" />
       </div>
@@ -315,9 +346,13 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
           v-if="!isShipping" :ticket="ticket"
           @changed="load" @task-created="ticketTasksRef?.load()"
         />
+        <!-- Shipping tickets lead with the checklist they're actually here
+             to work through — TicketPhotos comes after it instead of
+             before, just for this ticket type. -->
+        <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
         <TicketPhotos :ticket-id="ticket.id" />
 
-        <div class="card">
+        <div v-if="showStatusReport" class="card">
           <div class="row" style="margin-bottom: 12px">
             <h2 style="margin: 0">Customer status report</h2>
           </div>

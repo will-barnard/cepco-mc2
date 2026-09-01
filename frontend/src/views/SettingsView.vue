@@ -249,6 +249,22 @@ async function toggleStatusNotes(row) {
   }
 }
 
+// Per-category "Customer status report" card visibility on the ticket
+// detail page (see stores.js's statusReportAllowed) — same pattern and
+// same starting value (on by default) as toggleShipButton. Shipping
+// tickets are hidden separately via is_shipping, not through this.
+async function toggleStatusReport(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, hide_status_report: !row.meta.hide_status_report },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-status "Unlocks tasks" flag (migration 022, NOTES.md §2.28) — whether
 // a ticket sitting in this status has its tasks surfaced on anyone's
 // dashboard (stores.js's unlocksTasks). Same on/off-meta-flag pattern as
@@ -454,6 +470,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Parent</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
+                <th v-if="category === 'ticket_category'">Status report</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
@@ -512,6 +529,15 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!row.meta.hide_ship_button"
                       @change="toggleShipButton(row)"
+                    />
+                  </label>
+                </td>
+
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Show the &quot;Customer status report&quot; card on tickets in this category">
+                    <input
+                      type="checkbox" :checked="!row.meta.hide_status_report"
+                      @change="toggleStatusReport(row)"
                     />
                   </label>
                 </td>
