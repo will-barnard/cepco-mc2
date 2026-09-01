@@ -313,7 +313,33 @@ router.get('/:id', asyncHandler(async (req, res) => {
     query(`SELECT l.*, emp.name AS changed_by_name
              FROM status_change_log l LEFT JOIN employees emp ON emp.id = l.changed_by
             WHERE l.ticket_id = $1 ORDER BY l.changed_at DESC`, [req.params.id]),
-    query('SELECT * FROM shipments WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
+    // items (migration 040): other already-existing tickets' instruments
+    // grouped onto this same shipment — see TicketShipment.vue's "+ Add
+    // instrument" and shipments.js's POST /:id/items. own_tracking_number
+    // is per item, NULL meaning "shares this shipment's own box/tracking
+    // number" — that's the whole one-box-vs-separate-boxes toggle.
+    query(
+      `SELECT s.*, COALESCE(items.rows, '[]'::json) AS items
+         FROM shipments s
+         LEFT JOIN LATERAL (
+           SELECT json_agg(
+                    json_build_object(
+                      'id', si.id,
+                      'instrument_id', si.instrument_id,
+                      'instrument_label', COALESCE(i2.nickname, i2.model, i2.family, 'Instrument'),
+                      'source_ticket_id', si.source_ticket_id,
+                      'source_ticket_title', t2.title,
+                      'own_tracking_number', si.own_tracking_number
+                    ) ORDER BY si.created_at
+                  ) AS rows
+             FROM shipment_items si
+             LEFT JOIN instruments i2 ON i2.id = si.instrument_id
+             LEFT JOIN tickets     t2 ON t2.id = si.source_ticket_id
+            WHERE si.shipment_id = s.id
+         ) items ON TRUE
+        WHERE s.ticket_id = $1 ORDER BY s.created_at`,
+      [req.params.id],
+    ),
     query('SELECT * FROM invoices WHERE ticket_id = $1 ORDER BY created_at', [req.params.id]),
     // Sub-tickets: any ticket created *from* this one (the "Create shipping
     // ticket" button, or the general "Add sub-ticket" form — both just set

@@ -1974,6 +1974,67 @@ label now shows "fixed: …" instead whenever a pin is set, since the
 rotation name would otherwise be misleading (it's not who's actually
 getting the next ticket while a pin is active).
 
+### 2.45 Group an already-existing ticket's instrument onto a shipment
+
+The gap §2.42 flagged and left alone — "bundling several *existing*
+tickets' instruments into one outbound shipment together" — turned out to
+be exactly what was needed next: someone had already clicked "Ship this
+instrument" on one ticket and wanted to add a second, already-existing
+ticket's instrument to that same shipment, not spin up a second
+disconnected shipping ticket for it (which is all "Ship this instrument"
+has ever been able to do — one instrument, one new ticket, one new
+shipment, every time).
+
+Migration 040 adds `shipment_items`: `shipment_id`, `instrument_id`,
+`source_ticket_id` (the repair ticket the instrument came from), and
+`own_tracking_number`. The shipping ticket's own instrument
+(`tickets.instrument_id` via `shipments.ticket_id`) stays the "primary"
+one and is never duplicated into this table — `shipment_items` is only
+the *additional* instruments pulled in from other tickets.
+
+`own_tracking_number`'s NULL-ness (not truthiness) is the whole "one box
+or separate boxes" answer: NULL means this instrument rides in the
+shipment's own box, sharing its `tracking_number` and packing checklist;
+a non-NULL value (including `''`, deliberately distinct from NULL so "own
+box, tracking not filled in yet" doesn't collapse back into "shares the
+box") means it's packed separately with its own tracking number. No
+second shipment row, no second ticket status to track — it's all still
+the one shipping ticket.
+
+`routes/shipments.js` gains three endpoints: `GET /:id/candidate-tickets`
+(open, non-archived tickets with an instrument, excluding this shipment's
+own ticket and anything already claimed by another shipment — as either a
+shipment's own ticket or someone else's item — with an optional `q`
+against title/customer/instrument, same ILIKE shape `GET /tickets`
+already uses), `POST /:id/items` (re-checks that same not-already-claimed
+condition server-side, since the candidate list can go stale between load
+and click), and `PATCH` / `DELETE /:id/items/:itemId` for the box toggle
+and removing an instrument from the shipment (never touches the source
+ticket itself — it just stops being part of this shipment). Adding new
+items is blocked once `shipments.shipped_at` is set, same as everywhere
+else a shipment is "locked" — but the box toggle and tracking-number edits
+on existing items stay open after shipping, matching `tracking_number`'s
+own always-editable behavior on the shipment itself.
+
+`routes/tickets.js`'s single-ticket `GET` now joins each shipment's items
+(instrument label, source ticket id/title, own tracking number) into the
+`shipments` array it already returns, so `TicketShipment.vue` doesn't need
+a second round-trip.
+
+`TicketShipment.vue` gets a new "Instruments in this shipment" list: the
+ticket's own instrument (non-removable, labeled "this ticket"), then each
+`shipment_items` row with a link back to its source ticket, a "Separate
+box" checkbox (the `own_tracking_number` toggle), a tracking-number input
+that only appears once that's checked, and a remove button. "+ Add
+instrument from another ticket" opens a small search box hitting the new
+candidate-tickets endpoint and adds whichever result gets clicked.
+
+Not touched: `TicketSubTickets.vue`'s "Ship this instrument" button still
+only ever creates a brand-new shipping ticket for a single instrument —
+this is the *other* path, for when a shipping ticket already exists and
+needs to absorb one more instrument rather than being the thing that
+creates it. The two are complementary, not a replacement of each other.
+
 ## 4. Suggested first moves after deploy
 
 
