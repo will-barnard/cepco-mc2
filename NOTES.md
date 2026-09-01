@@ -1904,6 +1904,41 @@ ticket — bundling several *existing* tickets' instruments into one
 outbound shipment together is a different, bigger feature nobody's asked
 for yet, separate from today's inbound-shipment gap this closes.
 
+### 2.43 Queue pages read status order high-to-low, not low-to-high
+
+Fallout from migration 038 (§2.41): fixing `ticket_status.sort_order` so
+Settings and new-ticket defaulting walk it lowest-first (Reservation ...
+Done, On Hold last) also flipped the Queue page, because `GET /tickets`
+was already using that same column as every queue's primary grouping —
+`st.sort_order NULLS LAST`, ascending, same direction as Settings. Before
+038, `done`'s too-low `sort_order` incidentally put Done-status sections
+near the top of the Queue; correcting the data made the Queue render in
+true low-to-high workflow order instead, which is what the ascending query
+was always going to do once the numbers were right — just not the order
+the shop actually wants to see there.
+
+The two screens want opposite walks of the same column: Settings / the
+new-ticket default should stay lowest-first (that's the fix from §2.41,
+untouched here — `services/settings.js`'s `listAll`/`listCategory`/
+`defaultStatusForCategory` are unchanged), but the Queue page's status
+sections — and the dashboard's "Unassigned" list, and the "Sort by ->
+Status progression" option, all of which share the one `st.sort_order`
+grouping per the comment above `orderBy` in `routes/tickets.js` — should
+read highest-first instead. Changed all five `orderBy` branches that
+reference `st.sort_order` (category queue, tech queue, family queue,
+`sort=status`, and the unassigned-dashboard branch) from
+`st.sort_order NULLS LAST` to `st.sort_order DESC NULLS LAST`. `NULLS
+LAST` stays on both ends of the flip — a ticket whose status doesn't
+carry a sort_order still sorts to the very end, not the top, regardless
+of direction.
+
+Nothing else needed touching: `TicketTable.vue`'s status-section grouping
+(§2.27) just breaks on consecutive `status_key` runs in whatever order the
+server returns rows, so reversing the SQL directly reverses what's
+rendered, section for section. `POST /reorder-queue` renumbers positions
+*within* one status's section only, never across statuses, so it's
+unaffected by which end of `sort_order` the section itself sorts from.
+
 ## 4. Suggested first moves after deploy
 
 

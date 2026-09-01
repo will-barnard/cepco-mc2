@@ -149,44 +149,54 @@ router.get('/', asyncHandler(async (req, res) => {
   // falls back to the old priority/recency sort, since there's no one queue
   // order that spans multiple categories, techs, or families.
   //
-  // Every queue axis below is now prefixed with st.sort_order — status is
-  // the primary grouping everywhere a queue exists (Queue page, dashboard),
-  // and the axis-specific position column is just the tiebreaker *within*
-  // a status. POST /reorder-queue (below) only ever renumbers positions
-  // within one status for exactly this reason — the two have to agree.
+  // Every queue axis below is now prefixed with st.sort_order DESC — status
+  // is the primary grouping everywhere a queue exists (Queue page,
+  // dashboard), and the axis-specific position column is just the
+  // tiebreaker *within* a status. POST /reorder-queue (below) only ever
+  // renumbers positions within one status for exactly this reason — the
+  // two have to agree.
+  //
+  // DESC here is deliberate, and separate from Settings -> Ticket statuses'
+  // own ordering: that page (and defaultStatusForCategory, which picks a
+  // new ticket's starting status) walks ticket_status lowest-sort_order-
+  // first — see migration 038 / NOTES.md §2.41 — but the Queue and
+  // dashboard read top-to-bottom the other way, highest sort_order first,
+  // per §2.43. The two orderings share the same sort_order column on
+  // purpose (reordering statuses in Settings still reorders the Queue's
+  // sections, just mirrored) — they just walk it from opposite ends.
   //
   // An explicit ?sort= overrides all of the above — it's a deliberate "show
   // me the list this way" choice, not a fallback, so it wins regardless of
   // which filters are active. sort=status orders by the status's own
-  // sort_order (its position in the shop's workflow — Not Started before In
-  // Progress before Done, etc.), i.e. the settings-configurable progression
-  // from Settings -> Ticket statuses, not alphabetical or by-key order.
+  // sort_order the same DESC way as every other queue axis here, so it's
+  // consistent with what the Queue page already shows rather than a second,
+  // conflicting notion of "status order."
   // sort=date (Q3) orders by drop-off date — when the instrument physically
   // landed in the shop, not due_date or created_at — with the usual
   // updated_at tiebreak for rows sharing (or missing) a drop-off date.
   let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
   let extraJoin = '';
   if (req.query.sort === 'status') {
-    orderBy = 'st.sort_order NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order DESC NULLS LAST, t.updated_at DESC';
   } else if (req.query.sort === 'date') {
     orderBy = 't.drop_off_date NULLS LAST, t.updated_at DESC';
   } else if (req.query.category && !req.query.technician_id) {
-    orderBy = 'st.sort_order NULLS LAST, t.category_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order DESC NULLS LAST, t.category_queue_position NULLS LAST, t.updated_at DESC';
   } else if (technicianParamIdx && !req.query.category) {
     // Order by *this* tech's position for this ticket specifically — a
     // ticket can be #2 for one assigned tech and #7 for another.
     extraJoin = ` LEFT JOIN ticket_technicians tt_order
                     ON tt_order.ticket_id = t.id AND tt_order.employee_id = $${technicianParamIdx}`;
-    orderBy = 'st.sort_order NULLS LAST, tt_order.queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order DESC NULLS LAST, tt_order.queue_position NULLS LAST, t.updated_at DESC';
   } else if (req.query.instrument_family && !req.query.category && !req.query.technician_id) {
     // Third queue axis (migration 015): a family, e.g. every Rhodes job,
     // in its own deliberate order independent of category or tech.
-    orderBy = 'st.sort_order NULLS LAST, t.family_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order DESC NULLS LAST, t.family_queue_position NULLS LAST, t.updated_at DESC';
   } else if (req.query.technician_id === 'unassigned' && !req.query.category && !req.query.instrument_family) {
     // Not a positioned queue (an unassigned ticket has no tech_queue_position
     // to speak of), but the dashboard's "Unassigned" list still wants status
     // grouping — tiebroken by priority same as the no-filter fallback below.
-    orderBy = 'st.sort_order NULLS LAST, pr.sort_order NULLS LAST, t.updated_at DESC';
+    orderBy = 'st.sort_order DESC NULLS LAST, pr.sort_order NULLS LAST, t.updated_at DESC';
   }
 
   const { rows } = await query(
