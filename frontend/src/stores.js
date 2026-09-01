@@ -133,17 +133,25 @@ export const useSettings = defineStore('settings', {
 });
 
 export const useRefData = defineStore('refdata', {
-  state: () => ({ employees: [], families: [], loaded: false }),
+  state: () => ({ employees: [], families: [], familyLabels: {}, loaded: false }),
   actions: {
     async load(force = false) {
       if (this.loaded && !force) return;
-      const [employees, families] = await Promise.all([
+      const [employees, families, familyLabels] = await Promise.all([
         api.get('/employees'),
         api.get('/instruments/families'),
+        api.get('/instruments/family-labels'),
       ]);
       this.employees = employees;
       this.families = families;
+      this.familyLabels = familyLabels;
       this.loaded = true;
+    },
+    // N7 (boss-list scope, scaffold): falls back to the raw key so callers
+    // never have to guard against familyLabels still being empty (e.g. a
+    // component that renders before load() resolves).
+    familyLabel(key) {
+      return this.familyLabels[key] || key;
     },
   },
 });

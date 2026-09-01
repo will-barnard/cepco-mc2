@@ -247,8 +247,26 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const ticket = rows[0];
   if (!ticket) throw notFound('Ticket not found');
 
+  // N9: a multi-instrument job's sibling tickets all share the same
+  // source_ticket_id (whichever of them is "primary" — see POST /tickets'
+  // multi-instrument handling below) rather than pointing at each other,
+  // so a sibling's own detail page needs a dedicated query to find the
+  // rest of the family — child_tickets (below) only ever looks *down* from
+  // a parent, and this ticket's own source_ticket_id/source_ticket_title
+  // (from TICKET_SELECT) only shows the single backlink up to the primary.
+  // No-op query when this ticket isn't itself a child of anything.
+  const siblingsQuery = ticket.source_ticket_id
+    ? query(
+      `SELECT id, title, category_label_snapshot, status_key, status_label_snapshot
+         FROM tickets
+        WHERE source_ticket_id = $1 AND id != $2 AND archived = FALSE
+        ORDER BY created_at`,
+      [ticket.source_ticket_id, ticket.id],
+    )
+    : Promise.resolve({ rows: [] });
+
   const [
-    estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows,
+    estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows, siblingRows,
   ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
@@ -256,10 +274,28 @@ router.get('/:id', asyncHandler(async (req, res) => {
     query(`SELECT h.*, emp.name AS employee_name
              FROM hours_log h JOIN employees emp ON emp.id = h.employee_id
             WHERE h.ticket_id = $1 ORDER BY h.worked_on DESC, h.logged_at DESC`, [req.params.id]),
-    query(`SELECT q.*, emp.name AS reviewer_name, s.label AS tier_label
+    // Q6: required_signoffs comes from the round's template (defaults to
+    // 1 when there isn't one — an ad-hoc round behaves like it always
+    // did), and signoffs is the full per-person list backing that round's
+    // progress — qc_checks.reviewer_id/signed_off_at only ever reflect
+    // "closed, and by whom most recently," not who all signed.
+    query(`SELECT q.*, emp.name AS reviewer_name, s.label AS tier_label,
+                  COALESCE(qt.required_signoffs, 1) AS required_signoffs,
+                  COALESCE(signoffs.rows, '[]'::json) AS signoffs
              FROM qc_checks q
              LEFT JOIN employees emp ON emp.id = q.reviewer_id
              LEFT JOIN settings s ON s.category = 'qc_tier' AND s.key = q.tier_key
+             LEFT JOIN qc_templates qt ON qt.id = q.template_id
+             LEFT JOIN LATERAL (
+               SELECT json_agg(
+                        json_build_object(
+                          'reviewer_id', cs.reviewer_id, 'reviewer_name', e2.name,
+                          'passed', cs.passed, 'signed_off_at', cs.signed_off_at
+                        ) ORDER BY cs.signed_off_at
+                      ) AS rows
+                 FROM qc_check_signoffs cs JOIN employees e2 ON e2.id = cs.reviewer_id
+                WHERE cs.qc_check_id = q.id
+             ) signoffs ON TRUE
             WHERE q.ticket_id = $1 ORDER BY q.round_number`, [req.params.id]),
     query(`SELECT a.*, emp.name AS uploader_name
              FROM ticket_attachments a LEFT JOIN employees emp ON emp.id = a.uploader_id
@@ -289,6 +325,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
              ) techs ON TRUE
             WHERE c.source_ticket_id = $1 AND c.archived = FALSE
             ORDER BY c.created_at`, [req.params.id]),
+    siblingsQuery,
   ]);
 
   res.json({
@@ -301,6 +338,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     shipments: shipmentRows.rows,
     invoices: invoiceRows.rows,
     child_tickets: childRows.rows,
+    sibling_tickets: siblingRows.rows,
   });
 }));
 

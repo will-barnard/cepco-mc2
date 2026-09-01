@@ -15,7 +15,7 @@ const ROLES = ['admin', 'senior', 'junior'];
 // admins see anything beyond name/role/initials.
 router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT id, name, email, role, initials, active, created_at
+    `SELECT id, name, email, role, initials, active, excluded_from_chore_rotation, created_at
        FROM employees ORDER BY active DESC, name`,
   );
   res.json(rows);
@@ -41,7 +41,7 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
 
 router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
   const {
-    name, email, role, initials, active, password, pin,
+    name, email, role, initials, active, password, pin, excluded_from_chore_rotation: excludedFromChoreRotation,
   } = req.body || {};
   if (role !== undefined && !ROLES.includes(role)) {
     throw badRequest(`role must be one of: ${ROLES.join(', ')}`);
@@ -72,15 +72,16 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
 
   const { rows } = await query(
     `UPDATE employees SET
-        name          = COALESCE($2, name),
-        email         = COALESCE($3, email),
-        role          = COALESCE($4, role),
-        initials      = COALESCE($5, initials),
-        active        = COALESCE($6, active),
-        password_hash = COALESCE($7, password_hash),
-        pin_hash      = CASE WHEN $8 THEN $9 ELSE pin_hash END
+        name                         = COALESCE($2, name),
+        email                        = COALESCE($3, email),
+        role                         = COALESCE($4, role),
+        initials                     = COALESCE($5, initials),
+        active                       = COALESCE($6, active),
+        password_hash                = COALESCE($7, password_hash),
+        pin_hash                     = CASE WHEN $8 THEN $9 ELSE pin_hash END,
+        excluded_from_chore_rotation = COALESCE($10, excluded_from_chore_rotation)
       WHERE id = $1
-      RETURNING id, name, email, role, initials, active, created_at`,
+      RETURNING id, name, email, role, initials, active, excluded_from_chore_rotation, created_at`,
     [
       req.params.id,
       name === undefined ? null : String(name).trim(),
@@ -91,6 +92,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       hash,
       pinHash !== undefined,
       pinHash === undefined ? null : pinHash,
+      excludedFromChoreRotation === undefined ? null : excludedFromChoreRotation,
     ],
   );
   if (!rows[0]) throw notFound('Employee not found');

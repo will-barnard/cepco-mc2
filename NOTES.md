@@ -1448,6 +1448,326 @@ inline "add instead" checkboxes (customer and instrument) exactly as they
 are. Removing the customer one without the typeahead in place would have
 broken walk-in customer creation outright.
 
+### 2.34 Wave 5, A1/A2 — recurring-ticket engine + daily sweeps + weekly chore rotation
+
+First two of Wave 5 (the doc's own "heavy ones" wave). Both share one
+engine rather than two, since A2 explicitly "extends A1" and the two
+differ only in whether a rotation applies.
+
+**A1 — recurring-ticket engine.** Nothing generated tickets on a schedule
+before this; the shape is copied straight from `services/ceppyScheduler.js`
+(already in the codebase): a plain in-process `setInterval` (60s tick),
+shop-local day-of-week/time computed via `EXTRACT(DOW FROM now() AT TIME
+ZONE $1)`/`to_char(... , 'HH24:MI')` against `config.shopTimezone` (never
+the container's own clock — see §2.13), a `last_generated_at` timestamp
+compared by shop-local *date* rather than exact time so a missed tick
+still recovers on the next check instead of silently skipping a day, and
+"log the one bad row and move on to the rest" error handling so a retired
+category key on one template can't take the whole process down. New
+`recurring_ticket_templates` table (migration 032) holds the config —
+title/category/priority/cadence/day-of-week/time/notes/active/sort_order —
+seeded with the four daily tickets the packet named: AM/PM Inbox Clearing
+and AM/PM Online Orders, all `low_priority`/`housekeeping` or
+`orders_shipping`, firing at 08:30/16:00 shop-local. Each fire creates a
+ticket the same way the Shopify order webhook does — `createdById: null`,
+routed through the existing `resolveNewTicketFields`/`insertTicketRow`
+pair from `routes/tickets.js` so it gets exactly the same validation and
+defaulting as a human-created ticket, nothing bespoke.
+
+**A2 — weekly chore rotation.** Extends A1 on the same table/engine:
+`recurring_ticket_templates.rotate_among_active_techs` is the only thing
+that differs about a chore template's firing. Migration 033 seeds the
+four weekly chores (bathroom/floor/showroom/kitchen, Mon-Thu 08:00). Per
+the boss's decision (flag on the staff record, not a hardcoded exclusion
+list — the doc's own explicit warning was "don't hardcode 'minus Jakob'"),
+a new `employees.excluded_from_chore_rotation` boolean (also migration
+033) is checked with a "Skip chores" column on Settings → Staff accounts,
+wired through the table's existing generic `updateEmployeeField` helper —
+no new function needed. The rotation itself is deliberately *not* a
+stored numeric index: `nextRotationEmployee` stores who went last
+(`rotation_last_employee_id`) and walks the *current* eligible list
+(active, not excluded) by id each time to find whoever's next, wrapping
+around — a stored index would silently drift the moment someone's hired,
+excluded, or deactivated, while this self-heals automatically, including
+when last week's assignee is no longer eligible at all (falls through to
+the first eligible person). If literally everyone's excluded or inactive,
+the chore ticket still gets created, just unassigned — a visibly-unassigned
+chore beats one that silently never appears.
+
+Both live behind a new Settings → Recurring tickets admin screen
+(`RecurringTicketsView.vue`, `routes/recurringTicketTemplates.js`) — same
+"config in a table, not in code" shape as QC/Standard Procedures screens:
+inline-editable rows that autosave, a "+ New template" form, Pause/Resume
+rather than delete-by-default (though hard delete is also offered here,
+since unlike QC templates these rows aren't referenced by any other
+table — nothing keeps a firing history that would be lost).
+
+### 2.35 Wave 5, A3 — fleet QC on a real per-instrument cycle
+
+`instruments.fleet_last_qc` (the SHOWROOM QC sheet's "Last QC" column) is
+shop shorthand free text — "Pre 2025", "Upcoming", "Never" — with no
+computable date behind any of it, so nothing could ever be automated off
+it. Migration 034 adds two real columns next to it rather than replacing
+it: `last_qc_at` (date) and `qc_interval_months` (3/6/12, DB-checked).
+`fleet_last_qc` itself is untouched — still shown exactly as before on
+FleetView.vue — because backfilling ~70 existing fleet instruments with a
+real cycle is explicitly a shop data-entry pass, not an engineering task;
+there's no way to derive a date from "Pre 2025" or "Never" by script.
+Until that pass sets both columns for a given instrument, it's simply
+invisible to the automation below — same "no eligible row, nothing
+happens" posture Wave 5's other schedulers take on an empty pool.
+
+FleetView.vue gained an editable "QC cycle" column (a date input plus a
+3/6/12/none select, both autosaving via a new `updateInstrument` PATCH)
+sitting next to the old free-text column rather than replacing it, so the
+backfill can happen instrument-by-instrument over time without disturbing
+the shorthand still being read today. A "due <date>" pill previews the
+next cycle date client-side; `routes/instruments.js`'s PATCH now accepts
+and validates both fields (the same `qc_interval_months IN (3,6,12)`
+check the DB itself enforces, surfaced as a clean 400 instead of a raw
+constraint error).
+
+The actual sweep is a new `fleetQcSweep()` in `services/recurringTickets.js`
+— same file as A1/A2's engine, called once at the end of every 60s `tick()`
+rather than as a second interval. It's gated to run once a day (07:00
+shop-local, not admin-configurable — this is a background sweep, not
+something the doc asked a settings screen for) via a `shop_config` /
+`fleet_qc_sweep` row (migration 034) whose `meta.last_run_at` is compared
+by shop-local *date*, the identical idiom `ceppyScheduler.js`'s
+`ceppys_schedule` row already uses — a missed tick still recovers on the
+next check instead of silently skipping a day. Each pass selects every
+fleet instrument whose `last_qc_at + qc_interval_months` has passed,
+skips any that already has an open ticket titled `Fleet QC — …` for that
+instrument (the title prefix doubles as the "don't refire" marker, same
+lightweight match-on-what's-visible approach `FleetView.vue`'s own
+`qcPill()` already takes with `fleet_last_qc`), and creates one via the
+same `resolveNewTicketFields`/`insertTicketRow` pair every other
+automated ticket in this app goes through — `createdById: null`, category/
+priority resolved through `settings.defaultKeyPreferring('inventory_
+restoration'/'standard_priority')` (the same "prefer this key, fall back
+if Settings ever retires it" helper `shopifyWebhooks.js`/`quotes.js`
+already use, rather than a raw literal that would break silently the day
+someone retires that key). Title pairs N1's nickname field with the
+model/family for something a tech can actually read on the queue: `Fleet
+QC — {nickname} {model}`.
+
+One incidental fix while in `tick()`: a failure loading the recurring-
+ticket templates used to `return` immediately, which — now that
+`fleetQcSweep()` also lives at the end of the same function — would have
+silently skipped the fleet sweep too on a transient templates-table
+hiccup. Changed to fall through with an empty template list instead, so
+the two sweeps are independent: one failing never blocks the other.
+
+### 2.36 Wave 5, Q6 — per-round QC signoffs (Setup QC / Final Assembly QC)
+
+Migration 021's round progression only ever let a round hold one
+`reviewer_id`/`signed_off_at` — the ticket-wide "2 rounds, signed off by 2
+different reviewers" rule (`REQUIRED_ROUNDS`/`REQUIRE_DISTINCT_REVIEWERS`
+in `routes/qc.js`) was a workaround for that: it counted two different
+signers *somewhere across the ticket's rounds*, which isn't what the boss
+actually wants — two techs literally checking the same closing pass.
+Migration 035 adds a real `qc_check_signoffs` table (one row per person
+per round, unique on `(qc_check_id, reviewer_id)` so re-signing upserts
+rather than piling up) and `qc_templates.required_signoffs` (default 1,
+set to 2 for every existing round 2 — Setup QC stays a single reviewer,
+Final Assembly QC needs two distinct techs). `qc_checks.reviewer_id`/
+`passed`/`signed_off_at` are left in place rather than dropped; they now
+mean "this round is fully closed, and by whom most recently" instead of
+"the one person who reviewed it" — existing signed-off rounds were
+backfilled into the new table as their round's sole recorded signoff, so
+nothing already closed changes behavior.
+
+`POST /qc/checks/:id/sign-off` (routes/qc.js) now upserts into
+`qc_check_signoffs` instead of writing straight onto `qc_checks`, then
+only closes the round (`passed`/`signed_off_at` on `qc_checks` itself)
+once the round's distinct passing signoffs reach its template's
+`required_signoffs` — a failing signoff still closes the round outright
+regardless of that count, same "one 'no' is enough" behavior the old
+model had (there's no UI path to a failing signoff since Q5 replaced it
+with "add a task instead" — kept only for whatever might still post
+`passed: false` directly). `REQUIRE_DISTINCT_REVIEWERS` is gone entirely:
+the ticket-level rule is back down to "2 rounds each individually
+passed," since each round's own `required_signoffs` is now what enforces
+"signed off by enough different people," scoped to the round that
+actually needs it rather than smeared across the whole ticket.
+
+`GET /tickets/:id`'s QC query (routes/tickets.js) now also returns each
+round's `required_signoffs` (from its template, defaulting to 1 for a
+round with none) and a `signoffs` array — every person who's signed that
+round so far, with name and pass/fail. `TicketQc.vue` uses both: an open
+round with `required_signoffs > 1` shows "N of M signed" and a running
+list of who's signed already; the sign-off button reads "Add my
+signature" instead of "Approve for next round" once more than one is
+needed, and hides for whoever's already signed (re-signing is harmless —
+the backend upserts — just confusing to have the button still sitting
+there). Settings → QC templates gained a "Signatures" field next to
+Round, both on the create form and inline per template, so the boss can
+set it per round themselves — including the eventual rename to "Setup
+QC"/"Final Assembly QC" and the round-2 content rewrite, which stay a
+shop/content job rather than something this migration does; the two
+existing family-agnostic round-2 templates ("Wurlitzer — QC Final",
+"General Final QC") keep their current names for now, just with
+`required_signoffs = 2` already wired up underneath.
+
+### 2.37 Wave 5, Q4 — QC checklist grouped by service category
+
+Supersedes an earlier decision (§2.23/Q5): checklist items were made
+deliberately reference-only — a client-only highlight that reset on
+reload, with a free-text notes field standing in for whatever tracking
+was needed. The boss's actual ask turned out to be the opposite: group
+every round's checklist into four fixed buckets — Tuning, Action,
+Electronics, Cosmetics (the coarser of two groupings offered, chosen over
+per-family/per-task-type splits) — and make checking an item off
+something that actually sticks, not just a highlight for the current
+viewing session.
+
+No new tables or columns: `qc_templates.items` and `qc_checks.results`
+were already JSONB, so both simply grew two more keys per entry —
+`category` (one of `routes/qc.js`'s new `QC_ITEM_CATEGORIES` constant, a
+small fixed list rather than a Settings-editable category the way
+`ticket_category` is — four buckets the boss picked once, not something
+that needs admin CRUD) and `checked` (boolean, defaulting false when a
+round starts). `POST /qc/checks` now snapshots both from the template
+onto each result row; `PATCH /qc/checks/:id` needed no changes at all —
+it already accepted a full replacement `results` array for the notes
+field's sake, so a checked-item toggle is just another full-array PATCH
+through the same endpoint. A new `GET /qc/item-categories` gives the
+frontend the canonical list rather than hardcoding it in two places.
+
+`TicketQc.vue`'s flat checklist is now rendered as one section per
+category (fixed order: Tuning, Action, Electronics, Cosmetics, then a
+trailing "General" for any item with no category assigned — every
+pre-Q4 item, until someone tags it) — `groupedResults()` buckets a
+round's `results` client-side for display without touching their storage
+order. Each item button now toggles a persisted `checked` flag
+(`toggleItem` PATCHes the whole array with just that one entry flipped)
+instead of a local Set, and is disabled once its round is signed off —
+matching the backend's own "can't edit a closed round" rule rather than
+letting a click there silently fail. Toggling stays open to anyone
+working the round, same as the notes field and Q5's "add a task" — it's
+recording what was checked, not signing off on it.
+
+Settings → QC templates' item editor gained a category dropdown per row
+(fetched from `GET /qc/item-categories`, so this screen can't drift from
+the backend's list), defaulting new items to "General." Assigning
+categories to the ~40 existing checklist items across every seeded
+template is content work for the shop to do at its own pace from that
+screen — same "boss/content job, not this change's job" framing as Q6's
+template renames; nothing here does it for them, and an unassigned item
+degrades gracefully into "General" rather than disappearing.
+
+### 2.38 Wave 5, N9 — multi-instrument jobs as sibling tickets
+
+`tickets.multi_instrument` (already in the schema) did nothing until now
+— nothing ever set it besides a checkbox with no consequence. Boss's call:
+one full ticket per instrument, linked as a family, over a join-table
+design. No new schema at all — this reuses `source_ticket_id` (migration
+008's generic "created from another ticket" provenance link), the exact
+mechanism `TicketSubTickets.vue`'s sub-tickets already run on, rather than
+inventing a second way to say "these tickets belong together."
+
+`TicketNewView.vue` gained an "Additional instruments" section, shown
+once "Multi-instrument job" is checked — one row per extra instrument,
+each either picked from the customer's existing instruments or added
+inline (a trimmed version of the primary instrument's own add-new form:
+family/model/nickname, skipping year/serial as unnecessary for a quick
+add). On submit, the primary ticket is created first as always; then one
+sibling `POST /tickets` per non-blank row, each with `source_ticket_id`
+set to the primary's id and the same category/subcategory/priority/
+status/customer/technicians/notes/dates/`qc_required` as the primary —
+title is left blank on every sibling so N1's `composeTicketTitle`
+generates a per-instrument one instead of every sibling sharing the
+primary's title. There's no server-side transaction spanning the whole
+batch (each instrument/ticket is its own independent request, same as
+`TicketSubTickets.vue`'s one-at-a-time creation) — a failure partway
+through a multi-sibling submit leaves the primary and whatever siblings
+already succeeded as real tickets rather than rolling anything back;
+`submit()` surfaces exactly which ones failed and links straight to the
+primary (`createdTicketId`) instead of either silently losing track of a
+partial failure or stranding the user on a form that looks like nothing
+happened.
+
+`GET /tickets/:id` gained a `sibling_tickets` query: when a ticket has its
+own `source_ticket_id` set, it also fetches every other ticket sharing
+that same `source_ticket_id` — the rest of the family, from any one
+sibling's own detail page, not just the single backlink up to the primary
+that `source_ticket_id`/`source_ticket_title` already gave every child.
+`TicketDetailView.vue` surfaces this as a one-line "part of a
+multi-instrument job with #12, #13" next to the existing "created from
+#X" line. `child_tickets` (the primary's own downward view, already
+powering `TicketSubTickets.vue`) is untouched — a sibling's siblings query
+and the primary's children query are two different directions through the
+same `source_ticket_id` column, not two representations of the same data.
+
+### 2.39 Wave 5, N7 — instrument model tree (scaffold)
+
+Explicit scope for this one: build the structure now, the boss's real model
+list arrives later as a CSV. Everything here is placeholder except the
+plumbing.
+
+The 7 existing `instruments.family` keys (rhodes/wurlitzer/hohner/strings/
+organ/amp/rarity) are completely untouched — they're a join key in five
+places (instruments, qc_templates, standard_procedures,
+instrument_default_technicians, Queue's per-family ordering) that nothing
+here needed to touch. Migration 036 adds `instrument_models`, a ragged
+self-referencing tree (`parent_id`, no fixed depth column) that sits
+*beneath* a family key rather than replacing it — `instruments.model` stays
+a plain TEXT column, never a foreign key, so the tree is purely a UX aid
+for filling that field. The migration seeds two families (Rhodes,
+Wurlitzer) with obviously-fake placeholder data on purpose, deliberately
+mixing depths (a leaf sitting right at the family root next to a deeper
+era → series → model chain) to prove the ragged shape works before real
+data arrives. `backend/src/routes/instrumentModels.js` is straightforward
+admin CRUD (GET open to any authenticated user — it's read live while
+someone's filling out a form — POST/PATCH/DELETE admin-only), with the one
+integrity rule that actually matters for a tree: a node's parent must be
+in the same family. Deleting a branch node cascades to everything under
+it — a branch with children is "a whole model line," not a row to keep as
+an orphan.
+
+`InstrumentModelPicker.vue` is the piece every form actually touches. It's
+a v-model over a plain string, so it drops into any existing
+`<input v-model="instrument.model">` without changing what gets submitted
+or how the backend validates it. Ragged depth is a first-class UX choice,
+not just a schema one: every level change emits the joined ancestor path,
+not just a true leaf, so stopping at "1970s" (no series chosen yet) is
+already a valid, saved value — nobody's blocked from finishing a form
+because this family's tree happens to be deeper or shallower than another
+one's. A manual free-text fallback is always available, not just where a
+node's `allow_manual` flag is set, since the tree is placeholder-only
+right now and forcing a pick from fake data would actively get in the
+way; the flag stays meaningful once real content lands (a family like
+rarity that's inherently open-ended will want it permanently). Wired into
+the three forms that had a bare model `<input>`: `TicketNewView.vue` (both
+the primary "add a new instrument" block and N9's sibling-instrument rows),
+`InventoryPurchaseNewView.vue`, and `EstimateNewView.vue`.
+
+Family display labels are additive, not a replacement. `GET
+/instruments/families` keeps its plain-string-array shape — with ~11
+frontend files already doing `v-for="f in refData.families"` /
+`:value="f"`, changing that shape would've meant touching every one of
+them for no reason. Instead `routes/instruments.js` gained a sibling
+`FAMILY_LABELS` map and `GET /instruments/family-labels`, and
+`useRefData` gained a `familyLabel(key)` getter (falls back to the raw key
+if the map hasn't loaded yet) that fetches it alongside the existing
+`families` call in `load()`. Applied to the highest-visibility spots —
+FleetView's family filter and table column, QcTemplatesView's family
+filter buttons, TicketNewView's two family selects — but deliberately
+**not** an exhaustive sweep of all ~11 files that reference `.family` or
+`refData.families` (CustomersView, HoursView, InstrumentDefaultsView,
+ProceduresView, QueueView, RentalCalendarView still show raw keys). That's
+scope creep for a change explicitly called a scaffold; flagging it here
+as a known, intentional gap rather than leaving it silently inconsistent.
+
+New admin screen: `InstrumentModelsView.vue` (Settings → Instrument
+models), one family tab at a time, same "inline rows, autosave on change"
+shape as RecurringTicketsView.vue/ProceduresView.vue — add a node (with a
+parent picker rendered from the same flattened, depth-indented list the
+picker's own dropdown logic produces), rename inline, toggle
+`allow_manual`/active, delete (with the cascade warning up front in the
+page's own description rather than a confirm dialog). No bulk import
+yet — that's the CSV step, deferred along with the real data.
+
 ## 4. Suggested first moves after deploy
 
 

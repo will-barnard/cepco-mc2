@@ -263,9 +263,13 @@ async function seedTemplates() {
     if (rows.length) continue;
     // eslint-disable-next-line no-await-in-loop
     await query(
-      `INSERT INTO qc_templates (name, family, kind, round_number, items)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [t.name, t.family, t.kind, t.round_number, JSON.stringify(t.items)],
+      `INSERT INTO qc_templates (name, family, kind, round_number, items, required_signoffs)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      // Q6: round_number 2 needs two distinct signatures on a fresh seed
+      // too, same structural rule migration 035 applies to an existing
+      // database — everything else keeps the column's own default of 1.
+      [t.name, t.family, t.kind, t.round_number, JSON.stringify(t.items),
+        t.round_number === 2 ? 2 : 1],
     );
     inserted += 1;
   }

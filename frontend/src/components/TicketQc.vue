@@ -1,12 +1,28 @@
 <script setup>
 /**
- * QC rounds (PLAN §6, migration 021). Rigor tiers are retired: every
- * ticket now follows the same standardized round progression and the same
- * fixed pass rule (2 rounds, signed off by 2 different reviewers — see
- * routes/qc.js's REQUIRED_ROUNDS/REQUIRE_DISTINCT_REVIEWERS). There's
- * nothing to pick when starting a round — the backend always resolves the
- * next round number and its standardized template for this ticket's
- * instrument family, so "Start round N" is the only control.
+ * QC rounds (PLAN §6, migration 021; per-round signoffs reworked for Q6;
+ * checklist grouped by service category for Q4). Rigor tiers are retired:
+ * every ticket follows the same standardized round progression, and the
+ * ticket overall needs 2 rounds passed (see routes/qc.js's
+ * REQUIRED_ROUNDS). There's nothing to pick when starting a round — the
+ * backend always resolves the next round number and its standardized
+ * template for this ticket's instrument family, so "Start round N" is the
+ * only control.
+ *
+ * Q6: how many people need to sign a given round is per-round now
+ * (check.required_signoffs, from the round's template) — Setup QC needs
+ * one, Final Assembly QC needs two distinct techs. check.signoffs is the
+ * list recorded so far; the round stays open, collecting more, until it
+ * crosses that count.
+ *
+ * Q4: supersedes this file's earlier "reference-only checklist" decision.
+ * Each item now carries a category (Tuning/Action/Electronics/Cosmetics —
+ * the boss's chosen coarse grouping, routes/qc.js's QC_ITEM_CATEGORIES)
+ * and a `checked` flag that's actually persisted (a PATCH per toggle,
+ * same endpoint the notes field already used), grouped under category
+ * headings instead of one flat list. An item with no category (every
+ * pre-Q4 template item, until someone assigns one from Settings -> QC
+ * templates) falls into a catch-all "General" group rather than vanishing.
  */
 import { ref, computed, onMounted } from 'vue';
 import api from '../api';
@@ -22,17 +38,42 @@ const auth = useAuth();
 const error = ref('');
 const busy = ref(false);
 
-// Checklist items are reference-only, not tracked completion state (see
-// NOTES.md — that was deliberately removed in favor of the notes field
-// below). Clicking one just gives it a focus/active highlight for this
-// viewing session, nothing saved — a plain, local Set of "round id ::
-// item index" strings, reset on reload like any other transient UI state.
-const activeItems = ref(new Set());
-function toggleItem(checkId, index) {
-  const key = `${checkId}:${index}`;
-  const next = new Set(activeItems.value);
-  if (next.has(key)) next.delete(key); else next.add(key);
-  activeItems.value = next;
+const QC_CATEGORY_LABELS = {
+  tuning: 'Tuning', action: 'Action', electronics: 'Electronics', cosmetics: 'Cosmetics',
+};
+const QC_CATEGORY_ORDER = ['tuning', 'action', 'electronics', 'cosmetics', null];
+
+/** Group a round's results by category for display, in a fixed order so
+ * every round's checklist reads the same way regardless of how its items
+ * happen to be ordered in the template. Items with no category (not yet
+ * assigned one in Settings -> QC templates) land in a trailing "General"
+ * group instead of being dropped. */
+function groupedResults(check) {
+  const groups = new Map(QC_CATEGORY_ORDER.map((c) => [c, []]));
+  (check.results || []).forEach((r, i) => {
+    const key = QC_CATEGORY_LABELS[r.category] ? r.category : null;
+    groups.get(key).push({ ...r, index: i });
+  });
+  return QC_CATEGORY_ORDER
+    .map((c) => ({ key: c, label: QC_CATEGORY_LABELS[c] || 'General', items: groups.get(c) }))
+    .filter((g) => g.items.length);
+}
+
+/** Q4: toggling an item now persists — a full replacement of check.results
+ * with just this one item's `checked` flipped, same "PATCH /checks/:id
+ * already accepts a replacement array" mechanism saveNotes() below uses
+ * for the notes field. Open to anyone still working the round (same as
+ * notes/reportIssue), not gated to senior — ticking off what's been
+ * checked isn't a sign-off. */
+async function toggleItem(check, index) {
+  error.value = '';
+  const results = check.results.map((r, i) => (i === index ? { ...r, checked: !r.checked } : r));
+  try {
+    await api.patch(`/qc/checks/${check.id}`, { results });
+    emit('changed');
+  } catch (err) {
+    error.value = err.message;
+  }
 }
 
 const checks = computed(() => props.ticket.qc_checks || []);
@@ -71,15 +112,24 @@ async function saveNotes(check, value) {
 // and this route support (nothing stops a future caller from using it),
 // there's simply no UI path to it here anymore — every sign-off from this
 // panel passes.
+/** Whether the signed-in tech has already signed this round — the button
+ * below hides once true so nobody accidentally re-signs their own row
+ * (harmless — routes/qc.js upserts — but confusing to see re-offered). */
+function alreadySigned(check) {
+  return (check.signoffs || []).some((s) => s.reviewer_id === auth.user?.id);
+}
+
 async function approveRound(check) {
   error.value = '';
   busy.value = true;
   try {
     const result = await api.post(`/qc/checks/${check.id}/sign-off`, { passed: true });
-    if (!result.ticket_qc_passed) {
+    if (!result.round_closed) {
+      error.value = `Signature recorded — ${result.signoffs_recorded} of `
+        + `${result.signoffs_required} needed to close this round.`;
+    } else if (!result.ticket_qc_passed) {
       error.value = `Round signed off. Ticket still needs `
-        + `${result.rounds_required - result.rounds_passed} more passing round(s)`
-        + `${result.distinct_reviewers_required ? ' from a second reviewer' : ''}.`;
+        + `${result.rounds_required - result.rounds_passed} more passing round(s).`;
     }
     emit('changed');
   } catch (err) {
@@ -123,7 +173,8 @@ async function reportIssue(check) {
     <p class="muted small" style="margin: 0 0 12px">
       Rounds always happen in order — Round 2 can't start before Round 1 is open, and each
       round's checklist is standardized for this instrument type. Every ticket needs 2 rounds
-      passed, signed off by 2 different reviewers, to clear QC.
+      passed to clear QC; how many people need to sign each round (1 or 2) depends on that
+      round's template.
     </p>
 
     <div v-if="error" class="alert" style="margin-bottom: 12px">{{ error }}</div>
@@ -134,28 +185,37 @@ async function reportIssue(check) {
         <span class="muted small">{{ check.results.length }} item(s)</span>
         <div class="spacer" />
         <span v-if="check.signed_off_at" :class="['pill', check.passed ? 'green' : 'red']">
-          {{ check.passed ? 'Passed' : 'Failed' }} — {{ check.reviewer_name }}
+          {{ check.passed ? 'Passed' : 'Failed' }}
+          — {{ (check.signoffs || []).map((s) => s.reviewer_name).join(', ') || check.reviewer_name }}
+        </span>
+        <span v-else-if="check.required_signoffs > 1" class="pill amber">
+          {{ (check.signoffs || []).filter((s) => s.passed).length }} of {{ check.required_signoffs }} signed
         </span>
       </div>
 
-      <!-- Reference checklist — items carry no persisted completion state
-           (see NOTES.md); a tech records what they actually found in the
-           notes field below instead. Each item is a real, focusable
-           button rather than static text, so it's clickable/tappable and
-           keyboard-navigable while working down the list — clicking one
-           just highlights it for this viewing session. -->
-      <ul class="qc-checklist" style="margin-top: 10px">
-        <li v-for="(r, i) in check.results" :key="i">
-          <button
-            type="button"
-            :class="['qc-item', { active: activeItems.has(`${check.id}:${i}`) }]"
-            @click="toggleItem(check.id, i)"
-          >
-            {{ r.label }}
-            <span v-if="r.note" class="item-note">{{ r.note }}</span>
-          </button>
-        </li>
-      </ul>
+      <!-- Q4: grouped by service category (Tuning/Action/Electronics/
+           Cosmetics), each item a real toggle button whose checked state
+           is actually persisted (routes/qc.js) rather than a reload-reset
+           highlight — a tech records *what* they found in the notes field
+           below, this just tracks which checks were done. -->
+      <div v-for="group in groupedResults(check)" :key="group.key || 'general'" style="margin-top: 10px">
+        <p class="muted small" style="margin: 0 0 2px; text-transform: uppercase; letter-spacing: .04em">
+          {{ group.label }}
+        </p>
+        <ul class="qc-checklist">
+          <li v-for="r in group.items" :key="r.index">
+            <button
+              type="button"
+              :class="['qc-item', { active: r.checked }]"
+              :disabled="!!check.signed_off_at"
+              @click="toggleItem(check, r.index)"
+            >
+              {{ r.label }}
+              <span v-if="r.note" class="item-note">{{ r.note }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
 
       <template v-if="!check.signed_off_at">
         <div class="field" style="margin-top: 12px">
@@ -184,11 +244,21 @@ async function reportIssue(check) {
             </button>
           </div>
         </div>
-        <div v-if="auth.isSenior" class="row" style="margin-top: 10px">
+        <ul
+          v-if="check.required_signoffs > 1 && check.signoffs?.length"
+          class="muted small" style="margin: 0 0 10px; padding-left: 18px"
+        >
+          <li v-for="s in check.signoffs" :key="s.reviewer_id">{{ s.reviewer_name }} — signed</li>
+        </ul>
+        <div v-if="auth.isSenior && !alreadySigned(check)" class="row" style="margin-top: 10px">
           <button class="primary" :disabled="busy" @click="approveRound(check)">
-            Approve for next round
+            {{ check.required_signoffs > 1 ? 'Add my signature' : 'Approve for next round' }}
           </button>
         </div>
+        <p v-else-if="auth.isSenior" class="muted small">
+          You've signed this round — waiting on {{ check.required_signoffs - check.signoffs.filter((s) => s.passed).length }}
+          more signature(s).
+        </p>
         <p v-else class="muted small">Sign-off requires senior tech or admin.</p>
       </template>
       <p v-else-if="check.notes" class="muted small" style="margin: 8px 0 0">{{ check.notes }}</p>

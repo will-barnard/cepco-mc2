@@ -2,7 +2,11 @@
 /**
  * QC checklist templates (Settings -> QC templates). Admin screen for
  * managing `qc_templates` rows — the actual checklist content (`items`:
- * [{label, note}]) a tech works through in TicketQc.vue and signs off on.
+ * [{label, note, category}]) a tech works through in TicketQc.vue and
+ * signs off on. `category` (Q4 — Tuning/Action/Electronics/Cosmetics,
+ * routes/qc.js's QC_ITEM_CATEGORIES) is what TicketQc.vue groups its
+ * checklist by; an item with none falls into that screen's catch-all
+ * "General" group rather than being invisible.
  *
  * Rigor tiers are retired (migration 021): a template's stage in the
  * progression is now `round_number`, scoped within its (family, kind) —
@@ -31,6 +35,13 @@ const KINDS = [
   ['evaluation', 'Evaluation'],
 ];
 
+// Q4: fetched rather than hardcoded here too, so this screen can't drift
+// from routes/qc.js's own QC_ITEM_CATEGORIES list.
+const itemCategories = ref([]);
+const CATEGORY_LABELS = {
+  tuning: 'Tuning', action: 'Action', electronics: 'Electronics', cosmetics: 'Cosmetics',
+};
+
 const templates = ref([]);
 const loading = ref(true);
 const error = ref('');
@@ -51,7 +62,10 @@ async function load() {
     loading.value = false;
   }
 }
-onMounted(load);
+onMounted(async () => {
+  itemCategories.value = await api.get('/qc/item-categories');
+  await load();
+});
 
 // Round order is the point: within a matching family+kind, round 1 always
 // sorts before round 2. family NULLS LAST mirrors the backend's own
@@ -78,7 +92,7 @@ const filtered = computed(() => templates.value
 // --- create --------------------------------------------------------------
 const showNew = ref(false);
 const blankForm = () => ({
-  name: '', family: '', kind: 'qc', round_number: 1,
+  name: '', family: '', kind: 'qc', round_number: 1, required_signoffs: 1,
 });
 const form = ref(blankForm());
 
@@ -97,6 +111,7 @@ async function createTemplate() {
       family: form.value.family || null,
       kind: form.value.kind,
       round_number: Number(form.value.round_number) || 1,
+      required_signoffs: Number(form.value.required_signoffs) || 1,
       items: [],
     });
     showNew.value = false;
@@ -133,7 +148,7 @@ function closeItems() {
   openId.value = null;
 }
 function addItem(id) {
-  drafts.value[id].push({ label: '', note: '' });
+  drafts.value[id].push({ label: '', note: '', category: null });
 }
 function removeItem(id, index) {
   drafts.value[id].splice(index, 1);
@@ -149,7 +164,7 @@ async function saveItems(t) {
   error.value = '';
   notice.value = '';
   const items = (drafts.value[t.id] || [])
-    .map((i) => ({ label: (i.label || '').trim(), note: (i.note || '').trim() || null }))
+    .map((i) => ({ label: (i.label || '').trim(), note: (i.note || '').trim() || null, category: i.category || null }))
     .filter((i) => i.label);
   try {
     await api.patch(`/qc/templates/${t.id}`, { items });
@@ -192,7 +207,7 @@ async function saveItems(t) {
             v-for="f in refData.families" :key="f" type="button"
             :class="familyFilter === f ? 'primary' : 'small'"
             @click="familyFilter = f"
-          >{{ f }}</button>
+          >{{ refData.familyLabel(f) }}</button>
         </div>
       </div>
 
@@ -246,6 +261,10 @@ async function saveItems(t) {
           <label>Round *</label>
           <input v-model="form.round_number" type="number" min="1" step="1" style="width: 90px" />
         </div>
+        <div class="field" style="margin: 0">
+          <label title="How many distinct people must sign this round before it's passed">Signatures *</label>
+          <input v-model="form.required_signoffs" type="number" min="1" step="1" style="width: 90px" />
+        </div>
         <div class="field" style="flex: none; margin: 0">
           <button class="primary" type="submit">Create</button>
         </div>
@@ -279,6 +298,16 @@ async function saveItems(t) {
               @change="updateField(t, { round_number: Number($event.target.value) || 1 })"
             />
           </span>
+          <span
+            class="row" style="gap: 4px; flex: none"
+            title="How many distinct people must sign this round before it's passed"
+          >
+            <label class="small muted" style="margin: 0">Signatures</label>
+            <input
+              :value="t.required_signoffs" type="number" min="1" step="1" style="width: 60px"
+              @change="updateField(t, { required_signoffs: Number($event.target.value) || 1 })"
+            />
+          </span>
           <span :class="['pill', t.active ? 'green' : 'slate']">
             {{ t.active ? 'Active' : 'Retired' }}
           </span>
@@ -302,6 +331,10 @@ async function saveItems(t) {
             <li v-for="(item, i) in drafts[t.id]" :key="i">
               <input v-model="item.label" placeholder="Checklist item" style="flex: 2" />
               <input v-model="item.note" placeholder="Note (optional)" style="flex: 2" />
+              <select v-model="item.category" style="flex: 1">
+                <option :value="null">— General —</option>
+                <option v-for="c in itemCategories" :key="c" :value="c">{{ CATEGORY_LABELS[c] || c }}</option>
+              </select>
               <button class="small" :disabled="i === 0" @click="moveItem(t.id, i, -1)">↑</button>
               <button
                 class="small" :disabled="i === drafts[t.id].length - 1"

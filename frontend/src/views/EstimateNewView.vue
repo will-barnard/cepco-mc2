@@ -14,6 +14,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
+import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 
 const router = useRouter();
 const settings = useSettings();
@@ -255,7 +256,7 @@ async function submit() {
           </div>
           <div class="field">
             <label>Model</label>
-            <input v-model="block.newInstrument.model" placeholder="Wurlitzer 200A" />
+            <InstrumentModelPicker :family="block.newInstrument.family" v-model="block.newInstrument.model" />
           </div>
           <div class="field">
             <label>Year</label>

@@ -403,6 +403,8 @@ onMounted(refresh);
         <RouterLink class="btn small" :to="{ name: 'instrument-defaults' }">
           Default instrument assignments →
         </RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
       </div>
     </div>
 
@@ -643,7 +645,11 @@ onMounted(refresh);
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Name</th><th>Email</th><th>Role</th><th>Initials</th><th>State</th><th /></tr>
+              <tr>
+                <th>Name</th><th>Email</th><th>Role</th><th>Initials</th>
+                <th title="Weekly chore rotation (A2) skips anyone checked here">Skip chores</th>
+                <th>State</th><th />
+              </tr>
             </thead>
             <tbody>
               <template v-for="e in refData.employees" :key="e.id">
@@ -669,6 +675,12 @@ onMounted(refresh);
                     />
                   </td>
                   <td>
+                    <input
+                      type="checkbox" :checked="e.excluded_from_chore_rotation"
+                      @change="updateEmployeeField(e, 'excluded_from_chore_rotation', $event.target.checked)"
+                    />
+                  </td>
+                  <td>
                     <span :class="['pill', e.active ? 'green' : 'slate']">
                       {{ e.active ? 'Active' : 'Inactive' }}
                     </span>
@@ -681,7 +693,7 @@ onMounted(refresh);
                   </td>
                 </tr>
                 <tr v-if="passwordResetFor === e.id">
-                  <td colspan="6">
+                  <td colspan="7">
                     <form class="card tight" @submit.prevent="submitPasswordReset(e)">
                       <p class="muted small" style="margin-top: 0">
                         Setting a new password for {{ e.name }}. This overwrites their current

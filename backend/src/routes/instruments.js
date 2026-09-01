@@ -13,6 +13,26 @@ const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'organ', 'amp', 'r
 
 router.get('/families', (req, res) => res.json(FAMILIES));
 
+// N7 (boss-list scope, scaffold): a few of the 7 family keys read fine as
+// raw strings in a <select> ("rhodes", "wurlitzer") but the rest don't
+// ("strings", "amp", "rarity" are internal shorthand, not what a customer
+// or even a tech would call the category out loud). Additive only — the
+// existing /families endpoint above keeps its plain-string-array shape so
+// none of its ~11 existing frontend consumers (`v-for="f in
+// refData.families"` etc.) need to change; this is a second, optional
+// lookup for screens that want a nicer label instead.
+const FAMILY_LABELS = {
+  rhodes: 'Rhodes',
+  wurlitzer: 'Wurlitzer',
+  hohner: 'Hohner',
+  strings: 'Electric String Pianos',
+  organ: 'Combo Organ',
+  amp: 'Amplifier',
+  rarity: 'Other',
+};
+
+router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));
+
 // ---------------------------------------------------------------------------
 // Default technicians per instrument family (migration 014). Registered
 // ahead of GET/PATCH '/:id' below, same reasoning as '/families' above —
@@ -194,6 +214,13 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.family && !FAMILIES.includes(b.family)) {
     throw badRequest(`family must be one of: ${FAMILIES.join(', ')}`);
   }
+  // A3: qc_interval_months is the one field here with an actual constraint
+  // (the DB CHECK only allows NULL/3/6/12) — validated up front so a typo
+  // surfaces as a clear 400 instead of a raw constraint-violation 500.
+  if (b.qc_interval_months !== undefined && b.qc_interval_months !== null
+    && ![3, 6, 12].includes(Number(b.qc_interval_months))) {
+    throw badRequest('qc_interval_months must be 3, 6, 12, or null');
+  }
   const { rows } = await query(
     `UPDATE instruments SET
        family = COALESCE($2, family), model = COALESCE($3, model),
@@ -202,14 +229,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
        customer_id = CASE WHEN $7::boolean THEN $8 ELSE customer_id END,
        is_fleet = COALESCE($9, is_fleet),
        fleet_last_qc = COALESCE($10, fleet_last_qc),
-       nickname = COALESCE($11, nickname)
+       nickname = COALESCE($11, nickname),
+       last_qc_at = CASE WHEN $12::boolean THEN $13 ELSE last_qc_at END,
+       qc_interval_months = CASE WHEN $14::boolean THEN $15 ELSE qc_interval_months END
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.family || null, b.model || null, b.year || null, b.serial_no || null,
       b.identifying_notes === undefined ? null : b.identifying_notes,
       b.customer_id !== undefined, b.customer_id || null,
       b.is_fleet === undefined ? null : b.is_fleet,
       b.fleet_last_qc === undefined ? null : b.fleet_last_qc,
-      b.nickname || null],
+      b.nickname || null,
+      b.last_qc_at !== undefined, b.last_qc_at || null,
+      b.qc_interval_months !== undefined, b.qc_interval_months || null],
   );
   if (!rows[0]) throw notFound('Instrument not found');
   res.json(rows[0]);

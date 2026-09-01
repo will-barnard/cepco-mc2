@@ -7,10 +7,11 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
-import { useSettings } from '../stores';
+import { useSettings, useRefData } from '../stores';
 
 const router = useRouter();
 const settings = useSettings();
+const refData = useRefData();
 
 const instruments = ref([]);
 const family = ref('');
@@ -70,7 +71,37 @@ function qcPill(value) {
   return 'green';
 }
 
-onMounted(load);
+// A3: the real per-instrument QC cycle, next to (not replacing) the
+// fleet_last_qc shorthand above — see migration 034. Both columns are
+// editable here since the eventual backfill is a data-entry pass done by
+// hand, one instrument at a time, not a bulk import.
+async function updateInstrument(instrument, patch) {
+  error.value = '';
+  try {
+    const updated = await api.patch(`/instruments/${instrument.id}`, patch);
+    Object.assign(instrument, updated);
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+/** Next-due date, purely client-side display — the sweep itself (services/
+ * recurringTickets.js) does the same add-months-to-last_qc_at math server-
+ * side; this just previews it here. */
+function nextQcDue(i) {
+  if (!i.last_qc_at || !i.qc_interval_months) return null;
+  const d = new Date(`${i.last_qc_at}T00:00:00`);
+  d.setMonth(d.getMonth() + i.qc_interval_months);
+  return d;
+}
+
+function qcCyclePill(i) {
+  const due = nextQcDue(i);
+  if (!due) return 'slate';
+  return due.getTime() <= Date.now() ? 'red' : 'green';
+}
+
+onMounted(() => { load(); refData.load(); });
 </script>
 
 <template>
@@ -85,7 +116,7 @@ onMounted(load);
       <div class="row nowrap">
         <select v-model="family" style="width: auto; min-width: 160px">
           <option value="">All families</option>
-          <option v-for="f in families" :key="f" :value="f">{{ f }}</option>
+          <option v-for="f in families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
         </select>
         <RouterLink :to="{ name: 'fleet-calendar' }" class="btn">Rental calendar</RouterLink>
       </div>
@@ -100,14 +131,35 @@ onMounted(load);
           <thead>
             <tr>
               <th>Instrument</th><th>Family</th><th>Last QC</th>
+              <th title="Real per-instrument QC cycle (A3) — separate from the free-text column to its left">QC cycle</th>
               <th>Notes</th><th class="right">Open</th><th />
             </tr>
           </thead>
           <tbody>
             <tr v-for="i in filtered" :key="i.id">
               <td><strong>{{ i.model || '—' }}</strong></td>
-              <td class="small">{{ i.family }}</td>
+              <td class="small">{{ refData.familyLabel(i.family) }}</td>
               <td><span :class="['pill', qcPill(i.fleet_last_qc)]">{{ i.fleet_last_qc || 'Unknown' }}</span></td>
+              <td>
+                <div class="row nowrap" style="gap: 6px">
+                  <input
+                    :value="i.last_qc_at ? i.last_qc_at.slice(0, 10) : ''" type="date" style="width: 130px"
+                    @change="updateInstrument(i, { last_qc_at: $event.target.value || null })"
+                  />
+                  <select
+                    :value="i.qc_interval_months || ''" style="width: auto"
+                    @change="updateInstrument(i, { qc_interval_months: $event.target.value || null })"
+                  >
+                    <option value="">No cycle</option>
+                    <option value="3">3 mo</option>
+                    <option value="6">6 mo</option>
+                    <option value="12">12 mo</option>
+                  </select>
+                  <span v-if="nextQcDue(i)" :class="['pill', qcCyclePill(i)]">
+                    due {{ nextQcDue(i).toLocaleDateString() }}
+                  </span>
+                </div>
+              </td>
               <td class="small muted">{{ i.identifying_notes || '—' }}</td>
               <td class="right">{{ i.open_tickets }}</td>
               <td class="right">

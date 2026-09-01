@@ -1,9 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
+import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 
 const router = useRouter();
 const settings = useSettings();
@@ -13,6 +14,11 @@ const customers = ref([]);
 const instruments = ref([]);
 const error = ref('');
 const busy = ref(false);
+// N9: set once the primary ticket is actually created, so a partial
+// failure creating one of its sibling instruments/tickets (below) can
+// still point the user at the ticket that *did* get made, rather than
+// stranding them on a form that looks like nothing happened.
+const createdTicketId = ref(null);
 
 // Family -> default technician ids (Settings -> Default instrument
 // assignments). Pre-fills the picker below the moment an instrument type
@@ -80,6 +86,33 @@ const newInstrument = ref({ enabled: false, family: 'rhodes', model: '', year: '
 // Creating a customer inline, same reasoning as the instrument above: a walk-in
 // customer shouldn't need a trip to the Customers page before we can open their ticket.
 const newCustomer = ref({ enabled: false, name: '', email: '', phone: '', source: 'direct' });
+
+// N9: multi-instrument jobs. Boss's call was sibling tickets — one full
+// ticket per instrument, linked as a family — over a join table, reusing
+// the same source_ticket_id "created from another ticket" mechanism
+// TicketSubTickets.vue's sub-tickets already use (migration 008), rather
+// than a new dedicated schema. Each row here becomes one extra ticket
+// created right after the primary, in submit() below; same
+// existing-vs-add-new-inline choice the primary instrument field offers.
+const siblingInstruments = ref([]);
+function blankSibling() {
+  return {
+    mode: 'existing', instrument_id: '',
+    family: 'rhodes', model: '', year: '', serial_no: '', nickname: '',
+  };
+}
+function addSibling() {
+  siblingInstruments.value.push(blankSibling());
+}
+function removeSibling(index) {
+  siblingInstruments.value.splice(index, 1);
+}
+// Unchecking "Multi-instrument job" drops whatever sibling rows were
+// started — same as any other reveal-on-checkbox section in this form,
+// nothing here is meant to persist once the checkbox that shows it is off.
+watch(() => form.value.multi_instrument, (on) => {
+  if (!on) siblingInstruments.value = [];
+});
 
 async function loadCustomerInstruments() {
   form.value.instrument_id = '';
@@ -200,6 +233,76 @@ async function submit() {
     }
 
     const ticket = await api.post('/tickets', payload);
+    createdTicketId.value = ticket.id;
+
+    // N9: one sibling ticket per additional instrument, each linked back
+    // via source_ticket_id — same category/priority/technicians/notes as
+    // the primary (not re-resolved per family), title left blank so N1's
+    // composeTicketTitle generates a per-instrument one on the backend.
+    // Blank rows (nothing picked/typed) are silently skipped, same
+    // "only submit if there's actually something there" gating the
+    // primary instrument's own inline-add form uses above.
+    const siblingFailures = [];
+    if (form.value.multi_instrument) {
+      for (const sib of siblingInstruments.value) {
+        try {
+          let instrumentId = null;
+          if (sib.mode === 'existing') {
+            if (!sib.instrument_id) continue;
+            instrumentId = sib.instrument_id;
+          } else {
+            if (!sib.model.trim()) continue;
+            // eslint-disable-next-line no-await-in-loop -- siblings are
+            // created one at a time, deliberately: each is an independent
+            // POST /tickets call (there's no multi-row transactional
+            // endpoint), so sequential keeps a failure attributable to
+            // exactly one sibling rather than firing them all at once and
+            // untangling which one broke.
+            const createdInst = await api.post('/instruments', {
+              family: sib.family,
+              model: sib.model,
+              year: sib.year || null,
+              serial_no: sib.serial_no || null,
+              nickname: sib.nickname.trim() || null,
+              customer_id: payload.customer_id || null,
+            });
+            instrumentId = createdInst.id;
+          }
+          // eslint-disable-next-line no-await-in-loop -- see above
+          await api.post('/tickets', {
+            title: null,
+            category_key: payload.category_key,
+            subcategory_key: payload.subcategory_key,
+            subcategory_other_text: payload.subcategory_other_text,
+            priority_key: payload.priority_key,
+            status_key: payload.status_key,
+            customer_id: payload.customer_id,
+            instrument_id: instrumentId,
+            technician_ids: payload.technician_ids,
+            notes: payload.notes,
+            drop_off_date: payload.drop_off_date,
+            due_date: payload.due_date,
+            multi_instrument: true,
+            qc_required: payload.qc_required,
+            source_ticket_id: ticket.id,
+          });
+        } catch (err) {
+          siblingFailures.push(err.message);
+        }
+      }
+    }
+
+    if (siblingFailures.length) {
+      // The primary (and any siblings that DID succeed) are real,
+      // already-created tickets — staying put with a link beats
+      // navigating away and losing track of a partial failure, or
+      // silently swallowing it.
+      error.value = `Ticket #${ticket.id} was created, but ${siblingFailures.length} `
+        + `additional instrument(s) failed: ${siblingFailures.join('; ')}. `
+        + `You can add the missing one(s) as a sub-ticket from the ticket page.`;
+      return;
+    }
+
     router.push({ name: 'ticket', params: { id: ticket.id } });
   } catch (err) {
     error.value = err.message;
@@ -341,12 +444,12 @@ async function submit() {
           <div class="field">
             <label>Family</label>
             <select v-model="newInstrument.family">
-              <option v-for="f in refData.families" :key="f" :value="f">{{ f }}</option>
+              <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
             </select>
           </div>
           <div class="field">
             <label>Model</label>
-            <input v-model="newInstrument.model" placeholder="Wurlitzer 200A" />
+            <InstrumentModelPicker :family="newInstrument.family" v-model="newInstrument.model" />
           </div>
           <div class="field">
             <label>Year</label>
@@ -401,7 +504,73 @@ async function submit() {
         </label>
       </div>
 
-      <div v-if="error" class="alert" style="margin-bottom: 14px">{{ error }}</div>
+      <!-- N9: sibling tickets, one per additional instrument, created
+           right after the primary (submit() above) and linked back via
+           source_ticket_id — same family mechanism as sub-tickets. -->
+      <div v-if="form.multi_instrument" class="card tight" style="margin-bottom: 14px">
+        <div class="row" style="margin-bottom: 10px">
+          <strong class="small">Additional instruments</strong>
+          <span class="muted small">— one more ticket per instrument, same customer/category/techs</span>
+          <div class="spacer" />
+          <button type="button" class="small" @click="addSibling">+ Add instrument</button>
+        </div>
+        <div v-if="!siblingInstruments.length" class="empty">
+          None added yet — this job will just be the one ticket above.
+        </div>
+        <div
+          v-for="(sib, i) in siblingInstruments" :key="i"
+          class="field-row" style="align-items: end; margin-bottom: 10px"
+        >
+          <div class="field" style="flex: none; margin: 0">
+            <label>&nbsp;</label>
+            <select v-model="sib.mode" style="width: auto">
+              <option value="existing">Existing instrument</option>
+              <option value="new">Add new</option>
+            </select>
+          </div>
+          <template v-if="sib.mode === 'existing'">
+            <div class="field" style="margin: 0">
+              <label>Instrument</label>
+              <select v-model="sib.instrument_id">
+                <option value="">— pick one —</option>
+                <option
+                  v-for="inst in instruments.filter((x) => x.id !== form.instrument_id)"
+                  :key="inst.id" :value="inst.id"
+                >
+                  {{ inst.family }} · <template v-if="inst.nickname">"{{ inst.nickname }}" </template>{{ inst.model }}
+                </option>
+              </select>
+            </div>
+          </template>
+          <template v-else>
+            <div class="field" style="margin: 0">
+              <label>Family</label>
+              <select v-model="sib.family">
+                <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
+              </select>
+            </div>
+            <div class="field" style="margin: 0">
+              <label>Model</label>
+              <InstrumentModelPicker :family="sib.family" v-model="sib.model" />
+            </div>
+            <div class="field" style="margin: 0">
+              <label>Nickname</label>
+              <input v-model="sib.nickname" placeholder="e.g. Old Betsy" />
+            </div>
+          </template>
+          <div class="field" style="flex: none; margin: 0">
+            <label>&nbsp;</label>
+            <button type="button" class="small" @click="removeSibling(i)">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="error" class="alert" style="margin-bottom: 14px">
+        {{ error }}
+        <RouterLink v-if="createdTicketId" :to="{ name: 'ticket', params: { id: createdTicketId } }">
+          Go to ticket #{{ createdTicketId }} →
+        </RouterLink>
+      </div>
 
       <div class="row">
         <button class="primary" type="submit" :disabled="busy">

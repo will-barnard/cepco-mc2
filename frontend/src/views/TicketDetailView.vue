@@ -150,6 +150,16 @@ const isShipping = computed(() => !!ticket.value?.is_shipping);
               #{{ ticket.source_ticket_id }} — {{ ticket.source_ticket_title }}
             </RouterLink>
           </span>
+          <!-- N9: siblings share this ticket's own source_ticket_id (the
+               primary's id) rather than pointing at each other — see
+               GET /tickets/:id's sibling_tickets query. -->
+          <span v-if="ticket.sibling_tickets?.length">
+            · part of a multi-instrument job with
+            <template v-for="(s, i) in ticket.sibling_tickets" :key="s.id">
+              <RouterLink :to="{ name: 'ticket', params: { id: s.id } }">#{{ s.id }}</RouterLink>
+              <template v-if="i < ticket.sibling_tickets.length - 1">, </template>
+            </template>
+          </span>
         </div>
       </div>
       <div class="row">
