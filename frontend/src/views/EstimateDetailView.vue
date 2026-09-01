@@ -44,9 +44,25 @@ const costRange = computed(() => {
   const { min_cost: min, max_cost: max } = estimate.value;
   return min === max ? money(min) : `${money(min)} – ${money(max)}`;
 });
-const itemCost = (item) => (item.pricing_type === 'flat'
-  ? money(item.flat_cost)
-  : `${item.min_hours}–${item.max_hours} hrs`);
+// parts_cost (migration 043) is additive to an hours-based item's labor,
+// shown alongside so the line item's own price stays legible.
+const itemCost = (item) => {
+  if (item.pricing_type === 'flat') return money(item.flat_cost);
+  let label = `${item.min_hours}–${item.max_hours} hrs`;
+  if (item.parts_cost) label += ` + ${money(item.parts_cost)} parts`;
+  return label;
+};
+
+// Internal-only "assume one outlier" buffer (migration 043 / routes/
+// quotes.js's outlierBufferFor) — staff-facing only, never sent to the
+// customer (publicQuotes.js and quoteEmail.js both omit it).
+const outlierBuffer = computed(() => {
+  if (!estimate.value || !estimate.value.outlier_buffer_hours) return null;
+  return {
+    hours: estimate.value.outlier_buffer_hours,
+    cost: money(estimate.value.outlier_buffer_cost),
+  };
+});
 
 const canEmail = computed(() => estimate.value && estimate.value.status !== 'ticket_created');
 const canConvert = computed(() => estimate.value && estimate.value.status !== 'ticket_created');
@@ -118,6 +134,7 @@ async function createTicketsNow() {
             {{ item.procedure_name }}
             <span class="item-note">
               {{ [item.instrument_family, item.instrument_model].filter(Boolean).join(' ') || 'General' }}
+              <template v-if="item.parts_variant_label_snapshot">· {{ item.parts_variant_label_snapshot }}</template>
             </span>
           </span>
           <strong class="small">{{ itemCost(item) }}</strong>
@@ -129,6 +146,11 @@ async function createTicketsNow() {
         <div class="spacer" />
         <strong style="font-size: 18px">{{ costRange }}</strong>
       </div>
+
+      <p v-if="outlierBuffer" class="muted small" style="margin: 10px 0 0">
+        Internal only — budget ~{{ outlierBuffer.hours }} extra hrs ({{ outlierBuffer.cost }}) assuming
+        one line item on this estimate runs long. Never shown to the customer.
+      </p>
 
       <p v-if="estimate.notes" class="muted small" style="margin: 14px 0 0">{{ estimate.notes }}</p>
     </div>

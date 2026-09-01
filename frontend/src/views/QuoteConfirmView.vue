@@ -36,16 +36,25 @@ async function load() {
 onMounted(load);
 
 const money = (n) => Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-const itemCost = (item) => (item.pricing_type === 'flat'
-  ? money(item.flat_cost)
-  : `${item.min_hours}–${item.max_hours} hrs`);
+// parts_cost (migration 043) is a real dollar amount additive to an
+// hours-based item's labor at both ends of the range — shown alongside
+// so the line item's own price is legible. outlier_hours never reaches
+// this page (publicQuotes.js excludes it — it's an internal planning
+// number, see routes/quotes.js's outlierBufferFor).
+const itemCost = (item) => {
+  if (item.pricing_type === 'flat') return money(item.flat_cost);
+  let label = `${item.min_hours}–${item.max_hours} hrs`;
+  if (item.parts_cost) label += ` + ${money(item.parts_cost)} parts`;
+  return label;
+};
 
 function total() {
   let min = 0; let max = 0;
   for (const item of quote.value.items) {
     if (item.pricing_type === 'flat') { min += Number(item.flat_cost); max += Number(item.flat_cost); } else {
-      min += Number(item.min_hours) * Number(quote.value.labor_rate);
-      max += Number(item.max_hours) * Number(quote.value.labor_rate);
+      const parts = Number(item.parts_cost || 0);
+      min += Number(item.min_hours) * Number(quote.value.labor_rate) + parts;
+      max += Number(item.max_hours) * Number(quote.value.labor_rate) + parts;
     }
   }
   return min === max ? money(min) : `${money(min)} – ${money(max)}`;
@@ -114,6 +123,7 @@ async function decline() {
               {{ item.procedure_name }}
               <span class="item-note">
                 {{ [item.instrument_family, item.instrument_model].filter(Boolean).join(' ') || 'General' }}
+                <template v-if="item.parts_variant_label_snapshot">· {{ item.parts_variant_label_snapshot }}</template>
               </span>
             </span>
             <strong class="small">{{ itemCost(item) }}</strong>

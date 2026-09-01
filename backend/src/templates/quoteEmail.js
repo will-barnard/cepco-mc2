@@ -39,9 +39,18 @@ function itemRow(item) {
   const instrumentLabel = escapeHtml(
     [item.instrument_family, item.instrument_model].filter(Boolean).join(' ') || 'General',
   );
-  const price = item.pricing_type === 'flat'
-    ? formatMoney(item.flat_cost)
-    : `${item.min_hours}–${item.max_hours} hrs`;
+  // parts_cost (migration 043) is a real dollar amount included in the
+  // total, additive to an hours-based item's labor — shown here so the
+  // line item's own price is legible, not folded silently into the
+  // total. outlier_hours (same migration) never appears here — see
+  // routes/quotes.js's outlierBufferFor for why.
+  let price;
+  if (item.pricing_type === 'flat') {
+    price = formatMoney(item.flat_cost);
+  } else {
+    price = `${item.min_hours}–${item.max_hours} hrs`;
+    if (item.parts_cost) price += ` + ${formatMoney(item.parts_cost)} parts`;
+  }
   return `<tr>
     <td style="padding:9px 0;border-bottom:1px solid #ececec;font-size:14px;color:#16181d;">
       ${escapeHtml(item.procedure_name)}<br/>

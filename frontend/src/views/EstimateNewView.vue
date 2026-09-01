@@ -46,7 +46,36 @@ function blankBlock() {
     instrumentId: '',
     newInstrument: { enabled: false, family: refData.families[0] || '', model: '', year: '', serial_no: '' },
     selected: {}, // procedure_id -> true
+    variants: {}, // procedure_id -> parts variant key, for procedures priced by key count
   };
+}
+
+// Parts-by-variant (migration 043) — a procedure prices its parts either a
+// single flat_cost (folded straight into its price) or one of these four
+// key-count columns, never both. Keys match what routes/quotes.js expects
+// as `parts_variant` on each submitted item.
+const VARIANT_FIELDS = [
+  { key: 'piano_bass', label: 'Piano Bass' },
+  { key: '54_key', label: '54-Key' },
+  { key: '73_key', label: '73-Key' },
+  { key: '88_key', label: '88-Key' },
+];
+function variantsFor(p) {
+  return VARIANT_FIELDS.filter((v) => p[`parts_cost_${v.key}`] !== null && p[`parts_cost_${v.key}`] !== undefined);
+}
+// The dollar amount this procedure actually resolves to for this block —
+// null when it prices by key count and nothing's been picked yet. For a
+// 'flat' procedure this is its whole price; for an 'hours' procedure it's
+// the additive parts cost on top of labor (0 when it carries no parts at
+// all).
+function resolvedAmount(p, block) {
+  const variants = variantsFor(p);
+  if (variants.length) {
+    const chosen = block.variants[p.id];
+    return chosen ? Number(p[`parts_cost_${chosen}`]) : null;
+  }
+  if (p.flat_cost !== null && p.flat_cost !== undefined) return Number(p.flat_cost);
+  return p.pricing_type === 'flat' ? null : 0;
 }
 const blocks = ref([blankBlock()]);
 
@@ -98,9 +127,12 @@ function blockTotal(block) {
   let minCost = 0; let maxCost = 0;
   for (const p of proceduresFor(block)) {
     if (!block.selected[p.id]) continue;
-    if (p.pricing_type === 'flat') { minCost += Number(p.flat_cost); maxCost += Number(p.flat_cost); } else {
-      minCost += Number(p.min_hours) * laborRate.value;
-      maxCost += Number(p.max_hours) * laborRate.value;
+    const amount = resolvedAmount(p, block) || 0;
+    if (p.pricing_type === 'flat') {
+      minCost += amount; maxCost += amount;
+    } else {
+      minCost += Number(p.min_hours) * laborRate.value + amount;
+      maxCost += Number(p.max_hours) * laborRate.value + amount;
     }
   }
   return { minCost, maxCost };
@@ -117,8 +149,14 @@ async function submit() {
   const items = [];
   for (const block of blocks.value) {
     const ids = Object.keys(block.selected).filter((id) => block.selected[id]);
-    if (!ids.length) continue;
-    for (const procedureId of ids) items.push({ block, procedure_id: Number(procedureId) });
+    for (const procedureId of ids) {
+      const procedure = allProcedures.value.find((p) => String(p.id) === String(procedureId));
+      if (procedure && variantsFor(procedure).length && !block.variants[procedureId]) {
+        error.value = `Select a key-count variant for "${procedure.name}".`;
+        return;
+      }
+      items.push({ block, procedure_id: Number(procedureId), parts_variant: block.variants[procedureId] || null });
+    }
   }
   if (!items.length) { error.value = 'Select at least one procedure for at least one instrument.'; return; }
   if (!customerId.value && !(newCustomer.value.enabled && newCustomer.value.name.trim())) {
@@ -167,6 +205,7 @@ async function submit() {
       items: items.map((it) => ({
         instrument_id: resolvedInstrumentByBlock.get(it.block.key),
         procedure_id: it.procedure_id,
+        parts_variant: it.parts_variant,
       })),
     };
 
@@ -266,18 +305,38 @@ async function submit() {
 
         <label>Procedures</label>
         <ul class="checklist">
-          <li v-for="p in proceduresFor(block)" :key="p.id">
+          <li v-for="p in proceduresFor(block)" :key="p.id" style="align-items: center">
             <label class="checkbox" style="flex: 1">
               <input v-model="block.selected[p.id]" type="checkbox" />
               <span>
                 {{ p.name }}
                 <span class="item-note">
-                  {{ p.pricing_type === 'flat' ? `$${Number(p.flat_cost).toFixed(2)}` : `${p.min_hours}-${p.max_hours} hrs` }}
+                  <template v-if="variantsFor(p).length">
+                    <template v-if="resolvedAmount(p, block) !== null">
+                      {{ p.pricing_type === 'flat'
+                        ? money(resolvedAmount(p, block))
+                        : `${p.min_hours}-${p.max_hours} hrs + ${money(resolvedAmount(p, block))} parts` }}
+                    </template>
+                    <template v-else>priced by key count — select variant</template>
+                  </template>
+                  <template v-else>
+                    {{ p.pricing_type === 'flat'
+                      ? money(p.flat_cost)
+                      : `${p.min_hours}-${p.max_hours} hrs${p.flat_cost ? ` + ${money(p.flat_cost)} parts` : ''}` }}
+                  </template>
                   <template v-if="p.family">· {{ p.family }} only</template>
                   <template v-else>· all types</template>
                 </span>
               </span>
             </label>
+            <select
+              v-if="block.selected[p.id] && variantsFor(p).length"
+              v-model="block.variants[p.id]"
+              class="small" style="max-width: 140px"
+            >
+              <option value="">— select variant —</option>
+              <option v-for="v in variantsFor(p)" :key="v.key" :value="v.key">{{ v.label }}</option>
+            </select>
           </li>
           <li v-if="!proceduresFor(block).length" class="muted small" style="padding: 6px 0">
             No standard procedures configured for this instrument type yet — add some under

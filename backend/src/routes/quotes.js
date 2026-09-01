@@ -41,8 +41,64 @@ const QUOTE_SELECT = `
     LEFT JOIN customers c ON c.id = e.customer_id
 `;
 
+// Parts-by-variant (migration 043) — a standard_procedures row prices its
+// parts either a single flat_cost or one of these four key-count columns,
+// never both. Keys here match the `parts_variant` value a client sends
+// (`piano_bass`, not the column's `parts_cost_piano_bass`).
+const VARIANT_LABELS = {
+  piano_bass: 'Piano Bass',
+  '54_key': '54-Key',
+  '73_key': '73-Key',
+  '88_key': '88-Key',
+};
+
+/** Resolves one requested {procedure_id, parts_variant?} line against its
+ * standard_procedures row into everything estimate_items snapshots.
+ * `parts_variant` must be supplied (and name one of the procedure's
+ * actually-populated variant columns) whenever the procedure prices its
+ * parts by key count — there's no safe default to fall back to, since
+ * guessing wrong silently under- or over-quotes a customer. A procedure
+ * with no variant columns set at all (the common case) ignores it
+ * entirely. */
+function resolveProcedureItem(procedure, requestedVariant) {
+  const availableVariants = Object.keys(VARIANT_LABELS)
+    .filter((v) => procedure[`parts_cost_${v}`] !== null);
+
+  let variantKey = null;
+  if (availableVariants.length) {
+    if (!requestedVariant || !availableVariants.includes(requestedVariant)) {
+      throw badRequest(
+        `"${procedure.name}" prices its parts by key count — pick one of: `
+        + availableVariants.map((v) => VARIANT_LABELS[v]).join(', '),
+      );
+    }
+    variantKey = requestedVariant;
+  }
+
+  const resolvedPartsAmount = variantKey
+    ? Number(procedure[`parts_cost_${variantKey}`])
+    : (procedure.flat_cost !== null ? Number(procedure.flat_cost) : null);
+
+  return {
+    pricing_type: procedure.pricing_type,
+    min_hours: procedure.min_hours,
+    max_hours: procedure.max_hours,
+    outlier_hours: procedure.outlier_hours,
+    // A 'flat' procedure's whole price lives in flat_cost (unchanged
+    // shape); an 'hours' procedure's parts are additive to its labor, so
+    // they get their own column instead — see migration 043.
+    flat_cost: procedure.pricing_type === 'flat' ? resolvedPartsAmount : null,
+    parts_cost: procedure.pricing_type === 'hours' ? resolvedPartsAmount : null,
+    parts_variant_key: variantKey,
+    parts_variant_label_snapshot: variantKey ? VARIANT_LABELS[variantKey] : null,
+  };
+}
+
 /** Dollar range across an estimate's items, using its own frozen labor_rate
- * (never the live shop_config value — see comment on `labor_rate` below). */
+ * (never the live shop_config value — see comment on `labor_rate` below).
+ * `parts_cost` (migration 043) is additive to an hours-based item's labor
+ * cost at both ends of the range — it's a fixed dollar amount, not
+ * something that varies with how long the job takes. */
 function totalsFor(items, laborRate) {
   let minCost = 0;
   let maxCost = 0;
@@ -53,8 +109,9 @@ function totalsFor(items, laborRate) {
       minCost += Number(item.flat_cost);
       maxCost += Number(item.flat_cost);
     } else {
-      minCost += Number(item.min_hours) * laborRate;
-      maxCost += Number(item.max_hours) * laborRate;
+      const parts = Number(item.parts_cost || 0);
+      minCost += Number(item.min_hours) * laborRate + parts;
+      maxCost += Number(item.max_hours) * laborRate + parts;
       minHours += Number(item.min_hours);
       maxHours += Number(item.max_hours);
     }
@@ -64,6 +121,27 @@ function totalsFor(items, laborRate) {
     max_cost: Math.round(maxCost * 100) / 100,
     min_hours: minHours,
     max_hours: maxHours,
+  };
+}
+
+/** Internal-only estimate-builder heads-up — never sent to a customer (see
+ * publicQuotes.js and templates/quoteEmail.js, neither of which touch
+ * this). The ask: assume one of the jobs on this quote turns into an
+ * outlier, and budget the *average* size of that overage, since there's
+ * no way to know in advance which line item (if any) it'll be. Computed
+ * as the mean, across every hours-based line item that has an
+ * outlier_hours reference, of (outlier_hours - max_hours) — how far past
+ * its own normal high end that item's outlier would run. Zero when
+ * nothing on the quote has an outlier_hours value to go on. */
+function outlierBufferFor(items, laborRate) {
+  const overages = items
+    .filter((it) => it.pricing_type === 'hours' && it.outlier_hours !== null && it.outlier_hours !== undefined)
+    .map((it) => Number(it.outlier_hours) - Number(it.max_hours));
+  if (!overages.length) return { outlier_buffer_hours: 0, outlier_buffer_cost: 0 };
+  const meanOverage = overages.reduce((a, b) => a + b, 0) / overages.length;
+  return {
+    outlier_buffer_hours: Math.round(meanOverage * 100) / 100,
+    outlier_buffer_cost: Math.round(meanOverage * laborRate * 100) / 100,
   };
 }
 
@@ -91,15 +169,17 @@ router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT e.*, c.name AS customer_name, c.email AS customer_email,
             COALESCE(agg.item_count, 0) AS item_count,
-            COALESCE(agg.min_cost, 0)   AS min_cost,
+           COALESCE(agg.min_cost, 0)   AS min_cost,
             COALESCE(agg.max_cost, 0)   AS max_cost
        FROM estimates e
        LEFT JOIN customers c ON c.id = e.customer_id
        LEFT JOIN LATERAL (
          SELECT count(*)::int AS item_count,
-                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost ELSE min_hours * e.labor_rate END) AS min_cost,
-                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost ELSE max_hours * e.labor_rate END) AS max_cost
-           FROM estimate_items WHERE estimate_id = e.id
+                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost
+                         ELSE min_hours * e.labor_rate + COALESCE(parts_cost, 0) END) AS min_cost,
+                sum(CASE WHEN pricing_type = 'flat' THEN flat_cost
+                         ELSE max_hours * e.labor_rate + COALESCE(parts_cost, 0) END) AS max_cost
+         FROM estimate_items WHERE estimate_id = e.id
        ) agg ON TRUE
       WHERE ${clauses.join(' AND ')}
       ORDER BY e.created_at DESC`,
@@ -132,6 +212,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     items,
     tickets: tickets.rows,
     ...totalsFor(items, Number(estimate.labor_rate)),
+    ...outlierBufferFor(items, Number(estimate.labor_rate)),
   });
 }));
 
@@ -161,7 +242,8 @@ router.post('/', asyncHandler(async (req, res) => {
   const laborRate = await settings.shopConfigNumber('labor_rate', DEFAULT_LABOR_RATE);
 
   // Resolve + snapshot every item's instrument and procedure up front, so a
-  // bad id in the middle of the list fails before anything is written.
+  // bad id (or an unresolved parts variant) in the middle of the list
+  // fails before anything is written.
   const resolvedItems = [];
   for (const item of b.items) {
     if (!item.procedure_id) throw badRequest('Each item needs a procedure_id');
@@ -184,10 +266,7 @@ router.post('/', asyncHandler(async (req, res) => {
       instrument_model: instrument ? instrument.model : null,
       procedure_id: procedure.id,
       procedure_name: procedure.name,
-      pricing_type: procedure.pricing_type,
-      min_hours: procedure.min_hours,
-      max_hours: procedure.max_hours,
-      flat_cost: procedure.flat_cost,
+      ...resolveProcedureItem(procedure, item.parts_variant),
     });
   }
 
@@ -211,12 +290,14 @@ router.post('/', asyncHandler(async (req, res) => {
       await client.query(
         `INSERT INTO estimate_items
            (estimate_id, instrument_id, instrument_family, instrument_model,
-            procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost,
+            parts_cost, parts_variant_key, parts_variant_label_snapshot, outlier_hours, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [
           row.id, item.instrument_id, item.instrument_family, item.instrument_model,
-          item.procedure_id, item.procedure_name, item.pricing_type,
-          item.min_hours, item.max_hours, item.flat_cost, (i + 1) * 10,
+          item.procedure_id, item.procedure_name, item.pricing_type, item.min_hours, item.max_hours,
+          item.flat_cost, item.parts_cost, item.parts_variant_key, item.parts_variant_label_snapshot,
+          item.outlier_hours, (i + 1) * 10,
         ],
       );
     }
@@ -225,7 +306,11 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const items = await loadItems(estimate.id);
   res.status(201).json({
-    ...estimate, items, tickets: [], ...totalsFor(items, Number(estimate.labor_rate)),
+    ...estimate,
+    items,
+    tickets: [],
+    ...totalsFor(items, Number(estimate.labor_rate)),
+    ...outlierBufferFor(items, Number(estimate.labor_rate)),
   });
 }));
 
@@ -285,17 +370,21 @@ router.patch('/:id', asyncHandler(async (req, res) => {
           if (!instrument) throw badRequest(`Instrument #${item.instrument_id} not found`);
         }
 
+        const resolved = resolveProcedureItem(procedure, item.parts_variant);
+
         // eslint-disable-next-line no-await-in-loop
         await client.query(
           `INSERT INTO estimate_items
              (estimate_id, instrument_id, instrument_family, instrument_model,
-              procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost, sort_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+              procedure_id, procedure_name, pricing_type, min_hours, max_hours, flat_cost,
+              parts_cost, parts_variant_key, parts_variant_label_snapshot, outlier_hours, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [
             row.id, instrument ? instrument.id : null,
             instrument ? instrument.family : null, instrument ? instrument.model : null,
-            procedure.id, procedure.name, procedure.pricing_type,
-            procedure.min_hours, procedure.max_hours, procedure.flat_cost, (i + 1) * 10,
+            procedure.id, procedure.name, resolved.pricing_type, resolved.min_hours, resolved.max_hours,
+            resolved.flat_cost, resolved.parts_cost, resolved.parts_variant_key,
+            resolved.parts_variant_label_snapshot, resolved.outlier_hours, (i + 1) * 10,
           ],
         );
       }
@@ -305,7 +394,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   const items = await loadItems(estimate.id);
   res.json({
-    ...estimate, items, tickets: [], ...totalsFor(items, Number(estimate.labor_rate)),
+    ...estimate,
+    items,
+    tickets: [],
+    ...totalsFor(items, Number(estimate.labor_rate)),
+    ...outlierBufferFor(items, Number(estimate.labor_rate)),
   });
 }));
 
@@ -335,6 +428,9 @@ router.post('/:id/send', asyncHandler(async (req, res) => {
   }
 
   const items = await loadItems(estimate.id);
+  // Deliberately just the real total — outlierBufferFor() is an internal
+  // planning number and must never reach a customer, so it's not computed
+  // here at all, let alone passed into the email.
   const totals = totalsFor(items, Number(estimate.labor_rate));
 
   const confirmToken = estimate.confirm_token || crypto.randomBytes(24).toString('hex');
@@ -368,7 +464,9 @@ router.post('/:id/send', asyncHandler(async (req, res) => {
      WHERE id = $1 RETURNING *`,
     [estimate.id, confirmToken],
   );
-  res.json({ ...updated[0], items, tickets: [], ...totals });
+  res.json({
+    ...updated[0], items, tickets: [], ...totals, ...outlierBufferFor(items, Number(estimate.labor_rate)),
+  });
 }));
 
 // ---------------------------------------------------------------------------
@@ -426,9 +524,13 @@ async function createTicketsForEstimate(estimate, createdById) {
       const instrumentLabel = [first.instrument_family, first.instrument_model].filter(Boolean).join(' ')
         || 'General';
       const lines = groupItems.map((it) => {
-        const cost = it.pricing_type === 'flat'
-          ? `$${Number(it.flat_cost).toFixed(2)}`
-          : `${it.min_hours}-${it.max_hours} hrs`;
+        let cost;
+        if (it.pricing_type === 'flat') {
+          cost = `$${Number(it.flat_cost).toFixed(2)}`;
+        } else {
+          cost = `${it.min_hours}-${it.max_hours} hrs`;
+          if (it.parts_cost) cost += ` + $${Number(it.parts_cost).toFixed(2)} parts`;
+        }
         return `- ${it.procedure_name} (${cost})`;
       }).join('\n');
       const notes = `From Estimate #${locked.id}${locked.title ? ` — "${locked.title}"` : ''}:\n${lines}`

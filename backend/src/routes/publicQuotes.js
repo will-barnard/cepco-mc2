@@ -42,6 +42,12 @@ router.get('/:token', asyncHandler(async (req, res) => {
   );
 
   // Customer-safe subset only — no internal ids, notes, or created_by.
+  // parts_cost/parts_variant_label_snapshot are real, included-in-the-
+  // price numbers (migration 043) so they belong here; outlier_hours
+  // (same migration) is deliberately left out — it's an internal
+  // planning reference (routes/quotes.js's outlierBufferFor), never
+  // something a customer's own total should reflect or a customer should
+  // see at all.
   res.json({
     title: estimate.title,
     customer_name: estimate.customer_name,
@@ -55,6 +61,8 @@ router.get('/:token', asyncHandler(async (req, res) => {
       min_hours: i.min_hours,
       max_hours: i.max_hours,
       flat_cost: i.flat_cost,
+      parts_cost: i.parts_cost,
+      parts_variant_label_snapshot: i.parts_variant_label_snapshot,
     })),
   });
 }));

@@ -2123,6 +2123,99 @@ Expedited/SOS by default — Standard and Low Priority stay off, same
 opt-in convention as `show_status_notes`. Turning it off for a tier just
 folds its tasks back into the regular list, no code change needed.
 
+### 2.48 Seed Rhodes/Wurlitzer standard procedures; parts-by-variant and outlier buffer
+
+Seeded `standard_procedures` (migration 044) from the shop's own pricing
+spreadsheet — 81 rows, 40 Rhodes + 41 Wurlitzer (200/140/145/110/120
+models, all `family = 'wurlitzer'`, no sub-family distinction). Clavinet,
+Pianet, and Combo Organ sections in the same spreadsheet were deliberately
+left out of this pass. A few curation calls made transcribing it: typos
+fixed ("Hamer" → "Hammer", "Replacment/Repacement" → "Replacement");
+"Rhodes "/"Wurlitzer " prefixes added to every name (the sheet only
+implied the instrument via section headers, and procedure names need to
+stand alone in the estimate builder); two malformed cells parsed by hand
+("Tuning & Voicing 110-120 Models" had "3-5" run into the Average High
+column; the 200A-style pickup shield row had no Low value, just a bare
+.25 High); pure placeholder rows with no numbers skipped entirely; and the
+whole "Rhodes Replacement Parts" section — where all four key-count price
+columns were always identical — collapsed to a single `flat_cost` instead
+of populating four redundant variant columns.
+
+That last point ties into the bigger schema change this needed (migration
+043). The spreadsheet has two things `standard_procedures` couldn't
+express before: some parts prices vary by the instrument's key count
+(Rhodes Piano Bass/54-Key/73-Key/88-Key), and an "outlier" column that's
+explicitly *not* a normal range — it's what the shop thinks a rare
+problem job runs, separate from the everyday min/max hours.
+
+**Parts pricing is now its own axis, independent of labor.** Before, a
+procedure was hours-billed *or* flat-priced, and that was its whole price.
+Now labor (hours or nothing) and parts (nothing, a flat amount, or one of
+four `parts_cost_piano_bass`/`_54_key`/`_73_key`/`_88_key` columns) are
+decoupled: an hours procedure can carry an additive parts cost on top of
+labor (a grommet job bills hours *and* needs a grommet), and a flat
+procedure's price comes from whichever of flat_cost/variant is set, since
+it has no labor to price instead. `flat_cost` and the four variant
+columns stay mutually exclusive (new CHECK), and a flat-priced procedure
+must have one of them set (relaxed CHECK, replacing migration 010's
+strict hours-xor-flat version). `routes/procedures.js`'s POST/PATCH
+validate the combination — `resolveHours`/`resolveParts`/`resolveOutlier`
+— rather than letting a bad combination surface as a raw CHECK-violation
+500.
+
+When a procedure prices by key count, `routes/quotes.js`'s
+`resolveProcedureItem()` requires the estimate builder to say which
+variant (`parts_variant` on the submitted item — `piano_bass`/`54_key`/
+`73_key`/`88_key`) and snapshots both the resolved dollar amount and a
+human label (`parts_variant_label_snapshot`) onto the `estimate_items` row
+at build time, same snapshot convention every other estimate field
+already uses. A procedure with no variant columns set ignores
+`parts_variant` entirely — the common case is unaffected.
+`EstimateNewView.vue` shows a "— select variant —" dropdown next to any
+checked procedure that has variant columns, and refuses to submit until
+every one of them has a pick.
+
+**The "outlier" column became an internal-only estimate-builder buffer,
+not a customer-facing field.** The ask: assume there's likely one outlier
+somewhere on any given quote, and budget for it as the *mean*, across
+every hours-based line item that has an `outlier_hours` value, of
+`(outlier_hours - max_hours)` — how far past its own normal high end that
+item's outlier would run. `routes/quotes.js`'s `outlierBufferFor()`
+computes this and returns `outlier_buffer_hours`/`outlier_buffer_cost`
+alongside the normal totals on every staff-facing quote response (GET
+list, GET one, POST, PATCH) — zero when nothing on the quote has an
+`outlier_hours` value to go on. It's deliberately never computed inside
+`POST /:id/send` (the totals passed to `buildQuoteEmail()` are the plain
+`totalsFor()` result, nothing more) and never returned by
+`publicQuotes.js`, so there's no path for it to reach a customer, in the
+email or on the public confirm page. `EstimateDetailView.vue` (staff-only)
+shows it as a small note under the total: "Internal only — budget ~X
+extra hrs ($Y) assuming one line item on this estimate runs long."
+`outlier_hours` on `standard_procedures` only applies to hours-priced
+procedures (silently dropped if a procedure is flat-priced) and must be
+at or above that procedure's own `max_hours` — a value inside the normal
+range wouldn't be an outlier.
+
+`Settings → Standard procedures` (`ProceduresView.vue`) got a matching
+rework: an "Outlier hours" field next to min/max (hours procedures only),
+and the old single flat-cost input replaced with a "Parts" mode picker —
+No parts cost / Single amount / By key count — that swaps in either a
+`$` input or four key-count inputs. Switching a procedure to flat pricing
+auto-advances an invalid "No parts cost" pick to "Single amount" (a flat
+procedure can't have zero price sources), and switching *from* flat back
+to hours preserves whatever parts pricing it already had rather than
+clearing it.
+
+`QuoteConfirmView.vue` (the one customer-facing page that doesn't go
+through the backend's `totalsFor()` — it recomputes its own total and
+per-item cost client-side from what `publicQuotes.js` returns) got its
+`itemCost()`/`total()` updated to add `parts_cost` into the hours branch
+at both ends of the range, so a parts-carrying procedure doesn't quietly
+undercount on the one page a customer actually sees. `publicQuotes.js`
+includes `parts_cost` and `parts_variant_label_snapshot` in that
+customer-safe item shape (they're real, priced-in numbers) but excludes
+`outlier_hours` outright, same as the email template.
+
 ## 4. Suggested first moves after deploy
 
 
