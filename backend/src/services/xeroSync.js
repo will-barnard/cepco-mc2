@@ -160,8 +160,18 @@ async function runXeroSync() {
     let mc = mcByXeroId.get(xc.ContactID);
     const isNewLink = !mc;
     if (!mc) {
+      // unlinkedMcByEmail/unlinkedMcByName are a static snapshot taken
+      // before this loop started, so without the handledMcIds check a
+      // customer could get "matched" a second time later in the same run
+      // — e.g. two Xero contacts that happen to share an exact email (a
+      // real, not even rare, Xero data-quality issue: Xero doesn't
+      // enforce contact email uniqueness) would otherwise both claim the
+      // same customer, and the second UPDATE would silently steal the
+      // link away from the first.
       const candidate = unlinkedMcByEmail.get(emailKey(xc.EmailAddress)) || unlinkedMcByName.get(nameKey(xc.Name));
-      if (candidate && !dismissed.has(`${candidate.id}:${xc.ContactID}`)) mc = candidate;
+      if (candidate && !handledMcIds.has(candidate.id) && !dismissed.has(`${candidate.id}:${xc.ContactID}`)) {
+        mc = candidate;
+      }
     }
 
     if (!mc) {

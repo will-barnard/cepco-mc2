@@ -2461,6 +2461,36 @@ actual field values (whichever side is newer) the same way it handles
 every other first-time link — this tool's whole job is establishing which
 records are the same, not moving data.
 
+### 2.54 Fix: backfill screen counted already-linked Xero contacts as unmatched
+
+Will's first real run of the backfill review screen (§2.53) showed every
+section empty except "Xero-only contacts" — which, with real customer
+data on both sides and no prior manual sync, made no sense. Root cause:
+`computeBackfillCandidates()` built its "unlinked Xero contacts" list by
+filtering only on `IsCustomer`/`ContactStatus`, never checking whether
+that contact was already someone's `customers.xero_contact_id` — so once
+*any* sync had actually run (most likely the nightly scheduler's own
+startup catch-up tick, services/xeroScheduler.js, firing the moment the
+"Sync automatically" toggle got saved on with a time already past for the
+day — an easy thing to trigger just by exploring the panel, not something
+that requires ever clicking "Sync now") and linked or created a customer
+for every real Xero contact, this screen kept showing the *entire* Xero
+contact list as "Xero-only" forever, since nothing ever excluded an
+already-linked one. Fixed by fetching the full customers table (not just
+`WHERE xero_contact_id IS NULL`) so the unlinked-Xero-contact filter can
+check against every `xero_contact_id` actually in use, not just the
+unlinked-customer subset — those are two different questions and
+conflating them was the bug.
+
+Practical fallout: if a full sync really did run before backfill got a
+chance to, the sync's own conservative exact-email/exact-name matching
+already made whatever calls it could — meaning some real duplicates may
+already exist for anything that didn't match exactly (a typo, a missing
+email) and would have shown up in backfill's "possible matches" for a
+human to catch, had the tool run first. Worth a manual look at the
+Customers page for anything that looks duplicated before relying on the
+backfill screen's now-correct "everything's already reconciled" result.
+
 ## 4. Suggested first moves after deploy
 
 

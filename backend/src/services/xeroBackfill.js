@@ -113,16 +113,28 @@ function summarizeXero(xc) {
 }
 
 async function computeBackfillCandidates() {
-  const [xeroContacts, mcResult, dismissedResult] = await Promise.all([
+  // Fetches every customer, not just the unlinked ones — a Xero contact
+  // is only "unlinked" if it isn't already someone's xero_contact_id,
+  // and that check needs the full table, not the WHERE xero_contact_id
+  // IS NULL subset (a query that answers a different question: which
+  // customers still need matching, not which Xero contacts still do —
+  // conflating the two was a real bug here: a contact already linked by
+  // an earlier sync run kept showing up as "Xero-only" on this screen
+  // forever, because nothing ever excluded it on that basis).
+  const [xeroContacts, allCustomersResult, dismissedResult] = await Promise.all([
     xero.listContacts(),
-    query('SELECT * FROM customers WHERE xero_contact_id IS NULL'),
+    query('SELECT * FROM customers'),
     query('SELECT customer_id, xero_contact_id FROM xero_dismissed_matches'),
   ]);
-  const unlinkedMc = mcResult.rows;
+  const allCustomers = allCustomersResult.rows;
+  const unlinkedMc = allCustomers.filter((c) => !c.xero_contact_id);
+  const linkedXeroIds = new Set(
+    allCustomers.filter((c) => c.xero_contact_id).map((c) => c.xero_contact_id),
+  );
   const dismissed = new Set(dismissedResult.rows.map((r) => `${r.customer_id}:${r.xero_contact_id}`));
 
   const unlinkedXero = xeroContacts.filter(
-    (c) => c.IsCustomer === true && c.ContactStatus !== 'ARCHIVE',
+    (c) => c.IsCustomer === true && c.ContactStatus !== 'ARCHIVE' && !linkedXeroIds.has(c.ContactID),
   );
 
   // Every pair above the floor, best first.
