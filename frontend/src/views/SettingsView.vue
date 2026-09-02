@@ -249,15 +249,15 @@ async function toggleStatusNotes(row) {
   }
 }
 
-// Per-category "Customer status report" card visibility on the ticket
-// detail page (see stores.js's statusReportAllowed) — same pattern and
+// Per-category "Customer progress update" card visibility on the ticket
+// detail page (see stores.js's progressUpdateAllowed) — same pattern and
 // same starting value (on by default) as toggleShipButton. Shipping
 // tickets are hidden separately via is_shipping, not through this.
-async function toggleStatusReport(row) {
+async function toggleProgressUpdate(row) {
   error.value = '';
   try {
     await api.patch(`/settings/${row.id}`, {
-      meta: { ...row.meta, hide_status_report: !row.meta.hide_status_report },
+      meta: { ...row.meta, hide_progress_update: !row.meta.hide_progress_update },
     });
     await refresh();
   } catch (err) {
@@ -485,7 +485,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Parent</th>
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
-                <th v-if="category === 'ticket_category'">Status report</th>
+                <th v-if="category === 'ticket_category'">Progress update</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
@@ -550,10 +550,10 @@ onMounted(refresh);
                 </td>
 
                 <td v-if="category === 'ticket_category'">
-                  <label class="checkbox" title="Show the &quot;Customer status report&quot; card on tickets in this category">
+                  <label class="checkbox" title="Show the &quot;Customer progress update&quot; card on tickets in this category">
                     <input
-                      type="checkbox" :checked="!row.meta.hide_status_report"
-                      @change="toggleStatusReport(row)"
+                      type="checkbox" :checked="!row.meta.hide_progress_update"
+                      @change="toggleProgressUpdate(row)"
                     />
                   </label>
                 </td>

@@ -37,8 +37,8 @@ const savingNotes = ref(false);
 const serviceDoneDraft = ref('');
 const serviceNeededDraft = ref('');
 const savingStatusNotes = ref(false);
-const statusReport = ref(null);
-const generatingReport = ref(false);
+const progressUpdate = ref(null);
+const generatingUpdate = ref(false);
 // "Assigned technicians" takes up a lot of space once a ticket has people
 // on it, so it starts collapsed behind a summary + "Show" toggle whenever
 // someone's already assigned, and expanded when nobody is (there's nothing
@@ -60,8 +60,8 @@ async function load() {
       showTechnicians.value = !(ticket.value.technicians || []).length;
       lastInitializedTicketId.value = ticket.value.id;
     }
-    const reports = await api.get('/status-reports', { ticket_id: props.id });
-    statusReport.value = reports[0] || null;
+    const updates = await api.get('/progress-updates', { ticket_id: props.id });
+    progressUpdate.value = updates[0] || null;
   } finally {
     loading.value = false;
   }
@@ -100,16 +100,16 @@ async function saveStatusNotes() {
   savingStatusNotes.value = false;
 }
 
-async function generateReport() {
-  generatingReport.value = true;
+async function generateUpdate() {
+  generatingUpdate.value = true;
   error.value = '';
   try {
-    statusReport.value = await api.post('/status-reports', { ticket_id: ticket.value.id });
-    router.push({ name: 'status-report', params: { id: statusReport.value.id } });
+    progressUpdate.value = await api.post('/progress-updates', { ticket_id: ticket.value.id });
+    router.push({ name: 'progress-update', params: { id: progressUpdate.value.id } });
   } catch (err) {
     error.value = err.message;
   } finally {
-    generatingReport.value = false;
+    generatingUpdate.value = false;
   }
 }
 
@@ -144,12 +144,12 @@ const assignedTechIds = computed(() => (ticket.value?.technicians || []).map((t)
 // why the category and this flag aren't the same thing).
 const isShipping = computed(() => !!ticket.value?.is_shipping);
 
-// Customer status report card (right column) — no customer to report to
+// Customer progress update card (right column) — no customer to update
 // on a non-repair ticket. is_shipping covers Shipping specifically (see
-// isShipping above); settings.statusReportAllowed covers every other
+// isShipping above); settings.progressUpdateAllowed covers every other
 // opted-out category (Housekeeping by default — migration 041).
-const showStatusReport = computed(() => (
-  !isShipping.value && settings.statusReportAllowed(ticket.value?.category_key)
+const showProgressUpdate = computed(() => (
+  !isShipping.value && settings.progressUpdateAllowed(ticket.value?.category_key)
 ));
 </script>
 
@@ -352,31 +352,31 @@ const showStatusReport = computed(() => (
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
         <TicketPhotos :ticket-id="ticket.id" />
 
-        <div v-if="showStatusReport" class="card">
+        <div v-if="showProgressUpdate" class="card">
           <div class="row" style="margin-bottom: 12px">
-            <h2 style="margin: 0">Customer status report</h2>
+            <h2 style="margin: 0">Customer progress update</h2>
           </div>
-          <div v-if="!statusReport" class="row">
+          <div v-if="!progressUpdate" class="row">
             <p class="muted small" style="margin: 0; flex: 1">
-              Pulls the status notes and photos above into a report you can email the customer.
+              Pulls the status notes and photos above into an update you can email the customer.
             </p>
-            <button class="small" :disabled="generatingReport" @click="generateReport">
-              {{ generatingReport ? 'Generating…' : 'Generate status report' }}
+            <button class="small" :disabled="generatingUpdate" @click="generateUpdate">
+              {{ generatingUpdate ? 'Generating…' : 'Generate progress update' }}
             </button>
           </div>
           <div v-else class="row">
-            <span :class="['pill', statusReport.status === 'sent' ? 'green' : 'slate']">
-              {{ statusReport.status === 'sent' ? 'Sent' : 'Draft' }}
+            <span :class="['pill', progressUpdate.status === 'sent' ? 'green' : 'slate']">
+              {{ progressUpdate.status === 'sent' ? 'Sent' : 'Draft' }}
             </span>
-            <span v-if="statusReport.sent_at" class="muted small">
-              Sent {{ new Date(statusReport.sent_at).toLocaleString() }}
+            <span v-if="progressUpdate.sent_at" class="muted small">
+              Sent {{ new Date(progressUpdate.sent_at).toLocaleString() }}
             </span>
-            <span v-if="statusReport.viewed_at" class="muted small">
-              · Viewed {{ new Date(statusReport.viewed_at).toLocaleString() }}
+            <span v-if="progressUpdate.viewed_at" class="muted small">
+              · Viewed {{ new Date(progressUpdate.viewed_at).toLocaleString() }}
             </span>
             <div class="spacer" />
-            <RouterLink class="btn small" :to="{ name: 'status-report', params: { id: statusReport.id } }">
-              View report →
+            <RouterLink class="btn small" :to="{ name: 'progress-update', params: { id: progressUpdate.id } }">
+              View update →
             </RouterLink>
           </div>
         </div>

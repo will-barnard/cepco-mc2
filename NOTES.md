@@ -2291,6 +2291,45 @@ tree walk for an instrument already on file) — the sketch only draws the
 new-instrument path, but dropping that shortcut from the old form would
 have been a real regression.
 
+### 2.50 Rename "Status Reports" to "Progress Updates"
+
+Codebase-wide rename, all the way through — same depth-of-rename posture
+as migration 019's ceppie->ceppy rename: schema, code, and display text,
+not just the label. Migration 046 renames `status_reports` ->
+`progress_updates`, `status_report_attachments` ->
+`progress_update_attachments` (+ its `status_report_id` column), their
+indexes, and the `status_reports_touch` trigger; on the backend,
+`routes/statusReports.js` / `routes/publicStatusReports.js` /
+`templates/statusReportEmail.js` became `progressUpdates.js` /
+`publicProgressUpdates.js` / `progressUpdateEmail.js` (`git mv`, mount
+paths in `index.js` now `/api/progress-updates` and
+`/api/public/progress-updates`); on the frontend, the three
+`StatusReport*View.vue` files became `ProgressUpdate*View.vue`, the
+`status-reports`/`status-report` route names became `progress-updates`/
+`progress-update`, `stores.js`'s `statusReportAllowed` getter became
+`progressUpdateAllowed` (reading the settings meta key
+`hide_progress_update`, migration 046 rewrites migration 041's stored
+`hide_status_report` flag on the Housekeeping row so that opt-out isn't
+silently dropped), and `SettingsView.vue`'s toggle/column followed suit.
+
+Two things deliberately NOT rewritten, both the same "a snapshot records
+what happened, not what it's called today" posture used everywhere else
+in this schema (`estimate_items`, `emails.template` generally, etc.):
+existing `emails.template = 'status_report'` audit rows from before this
+rename keep that value — only new sends write `'progress_update'` — and
+old NOTES.md entries describing this feature under its old name (§2.46,
+§2.47, migration 041's own header) are left as the historical record of
+what was true when they were written.
+
+One customer-facing wrinkle: `/status-report/:token` links already sent
+in progress-update emails before this change live in real inboxes
+indefinitely, so `router.js` keeps that exact path alive as a permanent
+alias (`status-report-view-legacy`) pointing at the same, renamed
+`ProgressUpdatePublicView.vue` component — the new canonical path is
+`/progress-update/:token`. The backend API path underneath has no such
+alias; only this app's own frontend JS calls it, and frontend + backend
+always deploy together.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -1,8 +1,8 @@
 <script setup>
 /**
- * Status report detail — staff side. Mirrors EstimateDetailView.vue's
+ * Progress update detail — staff side. Mirrors EstimateDetailView.vue's
  * shape (load, edit, act), but the two actions here are "Update from
- * ticket" (re-pull service notes + photos — routes/statusReports.js POST
+ * ticket" (re-pull service notes + photos — routes/progressUpdates.js POST
  * /:id/refresh, never touches summary) and "Send/Re-send to customer"
  * (POST /:id/send), rather than a status-machine of confirm/decline. The
  * summary and the pulled notes stay editable here at any time, sent or
@@ -14,7 +14,7 @@ import api from '../api';
 
 const props = defineProps({ id: { type: String, required: true } });
 
-const report = ref(null);
+const update = ref(null);
 const urls = ref({});
 const loading = ref(true);
 const error = ref('');
@@ -39,11 +39,11 @@ async function loadPhotoUrls(attachments) {
 async function load() {
   loading.value = true;
   try {
-    report.value = await api.get(`/status-reports/${props.id}`);
-    summaryDraft.value = report.value.summary || '';
-    serviceDoneDraft.value = report.value.service_done_notes || '';
-    serviceNeededDraft.value = report.value.service_needed_notes || '';
-    await loadPhotoUrls(report.value.attachments);
+    update.value = await api.get(`/progress-updates/${props.id}`);
+    summaryDraft.value = update.value.summary || '';
+    serviceDoneDraft.value = update.value.service_done_notes || '';
+    serviceNeededDraft.value = update.value.service_needed_notes || '';
+    await loadPhotoUrls(update.value.attachments);
   } finally {
     loading.value = false;
   }
@@ -54,7 +54,7 @@ async function saveDraft() {
   savingDraft.value = true;
   error.value = '';
   try {
-    report.value = { ...report.value, ...await api.patch(`/status-reports/${props.id}`, {
+    update.value = { ...update.value, ...await api.patch(`/progress-updates/${props.id}`, {
       summary: summaryDraft.value,
       service_done_notes: serviceDoneDraft.value,
       service_needed_notes: serviceNeededDraft.value,
@@ -69,16 +69,16 @@ async function saveDraft() {
 
 async function refreshFromTicket() {
   if (!confirm(
-    "Pull the ticket's current status notes and photos into this report? "
+    "Pull the ticket's current status notes and photos into this update? "
     + "The summary above is left as-is.",
   )) return;
   refreshing.value = true;
   error.value = ''; notice.value = '';
   try {
-    report.value = await api.post(`/status-reports/${props.id}/refresh`);
-    serviceDoneDraft.value = report.value.service_done_notes || '';
-    serviceNeededDraft.value = report.value.service_needed_notes || '';
-    await loadPhotoUrls(report.value.attachments);
+    update.value = await api.post(`/progress-updates/${props.id}/refresh`);
+    serviceDoneDraft.value = update.value.service_done_notes || '';
+    serviceNeededDraft.value = update.value.service_needed_notes || '';
+    await loadPhotoUrls(update.value.attachments);
     notice.value = 'Updated from the ticket.';
   } catch (err) {
     error.value = err.message;
@@ -91,8 +91,8 @@ async function sendToCustomer() {
   sending.value = true;
   error.value = ''; notice.value = '';
   try {
-    report.value = await api.post(`/status-reports/${props.id}/send`);
-    notice.value = `Status report emailed to the customer.`;
+    update.value = await api.post(`/progress-updates/${props.id}/send`);
+    notice.value = `Progress update emailed to the customer.`;
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -105,20 +105,20 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString() : null);
 
 <template>
   <div v-if="loading" class="page"><div class="empty">Loading…</div></div>
-  <div v-else-if="report" class="page" style="max-width: 820px">
+  <div v-else-if="update" class="page" style="max-width: 820px">
     <div class="page-head">
       <div>
         <h1 style="margin-bottom: 4px">
-          <RouterLink :to="{ name: 'ticket', params: { id: report.ticket_id } }">
-            {{ report.ticket_title }}
+          <RouterLink :to="{ name: 'ticket', params: { id: update.ticket_id } }">
+            {{ update.ticket_title }}
           </RouterLink>
         </h1>
         <p class="muted small" style="margin: 0">
-          {{ report.customer_name || 'No customer on file' }}
-          <span v-if="report.customer_email">· {{ report.customer_email }}</span>
+          {{ update.customer_name || 'No customer on file' }}
+          <span v-if="update.customer_email">· {{ update.customer_email }}</span>
         </p>
       </div>
-      <RouterLink class="btn small" :to="{ name: 'status-reports' }">← Status reports</RouterLink>
+      <RouterLink class="btn small" :to="{ name: 'progress-updates' }">← Progress updates</RouterLink>
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
@@ -126,13 +126,13 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString() : null);
 
     <div class="card" style="margin-bottom: 16px">
       <div class="row" style="margin-bottom: 14px">
-        <span :class="['pill', report.status === 'sent' ? 'green' : 'slate']">{{ report.status }}</span>
-        <span class="muted small">Current ticket status: {{ report.ticket_status_label }}</span>
-        <span v-if="when(report.refreshed_at)" class="muted small">
-          · Pulled from ticket {{ when(report.refreshed_at) }}
+        <span :class="['pill', update.status === 'sent' ? 'green' : 'slate']">{{ update.status }}</span>
+        <span class="muted small">Current ticket status: {{ update.ticket_status_label }}</span>
+        <span v-if="when(update.refreshed_at)" class="muted small">
+          · Pulled from ticket {{ when(update.refreshed_at) }}
         </span>
-        <span v-if="when(report.sent_at)" class="muted small">· Sent {{ when(report.sent_at) }}</span>
-        <span v-if="when(report.viewed_at)" class="muted small">· Viewed {{ when(report.viewed_at) }}</span>
+        <span v-if="when(update.sent_at)" class="muted small">· Sent {{ when(update.sent_at) }}</span>
+        <span v-if="when(update.viewed_at)" class="muted small">· Viewed {{ when(update.viewed_at) }}</span>
       </div>
 
       <div class="field">
@@ -154,21 +154,21 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString() : null);
         {{ savingDraft ? 'Saving…' : 'Save changes' }}
       </button>
       <p class="muted small" style="margin: 8px 0 0">
-        Editing here only changes this report — it never writes back to the ticket.
+        Editing here only changes this update — it never writes back to the ticket.
       </p>
     </div>
 
     <div class="card" style="margin-bottom: 16px">
       <div class="row" style="margin-bottom: 12px">
-        <h2 style="margin: 0">Photos on this report</h2>
+        <h2 style="margin: 0">Photos on this update</h2>
         <div class="spacer" />
-        <span class="muted small">{{ report.attachments.length }}</span>
+        <span class="muted small">{{ update.attachments.length }}</span>
       </div>
-      <div v-if="!report.attachments.length" class="empty">
-        No photos were on the ticket when this report was last pulled.
+      <div v-if="!update.attachments.length" class="empty">
+        No photos were on the ticket when this update was last pulled.
       </div>
       <div v-else class="gallery">
-        <figure v-for="a in report.attachments" :key="a.id">
+        <figure v-for="a in update.attachments" :key="a.id">
           <a :href="urls[a.id]" target="_blank" rel="noopener">
             <img :src="urls[a.id]" :alt="a.caption || a.file_name" loading="lazy" />
           </a>
@@ -183,11 +183,11 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString() : null);
           {{ refreshing ? 'Updating…' : 'Update from ticket' }}
         </button>
         <button class="primary" :disabled="sending" @click="sendToCustomer">
-          {{ sending ? 'Sending…' : (report.sent_at ? 'Re-send to customer' : 'Send to customer') }}
+          {{ sending ? 'Sending…' : (update.sent_at ? 'Re-send to customer' : 'Send to customer') }}
         </button>
       </div>
-      <p v-if="report.public_url" class="muted small" style="margin: 12px 0 0">
-        Public link: <a :href="report.public_url" target="_blank" rel="noopener">{{ report.public_url }}</a>
+      <p v-if="update.public_url" class="muted small" style="margin: 12px 0 0">
+        Public link: <a :href="update.public_url" target="_blank" rel="noopener">{{ update.public_url }}</a>
       </p>
     </div>
   </div>

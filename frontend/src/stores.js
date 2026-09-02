@@ -122,15 +122,16 @@ export const useSettings = defineStore('settings', {
     statusNotesAllowed: (s) => (categoryKey) => (
       !!(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.show_status_notes
     ),
-    // TicketDetailView.vue's "Customer status report" card — a category
+    // TicketDetailView.vue's "Customer progress update" card — a category
     // like Housekeeping has no customer to send one to. Same meta-on-the-
     // category-row mechanism and same default-permissive convention as
-    // shipButtonAllowed above (migration 041 opts Housekeeping out;
+    // shipButtonAllowed above (migration 041 opts Housekeeping out, key
+    // renamed hide_status_report -> hide_progress_update by migration 046;
     // Shipping is handled separately via the ticket's own is_shipping
     // flag, checked alongside this in TicketDetailView.vue, since Orders &
-    // Shipping also carries real orders that should keep their report).
-    statusReportAllowed: (s) => (categoryKey) => (
-      !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_status_report
+    // Shipping also carries real orders that should keep their update).
+    progressUpdateAllowed: (s) => (categoryKey) => (
+      !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_progress_update
     ),
     // DashboardView.vue's "My tasks" — a priority tier flagged this way
     // (Settings -> Priority tiers' "Highlight in tasks" column) gets its

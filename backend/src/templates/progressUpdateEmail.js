@@ -1,15 +1,15 @@
 'use strict';
 
 /**
- * Builds the customer-facing status report email — routes/statusReports.js's
- * POST /:id/send. Same visual language as templates/quoteEmail.js and
- * templates/purchaseReceipt.js (inline CID logo, same fonts/colors), and
- * the same reasoning for a single CTA that only ever *shows* the report:
- * a GET link that changes state is unsafe in email (mail security
- * scanners and some clients prefetch every link in a message body), so
- * anything the customer can actually do — here, just "mark as seen" —
- * happens from a real click once they're looking at the page itself. See
- * routes/publicStatusReports.js and NOTES.md.
+ * Builds the customer-facing progress update email —
+ * routes/progressUpdates.js's POST /:id/send. Same visual language as
+ * templates/quoteEmail.js and templates/purchaseReceipt.js (inline CID
+ * logo, same fonts/colors), and the same reasoning for a single CTA that
+ * only ever *shows* the update: a GET link that changes state is unsafe
+ * in email (mail security scanners and some clients prefetch every link
+ * in a message body), so anything the customer can actually do — here,
+ * just "mark as seen" — happens from a real click once they're looking at
+ * the page itself. See routes/publicProgressUpdates.js and NOTES.md.
  */
 
 const fs = require('fs');
@@ -32,7 +32,7 @@ const escapeHtml = (s) => String(s ?? '')
   .replace(/"/g, '&quot;');
 
 // First non-blank line of a snapshotted notes field, for the short preview
-// in the email body — the full text is on the report page itself, not
+// in the email body — the full text is on the update page itself, not
 // repeated here.
 const firstLine = (text) => {
   const line = String(text || '').split('\n').map((l) => l.trim()).find(Boolean);
@@ -40,21 +40,21 @@ const firstLine = (text) => {
 };
 
 /**
- * `report` is a status_reports row, `ticket` its ticket (title +
+ * `update` is a progress_updates row, `ticket` its ticket (title +
  * instrument_family/instrument_model), `customer` a customers row,
- * `attachmentCount` how many photos are on the report, `confirmUrl` the
+ * `attachmentCount` how many photos are on the update, `confirmUrl` the
  * public page link.
  */
-function buildStatusReportEmail({
-  report, ticket, customer, attachmentCount, confirmUrl,
+function buildProgressUpdateEmail({
+  update, ticket, customer, attachmentCount, confirmUrl,
 }) {
   const customerName = escapeHtml(customer.name);
   const instrumentLabel = [ticket.instrument_family, ticket.instrument_model]
     .filter(Boolean).join(' ');
   const title = escapeHtml(ticket.title || 'Your instrument');
 
-  const doneLine = firstLine(report.service_done_notes);
-  const neededLine = firstLine(report.service_needed_notes);
+  const doneLine = firstLine(update.service_done_notes);
+  const neededLine = firstLine(update.service_needed_notes);
 
   const previewRows = [
     doneLine && { label: 'Done so far', value: doneLine },
@@ -72,11 +72,11 @@ function buildStatusReportEmail({
       <img src="cid:cepco-logo" alt="Chicago Electric Piano Company" height="30" style="display:block;border:0;" />
     </div>
     <div style="padding:28px;">
-      <h1 style="font-size:20px;margin:0 0 4px;color:#16181d;">Status update — ${title}</h1>
+      <h1 style="font-size:20px;margin:0 0 4px;color:#16181d;">Progress update — ${title}</h1>
       <p style="font-size:14px;color:#16181d;line-height:1.5;margin:0 0 22px;">
         Hi ${customerName} — here's where things stand${instrumentLabel ? ` with your ${escapeHtml(instrumentLabel)}` : ''}.
       </p>
-      ${report.summary ? `<p style="font-size:14px;color:#16181d;line-height:1.6;margin:0 0 20px;white-space:pre-line;">${escapeHtml(report.summary)}</p>` : ''}
+      ${update.summary ? `<p style="font-size:14px;color:#16181d;line-height:1.6;margin:0 0 20px;white-space:pre-line;">${escapeHtml(update.summary)}</p>` : ''}
       ${previewRows.length ? `<table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
         ${previewRows.map((r) => `<tr>
           <td style="padding:9px 0;border-bottom:1px solid #ececec;font-size:12px;color:#9aa1ad;white-space:nowrap;vertical-align:top;">${escapeHtml(r.label)}</td>
@@ -87,7 +87,7 @@ function buildStatusReportEmail({
         <a href="${confirmUrl}"
            style="display:inline-block;background:#16181d;color:#ffffff;text-decoration:none;
                   font-size:14px;font-weight:600;padding:13px 28px;border-radius:8px;">
-          View full status report
+          View full progress update
         </a>
       </div>
       <p style="margin:16px 0 0;font-size:12px;color:#9aa1ad;text-align:center;">
@@ -101,7 +101,7 @@ function buildStatusReportEmail({
 </div>`.trim();
 
   return {
-    subject: `Status update from Chicago Electric Piano Company — ${ticket.title || 'your instrument'}`,
+    subject: `Progress update from Chicago Electric Piano Company — ${ticket.title || 'your instrument'}`,
     html,
     attachments: [
       {
@@ -114,4 +114,4 @@ function buildStatusReportEmail({
   };
 }
 
-module.exports = { buildStatusReportEmail };
+module.exports = { buildProgressUpdateEmail };

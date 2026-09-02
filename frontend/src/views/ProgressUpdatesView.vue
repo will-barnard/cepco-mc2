@@ -1,9 +1,9 @@
 <script setup>
 /**
- * Status Reports — the list of per-ticket customer status reports
- * (routes/statusReports.js). One row per report; "Generate status report"
- * on a ticket's detail page is what creates a new one, so there's no
- * "+ New" action here, unlike Estimates.
+ * Progress Updates — the list of per-ticket customer progress updates
+ * (routes/progressUpdates.js). One row per update; "Generate progress
+ * update" on a ticket's detail page is what creates a new one, so there's
+ * no "+ New" action here, unlike Estimates.
  */
 import { ref, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -17,14 +17,14 @@ const STATUSES = [
 
 const PILL = { draft: 'slate', sent: 'green' };
 
-const reports = ref([]);
+const updates = ref([]);
 const loading = ref(true);
 const status = ref('');
 
 async function load() {
   loading.value = true;
   try {
-    reports.value = await api.get('/status-reports', { status: status.value });
+    updates.value = await api.get('/progress-updates', { status: status.value });
   } finally {
     loading.value = false;
   }
@@ -38,7 +38,7 @@ const instrumentLabel = (r) => [r.instrument_family, r.instrument_model].filter(
 <template>
   <div class="page">
     <div class="page-head">
-      <h1>Status Reports</h1>
+      <h1>Progress Updates</h1>
       <div class="row">
         <select v-model="status" style="width: auto; min-width: 130px" @change="load">
           <option v-for="[k, label] in STATUSES" :key="k" :value="k">{{ label }}</option>
@@ -47,8 +47,8 @@ const instrumentLabel = (r) => [r.instrument_family, r.instrument_model].filter(
     </div>
 
     <div v-if="loading" class="empty">Loading…</div>
-    <div v-else-if="!reports.length" class="empty">
-      No status reports yet — generate one from a ticket's detail page.
+    <div v-else-if="!updates.length" class="empty">
+      No progress updates yet — generate one from a ticket's detail page.
     </div>
 
     <div v-else class="table-wrap card">
@@ -61,8 +61,8 @@ const instrumentLabel = (r) => [r.instrument_family, r.instrument_model].filter(
         </thead>
         <tbody>
           <tr
-            v-for="r in reports" :key="r.id" class="clickable"
-            @click="$router.push({ name: 'status-report', params: { id: r.id } })"
+            v-for="r in updates" :key="r.id" class="clickable"
+            @click="$router.push({ name: 'progress-update', params: { id: r.id } })"
           >
             <td>{{ r.ticket_title }}</td>
             <td>{{ r.customer_name || '—' }}</td>
@@ -71,7 +71,7 @@ const instrumentLabel = (r) => [r.instrument_family, r.instrument_model].filter(
             <td class="small muted">{{ when(r.generated_at) }}</td>
             <td class="small muted">{{ when(r.sent_at) }}</td>
             <td class="small muted">{{ when(r.viewed_at) }}</td>
-            <td class="right"><RouterLink :to="{ name: 'status-report', params: { id: r.id } }">View →</RouterLink></td>
+            <td class="right"><RouterLink :to="{ name: 'progress-update', params: { id: r.id } }">View →</RouterLink></td>
           </tr>
         </tbody>
       </table>
