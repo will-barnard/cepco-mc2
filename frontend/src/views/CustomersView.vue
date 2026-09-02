@@ -255,6 +255,10 @@ const when = (ts) => new Date(ts).toLocaleString();
         </div>
       </div>
       <div class="field">
+        <label>Address</label>
+        <input v-model="form.address" />
+      </div>
+      <div class="field">
         <label>Notes</label>
         <textarea v-model="form.notes" style="min-height: 60px" />
       </div>
@@ -295,6 +299,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         <p class="muted small">
           {{ [selected.email, selected.phone, selected.source].filter(Boolean).join(' · ') }}
         </p>
+        <p v-if="selected.address" class="muted small">{{ selected.address }}</p>
         <p v-if="selected.notes">{{ selected.notes }}</p>
 
         <h3 style="margin-top: 20px">Instruments</h3>

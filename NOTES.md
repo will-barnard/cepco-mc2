@@ -2592,6 +2592,26 @@ class is shared with a few other pages (TicketDetailView, HoursView,
 InstrumentDefaultsView) that don't have this same long-list-next-to-
 detail shape and shouldn't get sticky behavior by side effect.
 
+### 2.59 Fix: address had no view anywhere in the app
+
+Will, after §2.57's fill-in-missing-addresses catch-up: "it says it
+synced addresses but I am not seeing it." Root cause had nothing to do
+with the Xero work — `customers.address` has existed since migration 001
+and every backend route already reads/writes it fine, but no view ever
+rendered it: `CustomersView.vue`'s detail panel showed only
+email/phone/source, and the "New customer" form had no address field
+either (so before Xero, the only way an address ever got into that
+column was routes/customers.js's PATCH being called directly, which
+nothing in the UI did). Added an address line to the detail panel and an
+Address input to the new-customer form — `form` already had `address` in
+its default object, just no input bound to it.
+
+Noted, not fixed here: there's still no way to *edit* an existing
+customer's address (or name/email/phone/notes) from the app at all —
+only create. Worth a follow-up if that's wanted; a small, separate
+decision (inline edit vs. a dedicated edit form) rather than something to
+bundle into this fix.
+
 ## 4. Suggested first moves after deploy
 
 
