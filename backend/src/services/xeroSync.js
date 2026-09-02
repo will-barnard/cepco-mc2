@@ -112,11 +112,18 @@ function uniqueIndex(rows, keyFn) {
 }
 
 async function runXeroSync() {
-  const [xeroContacts, mcResult] = await Promise.all([
+  const [xeroContacts, mcResult, dismissedResult] = await Promise.all([
     xero.listContacts(),
     query('SELECT * FROM customers'),
+    query('SELECT customer_id, xero_contact_id FROM xero_dismissed_matches'),
   ]);
   const mcCustomers = mcResult.rows;
+  // A pair an admin explicitly said "not the same" to on the backfill
+  // review screen (migration 048, services/xeroBackfill.js) never gets
+  // auto-linked here either, even if it would otherwise match by exact
+  // email or name — a shared household email between two different
+  // people is exactly the case that review screen exists to catch.
+  const dismissed = new Set(dismissedResult.rows.map((r) => `${r.customer_id}:${r.xero_contact_id}`));
 
   // Only real, active customers — not the shop's own parts-vendor/supplier
   // contacts this same Xero org also tracks for its AP side, and not a
@@ -152,7 +159,10 @@ async function runXeroSync() {
   for (const xc of xeroCandidates) {
     let mc = mcByXeroId.get(xc.ContactID);
     const isNewLink = !mc;
-    if (!mc) mc = unlinkedMcByEmail.get(emailKey(xc.EmailAddress)) || unlinkedMcByName.get(nameKey(xc.Name));
+    if (!mc) {
+      const candidate = unlinkedMcByEmail.get(emailKey(xc.EmailAddress)) || unlinkedMcByName.get(nameKey(xc.Name));
+      if (candidate && !dismissed.has(`${candidate.id}:${xc.ContactID}`)) mc = candidate;
+    }
 
     if (!mc) {
       // No match anywhere — a contact that exists only in Xero.
@@ -235,4 +245,4 @@ async function runXeroSync() {
   return { ...stats, conflicts };
 }
 
-module.exports = { runXeroSync };
+module.exports = { runXeroSync, phoneFromXero, addressFromXero };

@@ -146,6 +146,11 @@ const when = (ts) => new Date(ts).toLocaleString();
         Xero gets pulled in here. When both sides changed the same record since the last sync,
         whichever change is newer wins — see the conflict list below when that happens.
       </p>
+      <p class="muted small">
+        First time connecting? <RouterLink to="/customers/xero-backfill">Review backfill matches</RouterLink>
+        before your first sync, so pre-existing records that don't match exactly (a typo, a
+        missing email) get linked instead of duplicated.
+      </p>
       <div class="field-row">
         <div class="field">
           <label class="checkbox" style="margin-top: 22px">

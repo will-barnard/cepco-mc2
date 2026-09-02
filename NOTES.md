@@ -2421,6 +2421,46 @@ click against Will's actual org is the real test; `xero.js`'s error
 handling surfaces Xero's own error detail (not just a status code) if
 something about the token/scope/payload shape needs adjusting.
 
+### 2.53 Xero backfill review tool
+
+Follow-up to §2.52 — Will's ask: before turning the regular two-way sync
+loose on an org that already has its own separate customer history on
+both sides, find likely "these are the same person" pairs that don't
+already match exactly (the regular sync's own matcher already handles
+exact email/name for free) and let a human confirm or reject each one,
+so a typo or a missing email doesn't turn into a duplicate customer
+instead of a link.
+
+**`services/xeroBackfill.js`** scores every still-unlinked MC2 customer
+against every still-unlinked Xero contact — no fuzzy-matching package
+(same no-SDK posture as `xero.js`'s plain-`fetch` client): exact email
+scores highest, otherwise a hand-rolled bigram (Dice coefficient) name
+similarity, with a matching phone number (compared by its last 7 digits,
+so formatting differences don't break a real match) nudging the score
+up. Every candidate carries *which* signals fired, not just a bare
+percentage, so a human can judge "Bob Smith"/"Robert Smith" (name-only)
+differently from a real email match. Pairs are assigned greedily —
+highest score first, claim if neither side is already claimed — into
+`confident` (>=0.82) and `possible` (>=0.45) buckets; a rejected pair is
+remembered in the new `xero_dismissed_matches` table (migration 048) so
+neither this tool nor the regular sync's own auto-matcher suggests or
+silently links it again (a shared household email between two different
+people is exactly the case that table exists for).
+
+**`XeroBackfillView.vue`** (`/customers/xero-backfill`, admin-only, linked
+from the Customers page's Xero sync panel) is the review screen: bulk-link
+the confident list, link/dismiss the possible list one at a time, and for
+an MC2 customer with no algorithmic candidate at all, a manual search box
+over every still-unlinked Xero contact (already fetched with the rest of
+the screen's data, no extra round trip) — for the typo or maiden name the
+scorer wasn't going to catch. Nothing on this screen creates or overwrites
+a record on either side; `POST /xero/backfill/link` only sets
+`customers.xero_contact_id` and deliberately leaves `xero_synced_at`
+unset, so the *next* regular sync run reconciles the newly-linked pair's
+actual field values (whichever side is newer) the same way it handles
+every other first-time link — this tool's whole job is establishing which
+records are the same, not moving data.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -20,6 +20,10 @@ const routes = [
     component: () => import('./views/ProgressUpdateDetailView.vue'), props: true,
   },
   { path: '/customers', name: 'customers', component: () => import('./views/CustomersView.vue') },
+  {
+    path: '/customers/xero-backfill', name: 'xero-backfill',
+    component: () => import('./views/XeroBackfillView.vue'), meta: { admin: true },
+  },
   { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
   { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryRestorationsView.vue') },
   { path: '/inventory/new', name: 'inventory-purchase-new', component: () => import('./views/InventoryPurchaseNewView.vue') },
