@@ -2491,6 +2491,62 @@ human to catch, had the tool run first. Worth a manual look at the
 Customers page for anything that looks duplicated before relying on the
 backfill screen's now-correct "everything's already reconciled" result.
 
+### 2.55 Fix: Xero sync never pulled in address or phone
+
+Will: after a sync ran, linked and newly-created customers alike had no
+address and no phone, even for Xero contacts that have both on file.
+`xeroSync.js`'s `addressFromXero`/`phoneFromXero` were reading `xc.Addresses`/
+`xc.Phones` correctly — the actual bug was one call earlier: `xero.js`'s
+`listContacts()` calls Xero's `GET /Contacts`, and that endpoint defaults to
+an abbreviated response (`summaryOnly=true`) that omits `Addresses`,
+`Phones`, and a few other detail fields from the payload entirely, not as
+empty arrays — it's optimised for orgs with large contact lists that don't
+want that detail on every page. A small piano shop's contact list doesn't
+need that optimization and was silently paying for it. Fixed by requesting
+`GET /Contacts?page=N&summaryOnly=false` — no change needed anywhere else,
+since `xeroSync.js`/`xeroBackfill.js` were already reading the right fields,
+they just never received them.
+
+Next sync run (manual "Sync now" or the nightly schedule) will pull address
+and phone into every already-linked customer along with everything else,
+same as any other Xero-side change — no separate backfill needed for this
+part.
+
+### 2.56 Xero duplicate-customer merge tool
+
+Direct fallout of §2.54: Will ran a full sync before backfill (§2.53) got a
+chance to run, so pre-existing customers that didn't match a Xero contact by
+exact email or exact name (a nickname, a typo, an email on file in one
+system only) each got a brand-new `source = 'xero'` customer created for
+them instead of being linked — the shop ended up with two rows for some of
+the same real people, and the new row is the one actually linked to Xero
+going forward.
+
+`services/xeroDuplicates.js` finds these: it pairs every customer never
+linked to Xero (a likely-original record) against every `source = 'xero'`
+customer (a likely duplicate the sync just created), using the exact same
+scoring `xeroBackfill.js` already has — email-exact, bigram name similarity,
+last-7-digits phone match — reused via that file's exports rather than
+redefined. `frontend/src/views/XeroDuplicatesView.vue` is the review screen
+(linked from the Customers page's Xero panel, next to the backfill link):
+confident and possible pairs, "Not a duplicate" to dismiss (persisted in
+migration 049's `xero_dismissed_duplicate_pairs`, same idea as §2.53's
+`xero_dismissed_matches` but for two MC2 rows rather than an MC2/Xero pair),
+and "Merge" to confirm one.
+
+A merge (`mergeDuplicate`, `db.js`'s `withTransaction`) reassigns every
+child record with a `customer_id` FK — `instruments`, `tickets`, `emails`,
+`estimates`, `progress_updates` — from the duplicate onto the survivor,
+moves the duplicate's `xero_contact_id` onto the survivor, and deletes the
+duplicate row. `xero_synced_at` is deliberately left null on the survivor
+afterwards, same reasoning as backfill's `linkCustomerToXero`: the next
+regular sync run reconciles name/email/phone/address itself by comparing
+which side actually changed more recently, rather than the merge having to
+guess which of the two versions is "right". No bulk "merge all" button on
+purpose, unlike backfill's confident-matches list — a merge deletes a
+customer row and reassigns its history, and that's not something to do to a
+few dozen records unattended even at high confidence.
+
 ## 4. Suggested first moves after deploy
 
 

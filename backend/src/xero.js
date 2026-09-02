@@ -120,12 +120,20 @@ async function apiRequest(path, { method = 'GET', body } = {}) {
  * customer list is small enough that walking Xero's own page=N pagination
  * (100 contacts/page) internally and handing back one flat array is
  * simpler and safer than making every caller re-implement paging.
+ *
+ * summaryOnly=false is load-bearing, not decorative: Xero's GET /Contacts
+ * defaults to an abbreviated response (optimised for large contact lists)
+ * that omits Addresses, Phones, and a few other detail fields entirely —
+ * not empty arrays, just missing from the payload. Both xeroSync.js's
+ * addressFromXero/phoneFromXero and xeroBackfill.js's phone-match signal
+ * read those fields, so without this every contact fetched here looked
+ * like it simply had no address or phone on file.
  */
 async function listContacts() {
   const all = [];
   for (let page = 1; ; page += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const { Contacts: contacts = [] } = await apiRequest(`/Contacts?page=${page}`);
+    const { Contacts: contacts = [] } = await apiRequest(`/Contacts?page=${page}&summaryOnly=false`);
     all.push(...contacts);
     if (contacts.length < 100) break; // short page — that was the last one
   }

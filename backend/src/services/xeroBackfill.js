@@ -201,4 +201,11 @@ async function dismissMatch(customerId, xeroContactId) {
   );
 }
 
-module.exports = { computeBackfillCandidates, linkCustomerToXero, dismissMatch };
+module.exports = {
+  computeBackfillCandidates, linkCustomerToXero, dismissMatch,
+  // Exported for services/xeroDuplicates.js — same "is this probably the
+  // same person" scoring, reused rather than redefined, for MC2-customer
+  // vs. MC2-customer comparisons instead of this file's MC2-vs-Xero-contact
+  // ones.
+  nameSimilarity, phonesMatch, normalize, CONFIDENT_THRESHOLD, POSSIBLE_FLOOR,
+};

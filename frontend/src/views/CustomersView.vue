@@ -151,6 +151,10 @@ const when = (ts) => new Date(ts).toLocaleString();
         before your first sync, so pre-existing records that don't match exactly (a typo, a
         missing email) get linked instead of duplicated.
       </p>
+      <p class="muted small">
+        Already synced and see doubled-up customers? <RouterLink to="/customers/xero-duplicates">Review duplicates</RouterLink>
+        to merge a customer the sync created from Xero back into the original record.
+      </p>
       <div class="field-row">
         <div class="field">
           <label class="checkbox" style="margin-top: 22px">

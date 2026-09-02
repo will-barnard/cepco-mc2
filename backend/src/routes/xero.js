@@ -18,6 +18,9 @@ const { runXeroSync } = require('../services/xeroSync');
 const {
   computeBackfillCandidates, linkCustomerToXero, dismissMatch,
 } = require('../services/xeroBackfill');
+const {
+  computeDuplicateCandidates, mergeDuplicate, dismissDuplicate,
+} = require('../services/xeroDuplicates');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -78,6 +81,38 @@ router.post('/backfill/dismiss', requireAdmin, asyncHandler(async (req, res) => 
   const { customer_id: customerId, xero_contact_id: xeroContactId } = req.body || {};
   if (!customerId || !xeroContactId) throw badRequest('customer_id and xero_contact_id are required');
   await dismissMatch(customerId, xeroContactId);
+  res.json({ dismissed: true });
+}));
+
+// ---------------------------------------------------------------------------
+// Duplicate-customer review (services/xeroDuplicates.js) — cleanup for
+// pre-existing customers the regular sync's exact-match-only linking
+// missed and created a second, Xero-linked row for instead. See that
+// file's header for the merge semantics.
+// ---------------------------------------------------------------------------
+router.get('/duplicates/candidates', requireAdmin, asyncHandler(async (req, res) => {
+  try {
+    res.json(await computeDuplicateCandidates());
+  } catch (err) {
+    throw badRequest(err.message);
+  }
+}));
+
+router.post('/duplicates/merge', requireAdmin, asyncHandler(async (req, res) => {
+  const { survivor_id: survivorId, duplicate_id: duplicateId } = req.body || {};
+  if (!survivorId || !duplicateId) throw badRequest('survivor_id and duplicate_id are required');
+  try {
+    await mergeDuplicate(survivorId, duplicateId);
+  } catch (err) {
+    throw badRequest(err.message);
+  }
+  res.json({ merged: true });
+}));
+
+router.post('/duplicates/dismiss', requireAdmin, asyncHandler(async (req, res) => {
+  const { survivor_id: survivorId, duplicate_id: duplicateId } = req.body || {};
+  if (!survivorId || !duplicateId) throw badRequest('survivor_id and duplicate_id are required');
+  await dismissDuplicate(survivorId, duplicateId);
   res.json({ dismissed: true });
 }));
 

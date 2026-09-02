@@ -24,6 +24,10 @@ const routes = [
     path: '/customers/xero-backfill', name: 'xero-backfill',
     component: () => import('./views/XeroBackfillView.vue'), meta: { admin: true },
   },
+  {
+    path: '/customers/xero-duplicates', name: 'xero-duplicates',
+    component: () => import('./views/XeroDuplicatesView.vue'), meta: { admin: true },
+  },
   { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
   { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryRestorationsView.vue') },
   { path: '/inventory/new', name: 'inventory-purchase-new', component: () => import('./views/InventoryPurchaseNewView.vue') },
