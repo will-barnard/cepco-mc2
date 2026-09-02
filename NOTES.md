@@ -2216,6 +2216,81 @@ includes `parts_cost` and `parts_variant_label_snapshot` in that
 customer-safe item shape (they're real, priced-in numbers) but excludes
 `outlier_hours` outright, same as the email template.
 
+### 2.49 N10 — Estimate wizard screens + standardized ticket titles
+
+The boss sketched a redesign of the estimate builder as a series of
+full-screen button pickers instead of one long scrolling form — meant to
+be run on an iPad standing at the bench, one decision at a time: customer
+info up top, then per instrument a family picker (Rhodes/Wurlitzer/
+Hohner/Combo/Electric Strings/Other) -> a cascading model picker (walking
+`instrument_models`' ragged tree — N7's scaffold — one level per screen
+instead of a stack of `<select>`s) -> Year/Nickname -> four procedure
+screens split by category (Standard Setup & Actions / Electronics /
+Cosmetics / Parts) -> a Review/Breakdown screen that can jump back into
+any instrument -> a Final/Approval screen (cost summary, then the
+customer's email & contact info) before saving. `EstimateNewView.vue` was
+rebuilt end to end around this — same underlying POST /quotes payload
+shape as before, just walked to a lot more deliberately.
+
+**`standard_procedures.category` (migration 045)** is the new piece that
+makes screens 3-6 possible: nullable, one of `standard_setup` /
+`electronics` / `cosmetics` / `parts`, backfilled for all 81 of migration
+044's seeded rows by id range (safe — those ids are stable, assigned in
+that migration's own insertion order into what was an empty table; nothing
+since then has touched ids 1-81). A row with no category still shows up
+in the wizard, bucketed under Standard Setup & Actions rather than going
+missing — same "an incomplete admin list never blocks the shop floor"
+posture as `allow_manual`. `Settings -> Standard procedures`
+(`ProceduresView.vue`) got an "Estimate wizard screen" picker to fix up
+the backfill's guesses or categorize anything added since.
+
+**"Electronics (Suitcase only)"** — the boss's own annotation — is
+`instrument_models.is_suitcase` (same migration), a per-node boolean
+(admin-set in `Settings -> Instrument models`, same convention as
+`allow_manual`) marking a Rhodes Suitcase 73/88-style node, or a
+Wurlitzer 140/145/110/120-style self-contained-tube-amp node, as opposed
+to a Stage-style instrument with no built-in amp electronics. The
+Electronics screen only shows when the *new* instrument being quoted was
+picked from a path carrying that flag (and only if the family actually
+has any `electronics`-category procedures at all). An *existing*
+instrument picked from the customer's own instrument list has no such
+flag stored on it (that lives on the tree node, not the `instruments`
+row) — for that path the screen shows whenever the family has electronics
+procedures, full stop, rather than hiding real available work for lack of
+one bit of provenance.
+
+**Standardized ticket titles.** `routes/tickets.js`'s `composeTicketTitle`
+(N1) moved from "[Client Name] [\"Nickname\"] [Instrument Model]"
+(space-joined, `Model` being whatever the picker/free-text left in
+`instruments.model`) to "[Client Name] - [\"Nickname\"] [Year] [Family]
+[Model leaf]" — e.g. `Dolly Jones - "Old Betsy" 1973 Rhodes Stage 73`.
+`Model leaf` is the last " / "-segment of the model chain (`modelLeaf()`)
+— the specific model someone actually picked, not the whole era/mark path
+to it — and `Family` is the human label from `routes/instruments.js`'s
+`FAMILY_LABELS` (now also exported), not the raw key. Whichever pieces
+are actually present still just get space-joined / dash-joined; nothing
+required that wasn't already optional. `composeTicketTitle` is now
+exported and reused by `routes/quotes.js`'s `createTicketsForEstimate` —
+an estimate-originated ticket used to get its own, different
+"[Family] [Model] — [Procedure]" title built inline there, so the exact
+same customer's instrument rendered two different ways depending on
+whether the ticket came from a walk-in intake or a confirmed estimate.
+The one case `composeTicketTitle` alone can't describe — a quote line
+item with no instrument at all (the "General" bucket) — still appends the
+procedure name(s), same as the old inline title did, so that distinction
+isn't lost. `TicketNewView.vue`'s `autoTitlePreview` mirrors the new
+format client-side exactly, same as before (N1).
+
+Two things the boss's sketch implied but didn't spell out, both handled
+as reasonable defaults rather than blocking on a re-ask: Year/Nickname
+have no screen of their own in the sketch, so they land as a single small
+"Instrument details" step right after the model is picked and before the
+four procedure screens. And a returning customer's *existing* instruments
+get a quick-pick screen ahead of the family picker (skipping the whole
+tree walk for an instrument already on file) — the sketch only draws the
+new-instrument path, but dropping that shortcut from the old form would
+have been a real regression.
+
 ## 4. Suggested first moves after deploy
 
 

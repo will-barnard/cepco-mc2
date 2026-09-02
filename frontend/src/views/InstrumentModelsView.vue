@@ -63,7 +63,9 @@ const rows = computed(() => {
 
 // --- create --------------------------------------------------------------
 const showNew = ref(false);
-const blankForm = () => ({ name: '', parent_id: '', allow_manual: false });
+const blankForm = () => ({
+  name: '', parent_id: '', allow_manual: false, is_suitcase: false,
+});
 const form = ref(blankForm());
 
 function openNew() {
@@ -81,6 +83,7 @@ async function createNode() {
       name: form.value.name.trim(),
       parent_id: form.value.parent_id || null,
       allow_manual: form.value.allow_manual,
+      is_suitcase: form.value.is_suitcase,
     });
     showNew.value = false;
     notice.value = 'Node added.';
@@ -167,6 +170,13 @@ async function removeNode(n) {
         <input v-model="form.allow_manual" type="checkbox" />
         <span class="small">Also offer "type it in" alongside this node's children (e.g. a catch-all "Other")</span>
       </label>
+      <label class="checkbox" style="margin-top: 8px">
+        <input v-model="form.is_suitcase" type="checkbox" />
+        <span class="small">
+          Suitcase-style / self-contained amp (N10) — the estimate wizard's Electronics screen only shows
+          for an instrument picked from a node flagged this way
+        </span>
+      </label>
     </form>
 
     <div v-if="loading" class="empty">Loading…</div>
@@ -185,6 +195,13 @@ async function removeNode(n) {
               @change="updateNode(n, { allow_manual: $event.target.checked })"
             />
             <span class="small">Allow manual</span>
+          </label>
+          <label class="checkbox" title="Suitcase-style / self-contained amp — gates the estimate wizard's Electronics screen">
+            <input
+              type="checkbox" :checked="n.is_suitcase"
+              @change="updateNode(n, { is_suitcase: $event.target.checked })"
+            />
+            <span class="small">Suitcase</span>
           </label>
           <span :class="['pill', n.active ? 'green' : 'slate']">{{ n.active ? 'Active' : 'Inactive' }}</span>
           <div class="spacer" />

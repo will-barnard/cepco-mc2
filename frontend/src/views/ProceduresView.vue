@@ -64,13 +64,25 @@ const VARIANT_FIELDS = [
   { key: '88_key', label: '88-Key' },
 ];
 
+// N10: which of the estimate wizard's screens 3-6 (EstimateNewView.vue)
+// this procedure shows up on — see migration 045 and routes/procedures.js's
+// CATEGORY_KEYS, which this mirrors. "— none —" is a real, valid choice
+// (the wizard buckets it under Standard Setup & Actions rather than
+// hiding it), not just a placeholder.
+const CATEGORY_FIELDS = [
+  { key: 'standard_setup', label: 'Standard Setup & Actions' },
+  { key: 'electronics', label: 'Electronics' },
+  { key: 'cosmetics', label: 'Cosmetics' },
+  { key: 'parts', label: 'Parts' },
+];
+
 // --- create ----------------------------------------------------------------
 const showNew = ref(false);
 const blankForm = () => ({
   name: '', family: '', pricing_type: 'hours', min_hours: '', max_hours: '', outlier_hours: '',
   parts_mode: 'none', flat_cost: '',
   parts_cost_piano_bass: '', parts_cost_54_key: '', parts_cost_73_key: '', parts_cost_88_key: '',
-  description: '', default_tech_level_key: '',
+  description: '', default_tech_level_key: '', category: '',
 });
 const form = ref(blankForm());
 
@@ -109,6 +121,8 @@ async function createProcedure() {
       // N8: lets tasks created from this procedure (TicketTasks.vue) arrive
       // pre-tagged with the level its work usually calls for.
       default_tech_level_key: form.value.default_tech_level_key || null,
+      // N10: which estimate-wizard screen this shows up on — see CATEGORY_FIELDS above.
+      category: form.value.category || null,
     });
     showNew.value = false;
     notice.value = 'Procedure created.';
@@ -282,6 +296,13 @@ function updatePartsVariant(p, key, value) {
             </option>
           </select>
         </div>
+        <div class="field" style="margin: 0">
+          <label>Estimate wizard screen</label>
+          <select v-model="form.category">
+            <option value="">— none (defaults to Standard Setup) —</option>
+            <option v-for="c in CATEGORY_FIELDS" :key="c.key" :value="c.key">{{ c.label }}</option>
+          </select>
+        </div>
         <div class="field" style="flex: none; margin: 0">
           <button class="primary" type="submit">Create</button>
         </div>
@@ -314,6 +335,13 @@ function updatePartsVariant(p, key, value) {
           >
             <option value="">All types</option>
             <option v-for="f in refData.families" :key="f" :value="f">{{ f }}</option>
+          </select>
+          <select
+            :value="p.category || ''" class="small" style="max-width: 190px"
+            @change="updateField(p, { category: $event.target.value || null })"
+          >
+            <option value="">Standard Setup (default)</option>
+            <option v-for="c in CATEGORY_FIELDS" :key="c.key" :value="c.key">{{ c.label }}</option>
           </select>
           <select :value="p.pricing_type" @change="setPricingType(p, $event.target.value)">
             <option value="hours">Hours range</option>

@@ -6,7 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
-const { FAMILIES } = require('./instruments');
+const { FAMILIES, FAMILY_LABELS } = require('./instruments');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -606,29 +606,62 @@ async function insertTicketRow(client, b, resolved, createdById) {
   return created;
 }
 
-// N1: "[Client Name] ["Nickname"] [Instrument Model]" — whichever of the
-// three pieces are actually present, space-joined, in that order. This is
-// the fallback POST /tickets reaches for when the request didn't supply a
-// title of its own (see below) — it's deliberately NOT wired into
+// N10: standardized ticket title, replacing N1's original space-joined
+// version — "[Client Name] - ["Nickname"] [Year] [Family] [Model leaf]",
+// e.g. `Dolly Jones - "Old Betsy" 1973 Rhodes Stage 73`. Still whichever
+// pieces are actually present: no dash when either side is empty, no
+// nickname quotes when there isn't one, etc. This is the fallback
+// POST /tickets reaches for when the request didn't supply a title of its
+// own (see below), and — since N10 — the same function quotes.js's
+// createTicketsForEstimate calls for a ticket spun off an estimate,
+// so every ticket-creation path renders an instrument identically no
+// matter where it came from. Deliberately NOT wired into
 // resolveNewTicketFields/insertTicketRow themselves, so the other callers
 // of those two functions (fleet restorations, inventory purchases, Shopify
-// orders, the create-shipping-ticket route, quote conversion) keep
-// supplying their own explicit titles completely unaffected, exactly as
-// the boss-list scope doc asked.
+// orders, the create-shipping-ticket route) keep supplying their own
+// explicit titles completely unaffected, exactly as the boss-list scope
+// doc asked.
+//
+// `model` on `instruments` is still a plain string (the InstrumentModelPicker/
+// estimate-wizard's cascading tree pick, flattened to a " / "-joined chain
+// like "Mark I / Stage 73", or manual free text) — there's no live FK back
+// to the instrument_models node it came from, so "the model" for a title
+// is taken to be the last segment of that chain (modelLeaf below): the
+// specific model someone actually picked, not the whole era/mark path
+// leading to it. A manual free-text entry with no " / " in it is its own
+// single "leaf" and passes through unchanged.
+function modelLeaf(model) {
+  if (!model) return '';
+  const segments = String(model).split('/').map((s) => s.trim()).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : '';
+}
+
 async function composeTicketTitle(customerId, instrumentId) {
-  const parts = [];
+  let customerName = '';
   if (customerId) {
     const { rows } = await query('SELECT name FROM customers WHERE id = $1', [customerId]);
-    if (rows[0] && rows[0].name) parts.push(rows[0].name);
+    if (rows[0] && rows[0].name) customerName = rows[0].name;
   }
+
+  let nicknamePart = '';
+  const instrumentTypeParts = [];
   if (instrumentId) {
-    const { rows } = await query('SELECT nickname, model FROM instruments WHERE id = $1', [instrumentId]);
+    const { rows } = await query(
+      'SELECT nickname, model, year, family FROM instruments WHERE id = $1', [instrumentId],
+    );
     if (rows[0]) {
-      if (rows[0].nickname) parts.push(`"${rows[0].nickname}"`);
-      if (rows[0].model) parts.push(rows[0].model);
+      if (rows[0].nickname) nicknamePart = `"${rows[0].nickname}"`;
+      if (rows[0].year) instrumentTypeParts.push(String(rows[0].year).trim());
+      if (rows[0].family) instrumentTypeParts.push(FAMILY_LABELS[rows[0].family] || rows[0].family);
+      const leaf = modelLeaf(rows[0].model);
+      if (leaf) instrumentTypeParts.push(leaf);
     }
   }
-  return parts.join(' ').trim();
+  const instrumentType = instrumentTypeParts.join(' ');
+  const descriptor = [nicknamePart, instrumentType].filter(Boolean).join(' ');
+
+  if (customerName && descriptor) return `${customerName} - ${descriptor}`;
+  return (customerName || descriptor).trim();
 }
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -1101,3 +1134,6 @@ module.exports = router;
 // index.js, and routes/purchases.js can additionally pull these two off it.
 module.exports.resolveNewTicketFields = resolveNewTicketFields;
 module.exports.insertTicketRow = insertTicketRow;
+// N10: quotes.js's createTicketsForEstimate reuses this exact function
+// so an estimate-originated ticket's title matches every other path.
+module.exports.composeTicketTitle = composeTicketTitle;

@@ -27,6 +27,24 @@ router.use(requireAuth);
 
 const VARIANT_FIELDS = ['parts_cost_piano_bass', 'parts_cost_54_key', 'parts_cost_73_key', 'parts_cost_88_key'];
 
+// N10: which of the estimate wizard's screens 3-6 (EstimateNewView.vue)
+// this procedure shows up on — see migration 045's header for the mapping
+// this was backfilled from. Nullable rather than required (resolveCategory
+// below accepts and passes through null) — a procedure with no category
+// still shows up in the wizard (bucketed under Standard Setup & Actions,
+// the most permissive screen) rather than becoming invisible to it, same
+// "an incomplete admin list never blocks the shop floor" posture as
+// family/instrument_models' allow_manual escape hatches.
+const CATEGORY_KEYS = ['standard_setup', 'electronics', 'cosmetics', 'parts'];
+
+function resolveCategory(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return null;
+  if (!CATEGORY_KEYS.includes(rawValue)) {
+    throw badRequest(`category must be one of: ${CATEGORY_KEYS.join(', ')}`);
+  }
+  return rawValue;
+}
+
 /** Labor pricing only — whether/how many hours this bills. Throws on a bad
  * combination rather than letting the DB's CHECK constraint surface as a
  * raw 500. */
@@ -124,18 +142,21 @@ router.post('/', requireRole('admin'), asyncHandler(async (req, res) => {
   const { rows: maxRow } = await query(
     'SELECT COALESCE(MAX(sort_order), 0) + 10 AS next FROM standard_procedures',
   );
+  const category = resolveCategory(b.category);
+
   const { rows } = await query(
     `INSERT INTO standard_procedures
        (name, family, pricing_type, min_hours, max_hours, flat_cost, outlier_hours,
         parts_cost_piano_bass, parts_cost_54_key, parts_cost_73_key, parts_cost_88_key,
-        description, sort_order, default_tech_level_key, default_tech_level_label_snapshot)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        description, sort_order, default_tech_level_key, default_tech_level_label_snapshot, category)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [
       String(b.name).trim(), b.family || null, hours.pricing_type,
       hours.min_hours, hours.max_hours, parts.flat_cost, outlierHours,
       parts.parts_cost_piano_bass, parts.parts_cost_54_key, parts.parts_cost_73_key, parts.parts_cost_88_key,
       b.description || null, maxRow[0].next,
       defaultTechLevel ? defaultTechLevel.key : null, defaultTechLevel ? defaultTechLevel.label : null,
+      category,
     ],
   );
   res.status(201).json(rows[0]);
@@ -199,6 +220,9 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
     }
   }
 
+  const categoryTouched = b.category !== undefined;
+  const categoryValue = categoryTouched ? resolveCategory(b.category) : null;
+
   const { rows } = await query(
     `UPDATE standard_procedures SET
        name         = COALESCE($2, name),
@@ -218,6 +242,7 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
        default_tech_level_key = CASE WHEN $20::boolean THEN $21 ELSE default_tech_level_key END,
        default_tech_level_label_snapshot =
          CASE WHEN $20::boolean THEN $22 ELSE default_tech_level_label_snapshot END,
+       category     = CASE WHEN $23::boolean THEN $24 ELSE category END,
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
     [
@@ -233,9 +258,11 @@ router.patch('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
       b.active === undefined ? null : b.active,
       b.sort_order === undefined ? null : b.sort_order,
       defaultTechLevelTouched, defaultTechLevelKey, defaultTechLevelLabel,
+      categoryTouched, categoryValue,
     ],
   );
   res.json(rows[0]);
 }));
 
 module.exports = router;
+module.exports.CATEGORY_KEYS = CATEGORY_KEYS;

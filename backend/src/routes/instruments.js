@@ -256,3 +256,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
 module.exports = router;
 module.exports.FAMILIES = FAMILIES;
+// N10: composeTicketTitle (routes/tickets.js) and its client-side mirror
+// (TicketNewView.vue's autoTitlePreview) both need a human family label,
+// not the raw key, in a standardized ticket title — same labels this
+// route's own /family-labels endpoint already serves the frontend.
+module.exports.FAMILY_LABELS = FAMILY_LABELS;

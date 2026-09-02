@@ -58,11 +58,17 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
     [b.family, b.parent_id || null],
   );
   const { rows } = await query(
-    `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual, is_suitcase)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [b.family, b.parent_id || null, String(b.name).trim(),
       b.sort_order === undefined ? maxRow[0].next : Number(b.sort_order),
-      b.allow_manual === true],
+      b.allow_manual === true,
+      // N10: flags this node (and anything picked under it) as a
+      // Suitcase-style/self-contained-amp variant — gates whether the
+      // estimate wizard's Electronics screen shows at all for a given
+      // instrument (see migration 045's header). Same plain boolean
+      // convention as allow_manual just above.
+      b.is_suitcase === true],
   );
   res.status(201).json(rows[0]);
 }));
@@ -88,7 +94,8 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
        parent_id    = CASE WHEN $3::boolean THEN $4 ELSE parent_id END,
        sort_order   = COALESCE($5, sort_order),
        allow_manual = COALESCE($6, allow_manual),
-       active       = COALESCE($7, active),
+       is_suitcase  = COALESCE($7, is_suitcase),
+       active       = COALESCE($8, active),
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
     [req.params.id,
@@ -96,6 +103,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       b.parent_id !== undefined, b.parent_id || null,
       b.sort_order === undefined ? null : Number(b.sort_order),
       b.allow_manual === undefined ? null : b.allow_manual,
+      b.is_suitcase === undefined ? null : b.is_suitcase,
       b.active === undefined ? null : b.active],
   );
   res.json(rows[0]);

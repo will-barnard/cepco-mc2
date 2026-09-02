@@ -173,25 +173,41 @@ const selectedFamily = computed(() => {
   return inst ? inst.family : '';
 });
 
-// N1: mirrors composeTicketTitle in routes/tickets.js exactly — "[Client
-// Name] [\"Nickname\"] [Instrument Model]", whichever pieces are actually
-// present. Drives both the Title field's placeholder/required-ness below
-// and submit()'s own fallback check, so a title is never silently sent
-// blank when the auto-generated one would also be blank.
+// N10: mirrors composeTicketTitle in routes/tickets.js exactly —
+// "[Client Name] - [\"Nickname\"] [Year] [Family] [Model leaf]", e.g.
+// `Dolly Jones - "Old Betsy" 1973 Rhodes Stage 73` — whichever pieces are
+// actually present, no dash when either side is empty. Drives both the
+// Title field's placeholder/required-ness below and submit()'s own
+// fallback check, so a title is never silently sent blank when the
+// auto-generated one would also be blank.
+//
+// `model` is a plain string (InstrumentModelPicker's cascading tree pick,
+// flattened to a " / "-joined chain, or manual free text) — modelLeaf
+// takes just its last segment, same "the specific model, not the whole
+// era/mark path to it" rule the backend's own modelLeaf() applies.
+function modelLeaf(model) {
+  if (!model) return '';
+  const segments = String(model).split('/').map((s) => s.trim()).filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : '';
+}
 const autoTitlePreview = computed(() => {
-  const parts = [];
   const customerName = newCustomer.value.enabled
     ? newCustomer.value.name.trim()
     : (customers.value.find((c) => c.id === form.value.customer_id)?.name || '');
-  if (customerName) parts.push(customerName);
 
   const inst = newInstrument.value.enabled
     ? newInstrument.value
     : instruments.value.find((i) => i.id === form.value.instrument_id);
-  if (inst?.nickname?.trim()) parts.push(`"${inst.nickname.trim()}"`);
-  if (inst?.model?.trim()) parts.push(inst.model.trim());
+  const nicknamePart = inst?.nickname?.trim() ? `"${inst.nickname.trim()}"` : '';
+  const instrumentTypeParts = [];
+  if (inst?.year) instrumentTypeParts.push(String(inst.year).trim());
+  if (inst?.family) instrumentTypeParts.push(refData.familyLabel(inst.family));
+  const leaf = modelLeaf(inst?.model);
+  if (leaf) instrumentTypeParts.push(leaf);
+  const descriptor = [nicknamePart, instrumentTypeParts.join(' ')].filter(Boolean).join(' ');
 
-  return parts.join(' ');
+  if (customerName && descriptor) return `${customerName} - ${descriptor}`;
+  return customerName || descriptor;
 });
 
 // Auto-fill on every *change* of instrument type — not on every keystroke
