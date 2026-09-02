@@ -138,6 +138,19 @@ const SETTINGS = [
     {
       enabled: false, day_of_week: 5, time: '15:00', last_sent_at: null,
     }],
+
+  // Xero customer-contact sync (two-way — see backend/src/services/
+  // xeroSync.js). Same disabled-by-default/manual-always-works posture as
+  // ceppys_schedule just above: nobody's customer data starts moving
+  // between systems until an admin opts in, but "Sync now" (Customers
+  // page) works regardless of this flag. No day_of_week — this one runs
+  // every day, not weekly — just a shop-local time-of-day, read by
+  // services/xeroScheduler.js the same "hhmm >= configured time, and
+  // hasn't already run today" way ceppyScheduler.js checks its own
+  // schedule. last_synced_at (unset here) is stamped by xeroSync.js after
+  // each run, scheduled or manual.
+  ['shop_config', 'xero_sync', 'Xero customer sync', 40,
+    { enabled: false, time: '02:00', last_synced_at: null }],
 ];
 
 // ---------------------------------------------------------------------------

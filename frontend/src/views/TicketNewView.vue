@@ -5,12 +5,17 @@ import api from '../api';
 import { useSettings, useRefData } from '../stores';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
+import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 
 const router = useRouter();
 const settings = useSettings();
 const refData = useRefData();
 
-const customers = ref([]);
+// CustomerSearchSelect (type-ahead, see components/CustomerSearchSelect.vue)
+// doesn't hold onto a full customer list, so the currently-picked row is
+// kept here instead of re-derived by searching one (autoTitlePreview
+// below needs its name).
+const selectedCustomer = ref(null);
 const instruments = ref([]);
 const error = ref('');
 const busy = ref(false);
@@ -163,6 +168,12 @@ async function loadCustomerInstruments() {
   if (!form.value.customer_id) { instruments.value = []; return; }
   instruments.value = await api.get('/instruments', { customer_id: form.value.customer_id });
 }
+// CustomerSearchSelect's @change hands back the full row (or null, once
+// cleared/typed-over) the moment the pick actually changes.
+function onCustomerChange(row) {
+  selectedCustomer.value = row;
+  loadCustomerInstruments();
+}
 
 // Whichever instrument type is currently selected, however it got picked —
 // an existing instrument from the customer's list, or the family chosen
@@ -193,7 +204,7 @@ function modelLeaf(model) {
 const autoTitlePreview = computed(() => {
   const customerName = newCustomer.value.enabled
     ? newCustomer.value.name.trim()
-    : (customers.value.find((c) => c.id === form.value.customer_id)?.name || '');
+    : (selectedCustomer.value?.name || '');
 
   const inst = newInstrument.value.enabled
     ? newInstrument.value
@@ -220,12 +231,7 @@ watch(selectedFamily, (family) => {
 });
 
 onMounted(async () => {
-  const [custs, techDefaults] = await Promise.all([
-    api.get('/customers'),
-    api.get('/instruments/default-technicians'),
-  ]);
-  customers.value = custs;
-  defaultTechsByFamily.value = techDefaults;
+  defaultTechsByFamily.value = await api.get('/instruments/default-technicians');
   form.value.status_key = settings.statuses.find((s) => !s.retired)?.key || '';
   // Prefer the historical default if it's still active; otherwise fall
   // back to whatever sorts first, same "don't assume a key survives"
@@ -445,10 +451,11 @@ async function submit() {
       <div class="field-row">
         <div class="field">
           <label>Customer</label>
-          <select v-model="form.customer_id" :disabled="newCustomer.enabled" @change="loadCustomerInstruments">
-            <option value="">— none (internal / fleet) —</option>
-            <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
+          <CustomerSearchSelect
+            v-model="form.customer_id" :disabled="newCustomer.enabled"
+            placeholder="Search customers (leave blank for internal / fleet)…"
+            @change="onCustomerChange"
+          />
         </div>
         <div class="field">
           <label>Instrument</label>

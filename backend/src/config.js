@@ -70,6 +70,16 @@ const config = {
     shopDomain: process.env.SHOPIFY_SHOP_DOMAIN || '',
     apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07',
   },
+
+  // Two-way customer-contact sync (backend/src/xero.js,
+  // services/xeroSync.js) via a Xero Custom Connection — single-org,
+  // client_credentials, no per-user OAuth consent screen. Both unset by
+  // default, same "the feature refuses to run rather than fail confusingly
+  // half-configured" posture as resend/shopify above.
+  xero: {
+    clientId: process.env.XERO_CLIENT_ID || '',
+    clientSecret: process.env.XERO_CLIENT_SECRET || '',
+  },
 };
 
 if (config.env === 'production' && config.jwtSecret === 'dev-only-insecure-secret') {

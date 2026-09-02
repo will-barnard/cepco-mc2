@@ -2330,6 +2330,97 @@ alias (`status-report-view-legacy`) pointing at the same, renamed
 alias; only this app's own frontend JS calls it, and frontend + backend
 always deploy together.
 
+### 2.51 Customer picker: search-and-select instead of one giant dropdown
+
+`EstimateNewView.vue`'s and `TicketNewView.vue`'s customer field was a
+plain `<select>` populated by fetching every customer on mount — fine
+early on, real friction once the shop has enough customers that finding
+one means scrolling a native dropdown blind. New shared component
+`components/CustomerSearchSelect.vue` replaces both: type to search
+(debounced 250ms, same pattern as `CustomersView.vue`'s own search box),
+tap a result, or tap the field with nothing typed yet to browse the
+existing `GET /customers` (`?q=` already supported server-side, no
+backend change needed) sorted-by-name list. Same open/close convention
+as `QueueView.vue`'s hide-statuses menu — click-outside + Escape — styled
+the same way (`.customer-search-*` mirrors `.hide-status-*` in
+`styles.css`).
+
+`v-model` is still just the customer id, so both callers bind it exactly
+like the old `<select>` did; a `change` event additionally hands back the
+full customer row (or `null` once cleared) since both views also want the
+name/email/phone off the selected row — `EstimateNewView.vue` for the
+"Email & Contact" step's prefill, `TicketNewView.vue` for
+`autoTitlePreview` (N1) — without a second fetch. Neither view holds onto
+a full customer array anymore; the picked row is kept in a plain
+`selectedCustomer` ref, set from that `change` event.
+
+### 2.52 Two-way Xero customer sync
+
+New integration: customers <-> Xero Contacts, both directions, via a Xero
+**Custom Connection** (single-organisation, OAuth2 client_credentials —
+no per-user consent screen, since this only ever talks to the shop's own
+Xero org). `XERO_CLIENT_ID`/`XERO_CLIENT_SECRET` were already scaffolded
+as unused env vars in docker-compose.yml under a "Phase 2 integrations"
+placeholder; this is what finally reads them (`config.js`'s new `xero`
+block).
+
+**Pieces:** `backend/src/xero.js` is the thin API client — token
+fetch/cache (30 min, native `fetch`, no SDK, same posture as
+`shopify.js`'s `adminApiRequest`), tenant id discovery via
+`GET /connections` (a Custom Connection authorizes exactly one org),
+and `listContacts`/`createContact`/`updateContact` against the Accounting
+API. `services/xeroSync.js` is the actual two-way reconcile — the one
+place both the admin-only manual trigger (`routes/xero.js`'s
+`POST /xero/sync`, mirroring Ceppys' `send-now`) and the nightly schedule
+(`services/xeroScheduler.js`, mirroring `ceppyScheduler.js` but daily
+instead of weekly) actually run from.
+
+**Migration 047** adds `customers.xero_contact_id` (partial-unique, most
+rows stay unlinked) and `customers.xero_synced_at`, and widens the
+`source` CHECK to add `'xero'` (a contact that only ever existed in Xero
+needs a real source value once it's pulled in as a new row here — see
+that migration's comment for why it doesn't get force-fit into
+`'direct'`). The schedule itself is an ordinary `shop_config` settings
+row (`xero_sync`, seeded disabled) edited through the same generic
+`PATCH /settings/:id` every other shop_config value uses — same shape as
+`ceppys_schedule`, just a daily time instead of a day+time.
+
+**The reconcile algorithm** (full detail in `xeroSync.js`'s header
+comment): fetch every Xero contact and every customer in full each run —
+small dataset for one shop, so a full diff beats tracking an incremental
+cursor. Match by `xero_contact_id` first (already linked), then by email,
+then by exact name, but only when that key is unique on the MC2 side —
+an ambiguous match is left alone rather than guessed at, since a stray
+duplicate is obvious and easy to fix by hand later while a wrong merge
+silently corrupts a customer's data. Whatever matches nothing on either
+side gets created on the other. For a matched pair, whichever side (Xero's
+`UpdatedDateUTC`, MC2's `updated_at`) changed since `xero_synced_at` wins;
+if *both* changed, last-write-wins by comparing the two timestamps
+directly, and it's recorded in the sync's returned `conflicts` list (shown
+in the Customers page's panel) rather than resolved silently.
+
+**Deliberate limitation:** Xero's `Addresses`/`Phones` are structured
+(line/city/region/postal, typed numbers); `customers.address`/`.phone`
+are single free-text fields. Pulled data gets flattened into one string;
+pushed data goes to Xero as `AddressLine1`/a single `PhoneNumber` — good
+enough to have the data present and usable on both sides, not a
+substitute for editing a properly structured address directly in Xero
+when that structure actually matters there (e.g. what prints on an
+invoice).
+
+**Frontend:** an admin-only "Xero sync" panel on `CustomersView.vue`
+(mirrors `CeppysView.vue`'s Configure panel almost exactly) — enable
+toggle, time-of-day, Sync now button, last-synced timestamp, and the
+conflict list from the most recent run. A linked customer's detail pane
+shows a small "Linked to Xero" pill.
+
+**Not yet exercised against a live Xero connection** — built against
+Xero's documented Custom Connection / Accounting API contract, but this
+session had no real credentials to test end to end. The first "Sync now"
+click against Will's actual org is the real test; `xero.js`'s error
+handling surfaces Xero's own error detail (not just a status code) if
+something about the token/scope/payload shape needs adjusting.
+
 ## 4. Suggested first moves after deploy
 
 

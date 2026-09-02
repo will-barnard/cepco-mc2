@@ -193,6 +193,31 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 }
 .hide-status-menu .checkbox { padding: 3px 2px; }
 
+/* --- customer search-select (CustomerSearchSelect.vue) --------------------
+   Type-ahead replacement for a plain customer <select> — same open/close
+   convention as the hide-statuses menu above (click-outside + Escape),
+   just with a text input driving the list instead of a toggle button. */
+.customer-search { position: relative; }
+.customer-search-input-wrap { position: relative; }
+.customer-search-input { padding-right: 34px; }
+.customer-search-clear {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  font-size: 20px; line-height: 1; padding: 4px 9px; min-height: 0;
+}
+.customer-search-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 25;
+  max-height: 320px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.customer-search-menu ul { list-style: none; margin: 0; padding: 4px; }
+.customer-search-menu li {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  padding: 9px 10px; border-radius: 6px; cursor: pointer;
+}
+.customer-search-menu li.highlighted, .customer-search-menu li:hover { background: var(--surface-2); }
+.customer-search-empty { padding: 14px 10px; }
+
 /* --- status category checkboxes (SettingsView.vue) ------------------------
    Desktop: wrap within a capped width so the "Applies to" column stays
    compact instead of stretching the whole table. Mobile: that table already

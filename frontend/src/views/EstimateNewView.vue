@@ -28,13 +28,13 @@ import {
 import { useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
+import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 
 const router = useRouter();
 const settings = useSettings();
 const refData = useRefData();
 
 // --- reference data ---------------------------------------------------------
-const customers = ref([]);
 const customerInstruments = ref([]);
 const allProcedures = ref([]);
 const laborRate = ref(185);
@@ -72,7 +72,12 @@ const customerId = ref('');
 const newCustomer = ref({ enabled: false, name: '', source: 'direct' });
 const contact = ref({ email: '', phone: '' });
 
-const selectedCustomer = computed(() => customers.value.find((c) => c.id === customerId.value) || null);
+// CustomerSearchSelect (a type-ahead replacing the old "every customer in
+// one <select>" picker — search-and-select is a lot less friction once a
+// shop has more than a couple dozen customers on file) doesn't hold onto
+// a full customer list, so the currently-picked row is kept here instead
+// of re-derived by searching one.
+const selectedCustomer = ref(null);
 const customerLabel = computed(() => (
   newCustomer.value.enabled ? newCustomer.value.name.trim() : (selectedCustomer.value?.name || '')
 ));
@@ -91,13 +96,23 @@ async function loadCustomerInstruments() {
   if (!customerId.value) return;
   customerInstruments.value = await api.get('/instruments', { customer_id: customerId.value });
 }
-watch(customerId, (id) => {
-  if (newCustomer.value.enabled) return;
-  const c = customers.value.find((x) => x.id === id);
-  contact.value = { email: c?.email || '', phone: c?.phone || '' };
-});
+// CustomerSearchSelect's @change hands back the full row (or null, once
+// cleared/typed-over) the moment the pick actually changes — same two
+// things the old watch(customerId) did by re-deriving from the full
+// customers array, just without needing that array kept around.
+function onCustomerChange(row) {
+  selectedCustomer.value = row;
+  contact.value = { email: row?.email || '', phone: row?.phone || '' };
+  loadCustomerInstruments();
+}
 watch(() => newCustomer.value.enabled, (enabled) => {
-  if (enabled) { contact.value = { email: '', phone: '' }; customerId.value = ''; customerInstruments.value = []; blocks.value = []; }
+  if (enabled) {
+    contact.value = { email: '', phone: '' };
+    customerId.value = '';
+    selectedCustomer.value = null;
+    customerInstruments.value = [];
+    blocks.value = [];
+  }
 });
 
 // --- instrument blocks --------------------------------------------------------
@@ -350,7 +365,6 @@ const notes = ref('');
 
 onMounted(async () => {
   await refData.load();
-  customers.value = await api.get('/customers');
   allProcedures.value = await api.get('/procedures');
   try {
     const res = await api.get('/estimates/labor-rate');
@@ -457,10 +471,11 @@ async function submit(sendAfterCreate) {
     <div v-if="stage === 'customer'" class="card">
       <h2>Customer</h2>
       <div class="field">
-        <select v-model="customerId" :disabled="newCustomer.enabled" @change="loadCustomerInstruments">
-          <option value="">— select a customer —</option>
-          <option v-for="c in customers" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+        <CustomerSearchSelect
+          v-model="customerId" :disabled="newCustomer.enabled"
+          placeholder="Search customers…"
+          @change="onCustomerChange"
+        />
       </div>
       <div class="field">
         <label class="checkbox">

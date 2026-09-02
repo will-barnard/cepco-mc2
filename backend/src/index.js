@@ -11,6 +11,7 @@ const { migrate } = require('./scripts/migrate');
 const { seed } = require('./scripts/seed');
 const ceppyScheduler = require('./services/ceppyScheduler');
 const recurringTickets = require('./services/recurringTickets');
+const xeroScheduler = require('./services/xeroScheduler');
 
 const app = express();
 
@@ -60,6 +61,7 @@ app.use('/api/shipments', require('./routes/shipments'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/ceppys', require('./routes/ceppys'));
+app.use('/api/xero', require('./routes/xero'));
 app.use('/api/recurring-ticket-templates', require('./routes/recurringTicketTemplates'));
 app.use('/api/instrument-models', require('./routes/instrumentModels'));
 
@@ -77,6 +79,7 @@ async function start() {
 
   ceppyScheduler.start();
   recurringTickets.start();
+  xeroScheduler.start();
 }
 
 const shutdown = async (signal) => {
