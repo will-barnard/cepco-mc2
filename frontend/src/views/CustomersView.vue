@@ -120,6 +120,31 @@ async function syncXeroNow() {
   }
 }
 
+// One-time catch-up (routes/xero.js POST /xero/fill-missing-fields) for
+// customers linked to Xero before listContacts() was fixed to request
+// full contact detail — the regular sync's own change-detection has no
+// way to notice address/phone were missing only because of that bug, not
+// because anything actually changed in Xero, so it never re-pulls them
+// on its own. Separate button, not folded into "Sync now", since this
+// only ever fills a blank field and never overwrites or creates a
+// record — a much narrower, safer action than a full sync.
+const fillingXeroFields = ref(false);
+const xeroFillResult = ref(null);
+
+async function fillXeroFields() {
+  error.value = '';
+  xeroFillResult.value = null;
+  fillingXeroFields.value = true;
+  try {
+    xeroFillResult.value = await api.post('/xero/fill-missing-fields');
+    if (selected.value) await select(selected.value.id);
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    fillingXeroFields.value = false;
+  }
+}
+
 const when = (ts) => new Date(ts).toLocaleString();
 </script>
 
@@ -191,6 +216,19 @@ const when = (ts) => new Date(ts).toLocaleString();
       <ul v-if="xeroSyncResult?.conflicts.length" class="timeline" style="margin-top: 10px">
         <li v-for="(c, i) in xeroSyncResult.conflicts" :key="i" class="small">{{ c }}</li>
       </ul>
+
+      <div class="row" style="margin-top: 12px; align-items: center">
+        <button class="small" :disabled="fillingXeroFields" @click="fillXeroFields">
+          {{ fillingXeroFields ? 'Filling…' : 'Fill in missing address/phone from Xero' }}
+        </button>
+        <span class="muted small">
+          One-time catch-up — only fills a blank address or phone, never overwrites anything.
+        </span>
+      </div>
+      <p v-if="xeroFillResult" class="small" style="color: #4ade80; margin: 8px 0 0">
+        Checked {{ xeroFillResult.checked }} linked customer(s) — filled
+        {{ xeroFillResult.address_filled }} address(es) and {{ xeroFillResult.phone_filled }} phone(s).
+      </p>
     </div>
 
     <form v-if="showNew" class="card" style="margin-bottom: 16px" @submit.prevent="create">
@@ -249,7 +287,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         <div v-if="!customers.length" class="empty">No customers found.</div>
       </div>
 
-      <div v-if="selected" class="card">
+      <div v-if="selected" class="card customer-detail-panel">
         <h2>
           {{ selected.name }}
           <span v-if="selected.xero_contact_id" class="pill blue" style="margin-left: 8px">Linked to Xero</span>
@@ -280,7 +318,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         </ul>
       </div>
 
-      <div v-else class="card"><div class="empty">Select a customer to see details.</div></div>
+      <div v-else class="card customer-detail-panel"><div class="empty">Select a customer to see details.</div></div>
     </div>
   </div>
 </template>

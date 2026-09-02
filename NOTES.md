@@ -2547,6 +2547,51 @@ purpose, unlike backfill's confident-matches list — a merge deletes a
 customer row and reassigns its history, and that's not something to do to a
 few dozen records unattended even at high confidence.
 
+### 2.57 Fix: address/phone still missing after §2.55's fix, even after a real sync
+
+Will deployed §2.55's `listContacts()` fix and ran "Sync now" — still no
+addresses. The API fix itself was right, but it wasn't enough on its own
+for any customer that had *already* been linked and synced before it
+shipped: `runXeroSync()` decides whether to pull a contact's fields by
+comparing `xero_synced_at` (this row's last-reconciled time) against
+Xero's own `UpdatedDateUTC` — and a contact's address hadn't actually
+*changed* in Xero since that last sync, only our read of it had been
+broken. So every already-linked customer looked "unchanged" and the pull
+branch never ran, no matter how many times the sync fired.
+
+Rather than weaken that change-detection (which is doing exactly what
+it's for — see §2.52), added a narrow one-time catch-up:
+`fillMissingFieldsFromXero()` (`services/xeroSync.js`, `POST
+/xero/fill-missing-fields`, a "Fill in missing address/phone from Xero"
+button on the Customers page's Xero panel next to "Sync now"). For every
+already-linked customer, if Xero has a phone or address on file and
+MC2's copy is still blank, it fills just that field in directly —
+bypassing `xero_synced_at` entirely, never touching name/email, and
+never overwriting a field that already has *something* in it (even if
+that something is stale — reconciling an actually-differing value is
+still the regular sync's job, once a real future change makes
+`UpdatedDateUTC` move again). Safe to run more than once; it's a no-op
+once nothing's missing. One click, after which the regular sync goes
+back to being the only thing that touches customer fields.
+
+### 2.58 Customer detail panel now stays in view while scrolling the list
+
+Will: on `/customers`, scrolling down a long customer list to find
+someone scrolled the selected customer's detail panel on the right out
+of view too, since both live in the same page-level scroll and the
+detail panel started level with the top of the list. Gave
+`.customer-detail-panel` (both the populated and empty-state cards in
+`CustomersView.vue`) `position: sticky` in `styles.css`, offset below
+`.topbar` (new `--topbar-height` var — the topbar is already `sticky`
+itself, see App.vue's layout) with its own `max-height` and
+`overflow-y: auto`, so once the panel's own content (a customer with a
+long ticket history, say) is taller than the remaining viewport, it
+scrolls internally instead of pushing the page taller. Scoped to a
+dedicated class rather than `.grid.cols-2` generally, since that grid
+class is shared with a few other pages (TicketDetailView, HoursView,
+InstrumentDefaultsView) that don't have this same long-list-next-to-
+detail shape and shouldn't get sticky behavior by side effect.
+
 ## 4. Suggested first moves after deploy
 
 

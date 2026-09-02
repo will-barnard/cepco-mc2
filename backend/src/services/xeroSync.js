@@ -255,4 +255,57 @@ async function runXeroSync() {
   return { ...stats, conflicts };
 }
 
-module.exports = { runXeroSync, phoneFromXero, addressFromXero };
+/**
+ * One-time catch-up for customers that got linked to Xero before
+ * xero.js's listContacts() was fixed to request full contact detail
+ * (`summaryOnly=false` — see that file's header). Before that fix, every
+ * contact fetched from Xero looked like it simply had no address or
+ * phone on file, so runXeroSync() correctly "pulled" a blank into MC2
+ * for each one. The regular sync's own change-detection can't undo that
+ * on its own: it compares xero_synced_at against Xero's UpdatedDateUTC,
+ * and a contact's address hasn't actually changed in Xero just because
+ * *our read of it* used to be broken — so a customer synced before the
+ * fix, whose Xero contact hasn't been touched in Xero since, will look
+ * "unchanged" to runXeroSync() forever and never get re-pulled.
+ *
+ * This bypasses that change-detection entirely and only fills a gap: for
+ * every already-linked customer, if Xero has a phone/address on file and
+ * MC2's copy is still blank, pull just that field in. Name, email, and
+ * xero_synced_at are never touched, and an MC2 field that already has a
+ * value (even one that's stale or wrong) is left alone — that's still
+ * the regular sync's job to reconcile, once xero_synced_at makes it look
+ * "changed" the normal way. Meant to be run once, right after deploying
+ * the listContacts() fix; harmless to run again (it's a no-op once
+ * nothing's missing).
+ */
+async function fillMissingFieldsFromXero() {
+  const [xeroContacts, mcResult] = await Promise.all([
+    xero.listContacts(),
+    query('SELECT id, xero_contact_id, phone, address FROM customers WHERE xero_contact_id IS NOT NULL'),
+  ]);
+  const byContactId = new Map(xeroContacts.map((xc) => [xc.ContactID, xc]));
+
+  let phoneFilled = 0;
+  let addressFilled = 0;
+  for (const mc of mcResult.rows) {
+    const xc = byContactId.get(mc.xero_contact_id);
+    if (!xc) continue; // eslint-disable-line no-continue -- linked contact no longer in Xero's list (archived, deleted)
+
+    const phone = mc.phone ? null : phoneFromXero(xc);
+    const address = mc.address ? null : addressFromXero(xc);
+    if (!phone && !address) continue; // eslint-disable-line no-continue -- nothing missing, or Xero has nothing to fill it with
+
+    await query( // eslint-disable-line no-await-in-loop
+      'UPDATE customers SET phone = COALESCE(phone, $1), address = COALESCE(address, $2) WHERE id = $3',
+      [phone, address, mc.id],
+    );
+    if (phone) phoneFilled += 1;
+    if (address) addressFilled += 1;
+  }
+
+  return { checked: mcResult.rows.length, phone_filled: phoneFilled, address_filled: addressFilled };
+}
+
+module.exports = {
+  runXeroSync, phoneFromXero, addressFromXero, fillMissingFieldsFromXero,
+};

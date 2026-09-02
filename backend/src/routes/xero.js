@@ -14,7 +14,7 @@
 const express = require('express');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
-const { runXeroSync } = require('../services/xeroSync');
+const { runXeroSync, fillMissingFieldsFromXero } = require('../services/xeroSync');
 const {
   computeBackfillCandidates, linkCustomerToXero, dismissMatch,
 } = require('../services/xeroBackfill');
@@ -31,6 +31,18 @@ router.use(requireAuth);
 router.post('/sync', requireAdmin, asyncHandler(async (req, res) => {
   try {
     const result = await runXeroSync();
+    res.json(result);
+  } catch (err) {
+    throw badRequest(err.message);
+  }
+}));
+
+// One-time catch-up for customers linked before listContacts() was fixed
+// to request full contact detail — see xeroSync.js's fillMissingFieldsFromXero
+// header for why the regular sync can't catch this up on its own.
+router.post('/fill-missing-fields', requireAdmin, asyncHandler(async (req, res) => {
+  try {
+    const result = await fillMissingFieldsFromXero();
     res.json(result);
   } catch (err) {
     throw badRequest(err.message);
