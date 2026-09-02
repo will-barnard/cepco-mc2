@@ -190,16 +190,32 @@ async function runXeroSync() {
     handledMcIds.add(mc.id);
     if (isNewLink) stats.linked += 1;
 
-    // isNewLink means xero_synced_at is null on this row — both "changed"
-    // checks below naturally read as true then, which is exactly right:
-    // a first-time link has no prior sync to compare against, so whoever
-    // has the newer timestamp right now wins, same as any later conflict.
     const lastSync = mc.xero_synced_at ? new Date(mc.xero_synced_at) : null;
     const xeroChanged = !lastSync || new Date(xc.UpdatedDateUTC) > lastSync;
     const mcChanged = !lastSync || new Date(mc.updated_at) > lastSync;
 
     let action = 'unchanged';
-    if (xeroChanged && mcChanged) {
+    if (isNewLink) {
+      // A fresh link (matched here for the first time, or confirmed on
+      // the backfill/duplicate-merge review screens, both of which
+      // deliberately leave xero_synced_at null for exactly this branch to
+      // handle) has no real "last synced" baseline — comparing timestamps
+      // like the branch below does is actively wrong for it, not just
+      // unnecessary: mc.updated_at right now often just reflects *when
+      // the link itself was made* (linking/merging writes
+      // xero_contact_id, and the customers_touch trigger bumps updated_at
+      // on any write to the row, that link included), not whether the
+      // customer's actual contact info is more current than Xero's. That
+      // "just linked" timestamp is almost always more recent than
+      // whatever Xero's real UpdatedDateUTC is, so racing them here
+      // silently favored MC2 nearly every time — which is exactly why
+      // customers linked through backfill or the duplicate-merge tool
+      // kept missing their Xero email (and anything else Xero had that
+      // MC2 didn't) even after a sync reported success. A first-time link
+      // always pulls instead — see the merge-if-missing handling below,
+      // which still won't blank out an MC2 field Xero doesn't have.
+      action = 'pull';
+    } else if (xeroChanged && mcChanged) {
       action = new Date(xc.UpdatedDateUTC) >= new Date(mc.updated_at) ? 'pull' : 'push';
       conflicts.push(
         `${mc.name || xc.Name}: both sides changed since the last sync — kept the `
@@ -213,11 +229,27 @@ async function runXeroSync() {
 
     if (action === 'pull') {
       const fields = mcFieldsFromXero(xc);
+      // A fresh link's pull fills in whatever MC2 is missing without
+      // discarding what it already has — the whole reason a human just
+      // linked these two records was to connect them, not to declare
+      // Xero's copy authoritative over real MC2 data (e.g. a phone number
+      // that was itself part of why the match was confident in the first
+      // place). Every later pull (a real "Xero changed since last sync")
+      // still overwrites outright, same as always — this merge is only
+      // for the first reconciliation of a pair.
+      const toWrite = isNewLink
+        ? {
+          name: mc.name || fields.name,
+          email: mc.email || fields.email,
+          phone: mc.phone || fields.phone,
+          address: mc.address || fields.address,
+        }
+        : fields;
       await query( // eslint-disable-line no-await-in-loop
         `UPDATE customers SET name = $1, email = $2, phone = $3, address = $4,
                                 xero_contact_id = $5, xero_synced_at = now()
           WHERE id = $6`,
-        [fields.name, fields.email, fields.phone, fields.address, xc.ContactID, mc.id],
+        [toWrite.name, toWrite.email, toWrite.phone, toWrite.address, xc.ContactID, mc.id],
       );
       stats.mc2_updated += 1;
     } else if (action === 'push') {
@@ -256,56 +288,108 @@ async function runXeroSync() {
 }
 
 /**
- * One-time catch-up for customers that got linked to Xero before
- * xero.js's listContacts() was fixed to request full contact detail
- * (`summaryOnly=false` — see that file's header). Before that fix, every
- * contact fetched from Xero looked like it simply had no address or
- * phone on file, so runXeroSync() correctly "pulled" a blank into MC2
- * for each one. The regular sync's own change-detection can't undo that
- * on its own: it compares xero_synced_at against Xero's UpdatedDateUTC,
- * and a contact's address hasn't actually changed in Xero just because
- * *our read of it* used to be broken — so a customer synced before the
- * fix, whose Xero contact hasn't been touched in Xero since, will look
- * "unchanged" to runXeroSync() forever and never get re-pulled.
+ * One-time catch-up for customers whose link to Xero didn't get a proper
+ * first-time field pull — two separate causes have landed here so far,
+ * hence checking all three of name/email/phone/address rather than just
+ * whichever one prompted the most recent report:
  *
- * This bypasses that change-detection entirely and only fills a gap: for
- * every already-linked customer, if Xero has a phone/address on file and
- * MC2's copy is still blank, pull just that field in. Name, email, and
- * xero_synced_at are never touched, and an MC2 field that already has a
- * value (even one that's stale or wrong) is left alone — that's still
- * the regular sync's job to reconcile, once xero_synced_at makes it look
- * "changed" the normal way. Meant to be run once, right after deploying
- * the listContacts() fix; harmless to run again (it's a no-op once
- * nothing's missing).
+ *   1. Linked before xero.js's listContacts() was fixed to request full
+ *      contact detail (`summaryOnly=false` — see that file's header).
+ *      Every contact fetched from Xero looked like it simply had no
+ *      address or phone on file, so runXeroSync() correctly "pulled" a
+ *      blank into MC2 for each one.
+ *   2. Linked (via the backfill or duplicate-merge review screens, or
+ *      matched directly by runXeroSync()) before that function's own
+ *      first-time-link handling was fixed to always pull instead of
+ *      racing timestamps — see runXeroSync()'s `isNewLink` branch for the
+ *      full explanation. That bug favored MC2's side almost every time, so
+ *      it mostly showed up as a missing *email* specifically (email was
+ *      usually the field that didn't match exactly in the first place,
+ *      which is why these customers needed backfill/merge to link at
+ *      all), but nothing stops it from having affected phone or address
+ *      too on some pair.
+ *
+ * In both cases the regular sync's own change-detection can't undo the
+ * damage on its own: it compares xero_synced_at against Xero's
+ * UpdatedDateUTC, and once a customer has been stamped as synced, a
+ * field that's still blank looks "already reconciled" forever unless the
+ * Xero contact changes again for unrelated reasons.
+ *
+ * This bypasses that change-detection entirely and only fills gaps: for
+ * every already-linked customer, whichever of name/email/phone/address
+ * is still blank in MC2 gets Xero's value, if Xero has one. Anything
+ * that already has a value in MC2 (even one that's stale or wrong) is
+ * left alone — reconciling an actually-differing value is still the
+ * regular sync's job, once a real future change makes it look "changed"
+ * the normal way. xero_synced_at is never touched, so this can't make
+ * the regular sync think anything's been reconciled that hasn't. Safe to
+ * run more than once — it's a no-op once nothing's missing.
  */
 async function fillMissingFieldsFromXero() {
   const [xeroContacts, mcResult] = await Promise.all([
     xero.listContacts(),
-    query('SELECT id, xero_contact_id, phone, address FROM customers WHERE xero_contact_id IS NOT NULL'),
+    query('SELECT id, xero_contact_id, name, email, phone, address FROM customers WHERE xero_contact_id IS NOT NULL'),
   ]);
   const byContactId = new Map(xeroContacts.map((xc) => [xc.ContactID, xc]));
 
+  let nameFilled = 0;
+  let emailFilled = 0;
   let phoneFilled = 0;
   let addressFilled = 0;
   for (const mc of mcResult.rows) {
     const xc = byContactId.get(mc.xero_contact_id);
     if (!xc) continue; // eslint-disable-line no-continue -- linked contact no longer in Xero's list (archived, deleted)
 
+    // mc.name is NOT NULL in the schema, but a Xero-created row can still
+    // carry the mcFieldsFromXero() placeholder ('(unnamed Xero contact)')
+    // from before that contact had a real name on file — treat that the
+    // same as blank.
+    const name = (!mc.name || mc.name === '(unnamed Xero contact)') && xc.Name ? xc.Name : null;
+    const email = mc.email ? null : (xc.EmailAddress || null);
     const phone = mc.phone ? null : phoneFromXero(xc);
     const address = mc.address ? null : addressFromXero(xc);
-    if (!phone && !address) continue; // eslint-disable-line no-continue -- nothing missing, or Xero has nothing to fill it with
+    if (!name && !email && !phone && !address) continue; // eslint-disable-line no-continue -- nothing missing, or Xero has nothing to fill it with
 
     await query( // eslint-disable-line no-await-in-loop
-      'UPDATE customers SET phone = COALESCE(phone, $1), address = COALESCE(address, $2) WHERE id = $3',
-      [phone, address, mc.id],
+      `UPDATE customers SET
+         name = COALESCE($1, name), email = COALESCE(email, $2),
+         phone = COALESCE(phone, $3), address = COALESCE(address, $4)
+       WHERE id = $5`,
+      [name, email, phone, address, mc.id],
     );
+    if (name) nameFilled += 1;
+    if (email) emailFilled += 1;
     if (phone) phoneFilled += 1;
     if (address) addressFilled += 1;
   }
 
-  return { checked: mcResult.rows.length, phone_filled: phoneFilled, address_filled: addressFilled };
+  return {
+    checked: mcResult.rows.length,
+    name_filled: nameFilled,
+    email_filled: emailFilled,
+    phone_filled: phoneFilled,
+    address_filled: addressFilled,
+  };
+}
+
+/**
+ * Push one customer's current MC2 field values to its linked Xero
+ * contact right away, outside the regular sync's own schedule — used by
+ * the customer edit form (routes/customers.js's PATCH) so an edit made
+ * here reaches Xero immediately rather than waiting for "Sync now" or
+ * the nightly run. xero_synced_at is stamped afterwards in a separate
+ * statement, same as runXeroSync()'s own push branch (stampLink) — it
+ * doesn't need to land in the exact same instant as the edit's own
+ * UPDATE, just at or after it, so the next regular sync's mcChanged
+ * check (a strict `>` compare) reads this edit as already reconciled
+ * rather than pushing it again.
+ */
+async function pushCustomerToXero(customer) {
+  if (!customer.xero_contact_id) throw new Error('Customer is not linked to Xero');
+  await xero.updateContact(customer.xero_contact_id, xeroPayloadFromMc(customer));
+  await query('UPDATE customers SET xero_synced_at = now() WHERE id = $1', [customer.id]);
 }
 
 module.exports = {
-  runXeroSync, phoneFromXero, addressFromXero, fillMissingFieldsFromXero,
+  runXeroSync, phoneFromXero, addressFromXero, fillMissingFieldsFromXero, pushCustomerToXero,
 };

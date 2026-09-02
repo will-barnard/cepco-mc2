@@ -2612,6 +2612,74 @@ only create. Worth a follow-up if that's wanted; a small, separate
 decision (inline edit vs. a dedicated edit form) rather than something to
 bundle into this fix.
 
+### 2.60 Edit an existing customer, pushes to Xero when linked
+
+Follow-up to §2.59's "there's no way to edit a customer" note. Added an
+inline "Edit" toggle to `CustomersView.vue`'s detail panel — same
+toggle-shown-form convention this page already uses for "New customer"
+(`showNew`), rather than a separate route: click Edit, the summary block
+becomes editable name/email/phone/address/source/notes fields, Save
+PATCHes `/customers/:id` same as before.
+
+The new part: `routes/customers.js`'s PATCH handler now also pushes the
+change to Xero immediately, via `services/xeroSync.js`'s new
+`pushCustomerToXero()`, whenever the customer being edited has a
+`xero_contact_id` — an edit made here shouldn't have to wait for "Sync
+now" or the nightly run to reach Xero. If the MC2 update succeeds but the
+Xero push fails (network blip, Xero rejects a field), the edit still
+saves — the response carries `xero_push_error` instead of failing the
+whole request, and the edit form shows it as a warning rather than
+silently losing the local save. `xero_synced_at` is stamped right after a
+successful push, same as `runXeroSync()`'s own push branch, so the next
+regular sync doesn't try to push it again.
+
+### 2.61 Fix: customers linked through backfill/merge kept missing their Xero email
+
+Will: some customers had address and phone synced in but not email, even
+after §2.57's fill-in-missing-fields catch-up (which deliberately only
+ever touched phone/address — see that entry). Root cause was one level
+up, in `runXeroSync()` itself: a first-time link (`isNewLink` — matched
+directly here, or confirmed via the backfill/duplicate-merge review
+screens, both of which leave `xero_synced_at` null on purpose) had no
+real "last synced" baseline, so the code fell through to the same
+timestamp race as any later conflict: whichever of Xero's `UpdatedDateUTC`
+or MC2's `updated_at` was more recent won. That race was rigged against
+Xero almost every time for a fresh link, because `mc.updated_at` had
+usually just been bumped by the very same write that set
+`xero_contact_id` (the `customers_touch` trigger fires on any UPDATE to
+the row, linking included) — a "just linked" timestamp beats a real but
+older Xero edit time nearly always, so the sync kept "pushing" MC2's
+(usually email-less, since a missing/differing email is often *why* that
+customer needed backfill or a duplicate-merge instead of matching
+automatically) data over Xero's, instead of pulling Xero's in.
+
+Fixed by giving `isNewLink` its own branch: always `pull` on a fresh
+link, no timestamp comparison — and pull via a fill-if-missing merge
+(keep whatever MC2 already has per field, take Xero's value only where
+MC2's is blank) rather than the wholesale overwrite a normal pull does,
+so a fresh link can't blank out real MC2 data either. Every later,
+already-`xero_synced_at`-stamped reconciliation still works exactly as
+before (real last-write-wins, unaffected).
+
+For customers already caught by this before the fix: `services/
+xeroSync.js`'s `fillMissingFieldsFromXero()` (§2.57's "Fill in missing
+contact info from Xero" button) now also fills a missing name or email,
+not just phone/address, so running it again catches these up too.
+
+### 2.62 Ticket view: customer contact info in a dropdown
+
+Will: wanted the ticket page's "Customer" field to show contact info
+directly instead of clicking through to the customer page for it. Added
+`c.email`/`c.phone`/`c.address`/`c.xero_contact_id` to `routes/
+tickets.js`'s shared `TICKET_SELECT` (used by both the ticket list and
+single-ticket fetch — harmless extra columns on the list side, avoids a
+second query on the detail side), and turned the ticket detail page's
+customer name into a small popover toggle (`.customer-contact-*` in
+`styles.css`, same click-outside/Escape convention as `QueueView.vue`'s
+hide-statuses menu) showing email/phone/address, plus a "View full
+profile →" link into `/customers?id=` for anything that actually needs
+the full record (instrument/ticket history, editing).
+
 ## 4. Suggested first moves after deploy
 
 

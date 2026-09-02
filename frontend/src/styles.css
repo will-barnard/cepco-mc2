@@ -237,6 +237,26 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 .customer-search-menu li.highlighted, .customer-search-menu li:hover { background: var(--surface-2); }
 .customer-search-empty { padding: 14px 10px; }
 
+/* --- customer contact popover (TicketDetailView.vue) -----------------------
+   A ticket's customer contact info inline, instead of navigating to the
+   customer page just to read a phone number — same click-outside/Escape
+   popover convention as the hide-statuses menu above. */
+.customer-contact-field { position: relative; }
+.customer-contact-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0; min-height: 0; background: none; border: none;
+  color: var(--accent); font: inherit; cursor: pointer;
+}
+.customer-contact-toggle:hover { text-decoration: underline; }
+.customer-contact-caret { font-size: 11px; text-decoration: none; }
+.customer-contact-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 25;
+  min-width: 220px; max-width: 320px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 /* --- status category checkboxes (SettingsView.vue) ------------------------
    Desktop: wrap within a capped width so the "Applies to" column stays
    compact instead of stretching the whole table. Mobile: that table already

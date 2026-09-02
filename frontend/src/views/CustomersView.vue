@@ -15,12 +15,22 @@ const showNew = ref(false);
 const error = ref('');
 const form = ref({ name: '', email: '', phone: '', address: '', source: 'direct', notes: '' });
 
+const editingCustomer = ref(false);
+const editForm = ref({
+  name: '', email: '', phone: '', address: '', source: 'direct', notes: '',
+});
+const savingCustomer = ref(false);
+const customerNotice = ref('');
+const customerNoticeWarning = ref(false);
+
 async function load() {
   customers.value = await api.get('/customers', { q: search.value });
 }
 
 async function select(id) {
   selected.value = await api.get(`/customers/${id}`);
+  editingCustomer.value = false;
+  customerNotice.value = '';
 }
 
 async function create() {
@@ -145,6 +155,58 @@ async function fillXeroFields() {
   }
 }
 
+// --- customer edit, pushes to Xero when linked ------------------------------
+// Inline toggle rather than a separate route/page — same "toggle-shown
+// form" convention this page already uses for "New customer" (showNew),
+// and matches the rest of the app's own edit convention (TicketDetailView
+// etc.): editable fields plus an explicit Save, no separate view/edit
+// page. Xero push itself lives entirely on the backend (routes/customers.js's
+// PATCH, services/xeroSync.js's pushCustomerToXero) — this just reads
+// whatever that endpoint reports back. State lives up top with the rest
+// of this page's refs (not here next to the functions that use it) —
+// select() below reads editingCustomer/customerNotice, and it can run
+// during setup itself (the immediate route.query.id watch), before this
+// point in the script would otherwise have executed.
+function startEditCustomer() {
+  editForm.value = {
+    name: selected.value.name || '',
+    email: selected.value.email || '',
+    phone: selected.value.phone || '',
+    address: selected.value.address || '',
+    source: selected.value.source || 'direct',
+    notes: selected.value.notes || '',
+  };
+  customerNotice.value = '';
+  editingCustomer.value = true;
+}
+
+function cancelEditCustomer() {
+  editingCustomer.value = false;
+}
+
+async function saveCustomerEdit() {
+  error.value = '';
+  customerNotice.value = '';
+  savingCustomer.value = true;
+  try {
+    const updated = await api.patch(`/customers/${selected.value.id}`, editForm.value);
+    editingCustomer.value = false;
+    await select(updated.id); // re-fetch full detail (instruments/tickets included)
+    await load(); // list row's name/email may have changed
+    if (updated.xero_push_error) {
+      customerNoticeWarning.value = true;
+      customerNotice.value = `Saved here, but couldn't push to Xero: ${updated.xero_push_error}`;
+    } else {
+      customerNoticeWarning.value = false;
+      customerNotice.value = updated.xero_contact_id ? 'Saved and pushed to Xero.' : 'Saved.';
+    }
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    savingCustomer.value = false;
+  }
+}
+
 const when = (ts) => new Date(ts).toLocaleString();
 </script>
 
@@ -219,15 +281,16 @@ const when = (ts) => new Date(ts).toLocaleString();
 
       <div class="row" style="margin-top: 12px; align-items: center">
         <button class="small" :disabled="fillingXeroFields" @click="fillXeroFields">
-          {{ fillingXeroFields ? 'Filling…' : 'Fill in missing address/phone from Xero' }}
+          {{ fillingXeroFields ? 'Filling…' : 'Fill in missing contact info from Xero' }}
         </button>
         <span class="muted small">
-          One-time catch-up — only fills a blank address or phone, never overwrites anything.
+          One-time catch-up — only fills a blank name, email, phone, or address, never overwrites anything.
         </span>
       </div>
       <p v-if="xeroFillResult" class="small" style="color: #4ade80; margin: 8px 0 0">
         Checked {{ xeroFillResult.checked }} linked customer(s) — filled
-        {{ xeroFillResult.address_filled }} address(es) and {{ xeroFillResult.phone_filled }} phone(s).
+        {{ xeroFillResult.email_filled }} email(s), {{ xeroFillResult.phone_filled }} phone(s), and
+        {{ xeroFillResult.address_filled }} address(es).
       </p>
     </div>
 
@@ -292,15 +355,72 @@ const when = (ts) => new Date(ts).toLocaleString();
       </div>
 
       <div v-if="selected" class="card customer-detail-panel">
-        <h2>
-          {{ selected.name }}
-          <span v-if="selected.xero_contact_id" class="pill blue" style="margin-left: 8px">Linked to Xero</span>
-        </h2>
-        <p class="muted small">
-          {{ [selected.email, selected.phone, selected.source].filter(Boolean).join(' · ') }}
+        <div v-if="!editingCustomer" class="row" style="justify-content: space-between; align-items: flex-start">
+          <h2 style="margin-bottom: 0">
+            {{ selected.name }}
+            <span v-if="selected.xero_contact_id" class="pill blue" style="margin-left: 8px">Linked to Xero</span>
+          </h2>
+          <button class="small" @click="startEditCustomer">Edit</button>
+        </div>
+        <template v-if="!editingCustomer">
+          <p class="muted small" style="margin-top: 8px">
+            {{ [selected.email, selected.phone, selected.source].filter(Boolean).join(' · ') }}
+          </p>
+          <p v-if="selected.address" class="muted small">{{ selected.address }}</p>
+          <p v-if="selected.notes">{{ selected.notes }}</p>
+        </template>
+
+        <form v-else style="margin-top: 12px" @submit.prevent="saveCustomerEdit">
+          <div class="field-row">
+            <div class="field">
+              <label>Name *</label>
+              <input v-model="editForm.name" required />
+            </div>
+            <div class="field">
+              <label>Email</label>
+              <input v-model="editForm.email" type="email" />
+            </div>
+            <div class="field">
+              <label>Phone</label>
+              <input v-model="editForm.phone" />
+            </div>
+            <div class="field">
+              <label>Source</label>
+              <select v-model="editForm.source">
+                <option value="direct">Direct</option>
+                <option value="email">Email</option>
+                <option value="shopify">Shopify</option>
+                <option value="xero">Xero</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Address</label>
+            <input v-model="editForm.address" />
+          </div>
+          <div class="field">
+            <label>Notes</label>
+            <textarea v-model="editForm.notes" style="min-height: 60px" />
+          </div>
+          <p v-if="selected.xero_contact_id" class="muted small">
+            Linked to Xero — saving pushes these changes there too.
+          </p>
+          <div class="row">
+            <button class="primary" type="submit" :disabled="savingCustomer">
+              {{ savingCustomer ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="small" type="button" :disabled="savingCustomer" @click="cancelEditCustomer">
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <p
+          v-if="customerNotice" class="small"
+          :style="{ color: customerNoticeWarning ? '#f59e0b' : '#4ade80', marginTop: '8px' }"
+        >
+          {{ customerNotice }}
         </p>
-        <p v-if="selected.address" class="muted small">{{ selected.address }}</p>
-        <p v-if="selected.notes">{{ selected.notes }}</p>
 
         <h3 style="margin-top: 20px">Instruments</h3>
         <div v-if="!selected.instruments.length" class="muted small">None recorded.</div>

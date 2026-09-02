@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings } from '../stores';
@@ -48,6 +48,36 @@ const generatingUpdate = ref(false);
 // as it re-fetches after that save.
 const showTechnicians = ref(true);
 const lastInitializedTicketId = ref(null);
+
+// Customer contact popover — the customer's email/phone/address inline
+// instead of navigating to /customers just to read one of them (the
+// RouterLink there still exists, inside the popover, for anything that
+// actually needs the full profile). Same click-outside/Escape convention
+// as QueueView.vue's hide-statuses menu (see styles.css's
+// .customer-contact-* rules, styled the same way as that menu's
+// .hide-status-* rules).
+const customerMenuOpen = ref(false);
+const customerMenuEl = ref(null);
+
+function closeCustomerMenu() {
+  customerMenuOpen.value = false;
+}
+function onDocumentClick(event) {
+  if (customerMenuOpen.value && customerMenuEl.value && !customerMenuEl.value.contains(event.target)) {
+    closeCustomerMenu();
+  }
+}
+function onDocumentKeydown(event) {
+  if (event.key === 'Escape') closeCustomerMenu();
+}
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick);
+  document.addEventListener('keydown', onDocumentKeydown);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick);
+  document.removeEventListener('keydown', onDocumentKeydown);
+});
 
 async function load() {
   loading.value = true;
@@ -268,11 +298,34 @@ const showProgressUpdate = computed(() => (
           <div class="field-row">
             <div>
               <label>Customer</label>
-              <p style="margin: 0">
-                <RouterLink v-if="ticket.customer_id" :to="`/customers?id=${ticket.customer_id}`">
-                  {{ ticket.customer_name }}
-                </RouterLink>
-                <span v-else class="muted">
+              <div v-if="ticket.customer_id" ref="customerMenuEl" class="customer-contact-field">
+                <button
+                  type="button" class="customer-contact-toggle"
+                  @click="customerMenuOpen = !customerMenuOpen"
+                >
+                  <span>{{ ticket.customer_name }}</span>
+                  <span class="customer-contact-caret">▾</span>
+                </button>
+                <div v-if="customerMenuOpen" class="customer-contact-menu">
+                  <div v-if="ticket.customer_email"><span class="muted small">Email</span><br />{{ ticket.customer_email }}</div>
+                  <div v-if="ticket.customer_phone"><span class="muted small">Phone</span><br />{{ ticket.customer_phone }}</div>
+                  <div v-if="ticket.customer_address"><span class="muted small">Address</span><br />{{ ticket.customer_address }}</div>
+                  <p
+                    v-if="!ticket.customer_email && !ticket.customer_phone && !ticket.customer_address"
+                    class="muted small"
+                  >
+                    No contact info on file.
+                  </p>
+                  <RouterLink
+                    :to="`/customers?id=${ticket.customer_id}`" class="small"
+                    style="margin-top: 4px" @click="closeCustomerMenu"
+                  >
+                    View full profile →
+                  </RouterLink>
+                </div>
+              </div>
+              <p v-else style="margin: 0">
+                <span class="muted">
                   {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : '—' }}
                 </span>
               </p>

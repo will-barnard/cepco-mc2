@@ -32,7 +32,11 @@ const PREFERRED_SHIPPING_CATEGORY_KEY = 'orders_shipping';
 const TICKET_SELECT = `
   SELECT t.*,
          src.title AS source_ticket_title,
-         c.name  AS customer_name,
+         c.name    AS customer_name,
+         c.email   AS customer_email,
+         c.phone   AS customer_phone,
+         c.address AS customer_address,
+         c.xero_contact_id AS customer_xero_contact_id,
          i.family AS instrument_family,
          i.model  AS instrument_model,
          i.is_fleet AS instrument_is_fleet,

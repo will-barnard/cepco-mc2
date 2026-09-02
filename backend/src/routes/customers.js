@@ -4,6 +4,7 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const { pushCustomerToXero } = require('../services/xeroSync');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -62,7 +63,26 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       b.address || null, b.source || null, b.notes === undefined ? null : b.notes],
   );
   if (!rows[0]) throw notFound('Customer not found');
-  res.json(rows[0]);
+  let customer = rows[0];
+
+  // A linked customer's edit here should reach Xero right away, not wait
+  // for the next "Sync now" or nightly run — but a Xero-side failure
+  // (network blip, a field Xero's own validation rejects) shouldn't make
+  // this look like the edit itself failed: the MC2 write above already
+  // succeeded and stays that way. Surface the failure to the caller
+  // instead so the edit form can show it as a warning alongside the
+  // otherwise-successful save.
+  let xeroPushError = null;
+  if (customer.xero_contact_id) {
+    try {
+      await pushCustomerToXero(customer);
+      customer = { ...customer, xero_synced_at: new Date().toISOString() };
+    } catch (err) {
+      xeroPushError = err.message;
+    }
+  }
+
+  res.json({ ...customer, xero_push_error: xeroPushError });
 }));
 
 module.exports = router;
