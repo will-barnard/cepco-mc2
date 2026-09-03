@@ -20,7 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const LOGO_PATH = path.resolve(__dirname, '../../../assets/CEPCO-LOGO-FINAL.png');
+const LOGO_PATH = path.resolve(__dirname, '../../../assets/CEPCO-LOGO-LIGHT.png');
 
 let cachedLogoBase64 = null;
 function logoBase64() {

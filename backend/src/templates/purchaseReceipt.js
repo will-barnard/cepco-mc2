@@ -5,7 +5,7 @@ const path = require('path');
 
 // Same repo-root resolution pattern as scripts/migrate.js's MIGRATIONS_DIR —
 // works regardless of the process's cwd.
-const LOGO_PATH = path.resolve(__dirname, '../../../assets/CEPCO-LOGO-FINAL.png');
+const LOGO_PATH = path.resolve(__dirname, '../../../assets/CEPCO-LOGO-LIGHT.png');
 
 // Read once, lazily, and cache — most boots never send this email, so don't
 // pay the disk read (or risk a startup crash if the asset ever moves) until
