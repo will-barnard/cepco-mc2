@@ -70,7 +70,7 @@ const customerId = ref('');
 // they've even said what instrument they're bringing in. Just enough here
 // (name, source) to get moving into the instrument wizard.
 const newCustomer = ref({ enabled: false, name: '', source: 'direct' });
-const contact = ref({ email: '', phone: '' });
+const contact = ref({ email: '', phone: '', address: '' });
 
 // CustomerSearchSelect (a type-ahead replacing the old "every customer in
 // one <select>" picker — search-and-select is a lot less friction once a
@@ -102,12 +102,12 @@ async function loadCustomerInstruments() {
 // customers array, just without needing that array kept around.
 function onCustomerChange(row) {
   selectedCustomer.value = row;
-  contact.value = { email: row?.email || '', phone: row?.phone || '' };
+  contact.value = { email: row?.email || '', phone: row?.phone || '', address: row?.address || '' };
   loadCustomerInstruments();
 }
 watch(() => newCustomer.value.enabled, (enabled) => {
   if (enabled) {
-    contact.value = { email: '', phone: '' };
+    contact.value = { email: '', phone: '', address: '' };
     customerId.value = '';
     selectedCustomer.value = null;
     customerInstruments.value = [];
@@ -158,6 +158,19 @@ function exitBlock(block) {
     blocks.value = [];
     stage.value = 'customer';
   }
+}
+// Review's own "Back" used to hardcode stage = 'customer' — a single
+// click from Review skipped over every instrument screen straight back
+// to the very first one, regardless of how many instruments/screens it
+// took to get there. Land on the last instrument's "done" screen
+// instead, the same re-entry point exitBlock() already leaves things at
+// when backing out of a later block — one real step back, not a reset.
+function backFromReview() {
+  if (!blocks.value.length) { stage.value = 'customer'; return; }
+  const last = blocks.value[blocks.value.length - 1];
+  last.step = 'instrument-done';
+  activeBlockKey.value = last.key;
+  stage.value = 'instrument';
 }
 
 // --- family / model tree navigation ------------------------------------------
@@ -418,18 +431,21 @@ async function submit(sendAfterCreate) {
           name: newCustomer.value.name.trim(),
           email: contact.value.email.trim() || null,
           phone: contact.value.phone.trim() || null,
+          address: contact.value.address.trim() || null,
           source: newCustomer.value.source || null,
         });
         resolvedCustomerId = created.id;
         createdCustomerId.value = created.id;
       } else if (!createdCustomerId.value && selectedCustomer.value
         && (contact.value.email.trim() !== (selectedCustomer.value.email || '')
-          || contact.value.phone.trim() !== (selectedCustomer.value.phone || ''))) {
+          || contact.value.phone.trim() !== (selectedCustomer.value.phone || '')
+          || contact.value.address.trim() !== (selectedCustomer.value.address || ''))) {
         // Final/Approval screen doubles as "confirm this is still how to
         // reach them" — only writes back when something actually changed.
         await api.patch(`/customers/${resolvedCustomerId}`, {
           email: contact.value.email.trim() || null,
           phone: contact.value.phone.trim() || null,
+          address: contact.value.address.trim() || null,
         });
       }
 
@@ -677,7 +693,7 @@ async function submit(sendAfterCreate) {
       </div>
 
       <div class="wiz-actions">
-        <button type="button" @click="stage = 'customer'">← Back to customer</button>
+        <button type="button" @click="backFromReview()">← Back</button>
         <button type="button" @click="addAnotherInstrument">+ Add another instrument</button>
         <button class="primary" type="button" :disabled="!hasAnySelection" @click="stage = 'final'">
           Continue to approval →
@@ -736,6 +752,10 @@ async function submit(sendAfterCreate) {
             <label>Phone</label>
             <input v-model="contact.phone" placeholder="(555) 555-0100" />
           </div>
+        </div>
+        <div class="field">
+          <label>Address</label>
+          <input v-model="contact.address" placeholder="123 Main St, Springfield" />
         </div>
         <p v-if="!contact.email.trim()" class="muted small" style="margin: 0">
           Add an email to send this estimate straight to the customer — you can still save it without one.

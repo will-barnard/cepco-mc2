@@ -108,6 +108,10 @@ function buildQuoteEmail({
           </td>
         </tr>
       </table>
+      <p style="margin:10px 0 0;font-size:12px;color:#9aa1ad;line-height:1.5;">
+        Please note: payments made by credit or debit card are subject to an additional
+        processing fee of 3.5%.
+      </p>
       ${estimate.notes ? `<p style="margin:22px 0 0;font-size:13px;color:#6b7280;line-height:1.5;">${escapeHtml(estimate.notes)}</p>` : ''}
       <div style="text-align:center;margin-top:28px;">
         <a href="${confirmUrl}"

@@ -390,6 +390,30 @@ async function pushCustomerToXero(customer) {
   await query('UPDATE customers SET xero_synced_at = now() WHERE id = $1', [customer.id]);
 }
 
+/**
+ * Create a brand-new Xero contact for a customer that doesn't have one
+ * yet, and link it — the same "MC2-only customer" branch runXeroSync()
+ * itself falls through to at the end of a normal run, run immediately
+ * instead of waiting for that. Used by routes/customers.js's POST so a
+ * customer created here (walk-in, estimate wizard, etc.) reaches Xero
+ * right away rather than sitting unlinked until "Sync now" or the
+ * nightly run notices it. Returns the new xero_contact_id.
+ */
+async function createCustomerInXero(customer) {
+  if (customer.xero_contact_id) throw new Error('Customer is already linked to Xero');
+  const created = await xero.createContact(xeroPayloadFromMc(customer));
+  await query(
+    'UPDATE customers SET xero_contact_id = $1, xero_synced_at = now() WHERE id = $2',
+    [created.ContactID, customer.id],
+  );
+  return created.ContactID;
+}
+
 module.exports = {
-  runXeroSync, phoneFromXero, addressFromXero, fillMissingFieldsFromXero, pushCustomerToXero,
+  runXeroSync,
+  phoneFromXero,
+  addressFromXero,
+  fillMissingFieldsFromXero,
+  pushCustomerToXero,
+  createCustomerInXero,
 };

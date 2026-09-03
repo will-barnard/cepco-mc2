@@ -21,6 +21,7 @@ const settings = require('../services/settings');
 const config = require('../config');
 const { sendEmail } = require('../mailer');
 const { buildQuoteEmail } = require('../templates/quoteEmail');
+const { buildEstimateAcceptedNotice } = require('../templates/estimateAcceptedNotice');
 const { resolveNewTicketFields, insertTicketRow, composeTicketTitle } = require('./tickets');
 
 const router = express.Router();
@@ -602,6 +603,64 @@ async function createTicketsForEstimate(estimate, createdById) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Accepted-estimate notice — every admin-level employee gets an email the
+// moment a customer accepts (publicQuotes.js's POST /:token/confirm, the
+// only place an estimate's status becomes 'confirmed'). Same one-send-
+// plus-one-emails-row-per-recipient convention as services/ceppys.js.
+// Deliberately swallows everything rather than throwing: a broken or
+// unconfigured mailer, or an admin with a bad address, must never turn a
+// customer's successful accept into an error response, and the caller
+// (publicQuotes.js) doesn't need to know or care whether this ran.
+// ---------------------------------------------------------------------------
+async function notifyAdminsEstimateAccepted(estimate, customerName) {
+  const EMAIL_TEMPLATE = 'estimate_accepted_notice';
+  try {
+    if (!config.resend.apiKey || !config.resend.fromEmail) return; // not configured — nothing to send
+
+    const { rows: admins } = await query(
+      `SELECT id, name, email FROM employees
+        WHERE active = TRUE AND role = 'admin' AND email IS NOT NULL AND email <> ''`,
+    );
+    if (!admins.length) return;
+
+    const items = await loadItems(estimate.id);
+    const totals = totalsFor(items, Number(estimate.labor_rate));
+    const estimateUrl = config.appBaseUrl ? `${config.appBaseUrl}/estimates/${estimate.id}` : null;
+    const { subject, html, attachments } = buildEstimateAcceptedNotice({
+      estimate, customerName, totals, estimateUrl,
+    });
+
+    for (const admin of admins) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await sendEmail({
+          to: admin.email, subject, html, attachments,
+        });
+        // eslint-disable-next-line no-await-in-loop
+        await query(
+          `INSERT INTO emails (recipient, template, subject, customer_id, status, sent_at)
+           VALUES ($1, $2, $3, $4, 'sent', now())`,
+          [admin.email, EMAIL_TEMPLATE, subject, estimate.customer_id],
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-await-in-loop
+        await query(
+          `INSERT INTO emails (recipient, template, subject, customer_id, status, error)
+           VALUES ($1, $2, $3, $4, 'failed', $5)`,
+          [admin.email, EMAIL_TEMPLATE, subject, estimate.customer_id, err.message],
+        );
+      }
+    }
+  } catch (err) {
+    // Anything above the per-recipient loop (the admins query itself,
+    // loadItems, template build) lands here — logged nowhere else, so at
+    // least surface it on the server console rather than losing it silently.
+    // eslint-disable-next-line no-console
+    console.error('notifyAdminsEstimateAccepted failed:', err);
+  }
+}
+
 router.post('/:id/create-tickets', asyncHandler(async (req, res) => {
   const { rows } = await query(
     "SELECT * FROM estimates WHERE id = $1 AND kind = 'customer_quote'", [req.params.id],
@@ -615,3 +674,4 @@ router.post('/:id/create-tickets', asyncHandler(async (req, res) => {
 
 module.exports = router;
 module.exports.createTicketsForEstimate = createTicketsForEstimate;
+module.exports.notifyAdminsEstimateAccepted = notifyAdminsEstimateAccepted;

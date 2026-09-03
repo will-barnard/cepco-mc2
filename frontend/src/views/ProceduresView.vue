@@ -133,12 +133,22 @@ async function createProcedure() {
 }
 
 // --- inline edit -------------------------------------------------------------
+// Every field on this page autosaves on change through here, so this
+// runs constantly while someone's scrolled deep into a long list.
+// Re-fetching the whole list (the old `await load()`) flips `loading`
+// true, which unmounts the entire table behind the "Loading…" placeholder
+// and remounts it fresh once the request comes back — collapsing the
+// page and jumping the scroll position to the top on every single edit.
+// PATCH already returns the updated row (`RETURNING *`), so splice just
+// that row back into place instead: no refetch, no loading flicker, and
+// Vue only touches the one row's DOM rather than remounting the list.
 async function updateField(p, patch) {
   error.value = '';
   notice.value = '';
   try {
-    await api.patch(`/procedures/${p.id}`, patch);
-    await load();
+    const updated = await api.patch(`/procedures/${p.id}`, patch);
+    const idx = procedures.value.findIndex((row) => row.id === p.id);
+    if (idx !== -1) procedures.value.splice(idx, 1, updated);
   } catch (err) {
     error.value = err.message;
   }

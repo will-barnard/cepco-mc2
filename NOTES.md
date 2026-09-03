@@ -2829,6 +2829,108 @@ estimate created — he can now merge it himself from Customers → Review
 duplicates, or ask for that cleanup separately if it's not showing up
 as a candidate.
 
+### 2.66 Estimate wizard: Review's Back no longer skips to the start
+
+`EstimateNewView.vue`'s per-screen Back buttons inside an instrument
+block were already correctly incremental (each has its own
+`backFrom*()` that steps back exactly one screen — pick-existing,
+family, model, details, standard_setup/electronics/cosmetics/parts).
+The one broken jump was Review's own "← Back to customer" button, which
+hardcoded `stage = 'customer'` — one click from Review skipped every
+instrument screen and went straight back to the very first one,
+regardless of how many instruments or screens it took to get there.
+Replaced with `backFromReview()`, which lands on the last instrument's
+"Instrument added" screen (`instrument-done`) instead — the same
+re-entry point `exitBlock()` already uses when backing out of a later
+block — so Review's Back is now one real step back, not a reset. Going
+all the way back to Customer still works, just incrementally: back out
+of each instrument in turn (same as before) until none are left.
+
+### 2.67 Estimate wizard: capture address, push new customers to Xero immediately
+
+Two related changes to the final "Email & contact" screen and customer
+creation:
+
+- Added an **Address** field alongside Email/Phone, wired the same way
+  those already were: included in the `POST /customers` body when
+  adding a new customer, and folded into the existing "confirm this is
+  still how to reach them" diff-and-PATCH check for an existing
+  customer (`backend/src/routes/customers.js` already accepted
+  `address` on both routes — migration 001's `customers.address` column
+  — so no backend schema change was needed, just wiring the frontend up
+  to it). `xeroPayloadFromMc()` in `services/xeroSync.js` already maps
+  `address` to Xero's `AddressLine1` as a flat string, so this was
+  already "Xero-compatible" the moment the column had a value in it —
+  see that function's own comment on the deliberate flattening of
+  Xero's structured Addresses into one free-text field.
+- `POST /customers` now also pushes a *brand-new* customer to Xero right
+  away, not just an edited one. `pushCustomerToXero()` (used by PATCH,
+  §2.60) only ever updates an *existing* Xero contact — new-customer
+  creation had nothing pushing at all, so a customer created here sat
+  unlinked until the next "Sync now" or nightly run's own "MC2-only
+  customer" branch noticed and created it. Added
+  `createCustomerInXero()` next to it in `xeroSync.js`, factoring out
+  the exact same create-and-stamp-link steps `runXeroSync()`'s own
+  bottom branch does, and call it from `POST /customers` — skipped
+  entirely (no error surfaced) when Xero isn't configured at all, same
+  reasoning as everywhere else this shows up.
+
+### 2.68 Standard procedures page: stop losing scroll position on every edit
+
+Every field on Settings → Standard procedures autosaves on change
+through one shared `updateField()`, which called `await load()` — a
+full re-fetch of the whole procedures list — after each save.
+`load()` sets `loading.value = true` first, and the template gates the
+*entire* list behind `v-if="loading"`, so every single edit (a price, a
+checkbox, retire/restore, anything) briefly unmounted the whole table
+behind a "Loading…" placeholder and remounted it fresh once the request
+came back — collapsing the page and throwing the scroll position back
+to the top, however far down the list you'd scrolled. `PATCH
+/procedures/:id` already returns the updated row in full (`RETURNING
+*`), so `updateField()` now splices that row back into the local
+`procedures` array in place instead of refetching — no loading flicker,
+no remount, and Vue only touches the one changed row's DOM. Left
+`createProcedure()`'s own `load()` call alone — adding a brand-new
+procedure is a rarer action from a form, not the scroll-position problem
+being reported.
+
+### 2.69 Estimate email: card processing fee notice
+
+Added a line below the estimated-total table in
+`templates/quoteEmail.js`: "payments made by credit or debit card are
+subject to an additional processing fee of 3.5%." Static text, not a
+configurable setting — nothing else in the shop currently has a notion
+of a card surcharge rate to hang a setting off of, and 3.5% is what
+Will asked for by name; worth promoting to a real setting later if the
+rate ever needs to change without a deploy.
+
+### 2.70 Email admin-level employees when an estimate is accepted
+
+`publicQuotes.js`'s `POST /:token/confirm` is the only place an
+estimate's status becomes `confirmed` (confirmed via the "Review &
+respond to this estimate" link's public page — see that file's header
+for why this can only ever be a POST the customer's own click
+triggers). Added `notifyAdminsEstimateAccepted(estimate, customerName)`
+next to `createTicketsForEstimate` in `routes/quotes.js` (same file,
+same "one shared function so there's exactly one definition of what
+this does" reasoning, exported the same way) and call it right after
+ticket creation. It emails every `employees` row with `role = 'admin'`
+and an email on file — one send + one `emails` log row per recipient,
+same convention as `services/ceppys.js`'s digest — using a new,
+internal-facing template (`templates/estimateAcceptedNotice.js`, same
+visual language as the customer-facing emails, much shorter: which
+customer, which estimate, the accepted total, a link into the app's own
+`/estimates/:id` detail screen).
+
+Deliberately fails silent and swallows everything, right down to
+wrapping its own body in a try/catch that just `console.error`s — a
+customer's successful accept must never turn into an error response
+because a notification email had trouble, whether that's Resend being
+unconfigured, an admin with a bad address, or something unexpected in
+between. Skips sending entirely (no attempt, no log rows) when Resend
+isn't configured at all, same posture as every other optional-mailer
+feature in this codebase.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -4,7 +4,8 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
-const { pushCustomerToXero } = require('../services/xeroSync');
+const { pushCustomerToXero, createCustomerInXero } = require('../services/xeroSync');
+const config = require('../config');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -72,7 +73,24 @@ router.post('/', asyncHandler(async (req, res) => {
     [String(b.name).trim(), email || null, b.phone || null, b.address || null,
       b.source || null, b.notes || null],
   );
-  res.status(201).json(rows[0]);
+  let customer = rows[0];
+
+  // Same "reach Xero now, don't wait for the next sync" reasoning as the
+  // PATCH handler below, just for the create side instead of the edit
+  // side — skipped entirely (no error surfaced) when Xero isn't
+  // configured at all, rather than trying and failing on every single
+  // customer a shop that's never touched Xero creates.
+  let xeroPushError = null;
+  if (config.xero.clientId && config.xero.clientSecret) {
+    try {
+      const xeroContactId = await createCustomerInXero(customer);
+      customer = { ...customer, xero_contact_id: xeroContactId, xero_synced_at: new Date().toISOString() };
+    } catch (err) {
+      xeroPushError = err.message;
+    }
+  }
+
+  res.status(201).json({ ...customer, xero_push_error: xeroPushError });
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

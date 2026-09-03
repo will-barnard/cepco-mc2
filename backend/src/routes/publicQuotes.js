@@ -19,7 +19,7 @@
 const express = require('express');
 const { query } = require('../db');
 const { asyncHandler, notFound, badRequest } = require('../middleware/errors');
-const { createTicketsForEstimate } = require('./quotes');
+const { createTicketsForEstimate, notifyAdminsEstimateAccepted } = require('./quotes');
 
 const router = express.Router();
 
@@ -78,6 +78,12 @@ router.post('/:token/confirm', asyncHandler(async (req, res) => {
   // No employee behind this — createTicketsForEstimate treats a null
   // createdById the same way any other nullable created_by column does.
   const result = await createTicketsForEstimate(estimate, null);
+
+  // Fire-and-forget from this route's point of view — the function itself
+  // never throws (see its own header), so this is just here for clarity
+  // that the customer's response doesn't wait on or depend on it.
+  await notifyAdminsEstimateAccepted(estimate, estimate.customer_name);
+
   res.json({ status: result.estimate.status });
 }));
 
