@@ -1,28 +1,32 @@
 'use strict';
 
 /**
- * Duplicate-customer review — cleanup for the gap the backfill screen
- * (xeroBackfill.js) exists to prevent but, run after the fact or skipped
- * entirely, can't undo: the regular sync (xeroSync.js) only matches an
- * existing MC2 customer to a Xero contact by exact email or exact name.
- * Anything messier (a nickname, a typo, an email on file in one system
- * only) doesn't match, so the sync did exactly what its own header says
- * an unmatched Xero contact gets — created a new MC2 customer for it
- * (source = 'xero') — leaving the shop with two rows for one real person:
- * the original, and a freshly-created duplicate that's now the one
- * actually linked to Xero.
+ * Duplicate-customer review. Originally built (§2.56) for one specific
+ * gap: the regular Xero sync (xeroSync.js) only matches an existing MC2
+ * customer to a Xero contact by exact email or exact name, so anything
+ * messier (a nickname, a typo, an email on file in one system only)
+ * doesn't match and the sync creates a brand-new MC2 customer instead
+ * (source = 'xero') — leaving two rows for one real person.
  *
- * This mirrors xeroBackfill.js's approach on purpose (same scoring,
- * reused from there rather than reimplemented — see that file's exports)
- * but the pairing is different: instead of "MC2 customer" vs. "Xero
- * contact", it's "pre-existing MC2 customer with no Xero link" (the
- * likely-real one, called `survivor` below) vs. "MC2 customer the sync
- * just created from Xero" (`duplicate`, source = 'xero', already linked).
+ * §2.64 generalized this beyond that one cause, after the estimate
+ * wizard turned out to have its own way of producing a duplicate
+ * customer (a failed submit, retried, before the fix in that section)
+ * that has nothing to do with Xero at all. Scoring and merging now
+ * consider every pair of customers, not just "unlinked" vs.
+ * "Xero-created" — see `orderPair` and `scoreDuplicatePair` below — but
+ * the Xero case stays a first-class citizen of the ordering: given a
+ * choice between a customer already linked to Xero and one that isn't,
+ * the unlinked one survives and inherits the link, same as always,
+ * since the sync only ever creates a new row when matching an existing
+ * one failed. Reuses xeroBackfill.js's scoring on purpose rather than
+ * reimplementing it — see that file's exports.
+ *
  * A confirmed pair gets *merged*: every child record (tickets,
  * instruments, emails, estimates, progress updates) pointing at the
  * duplicate is reassigned to the survivor, the survivor takes over the
- * duplicate's xero_contact_id, and the duplicate row is deleted.
- * xero_synced_at is deliberately left null on the survivor afterwards —
+ * duplicate's xero_contact_id if it has one the survivor doesn't already
+ * have, and the duplicate row is deleted. xero_synced_at is deliberately
+ * left null on the survivor afterwards when a Xero link moved over —
  * same reasoning as xeroBackfill.js's linkCustomerToXero — so the next
  * regular sync run reconciles field values (name/email/phone/address)
  * itself by comparing which side actually changed more recently, rather
@@ -75,8 +79,30 @@ function scoreDuplicatePair(survivor, duplicate) {
 
 function summarize(c) {
   return {
-    id: c.id, name: c.name, email: c.email, phone: c.phone, address: c.address, source: c.source,
+    id: c.id,
+    name: c.name,
+    email: c.email,
+    phone: c.phone,
+    address: c.address,
+    source: c.source,
+    xero_linked: !!c.xero_contact_id,
   };
+}
+
+// Decides which side of a scored pair survives. A customer already
+// linked to Xero is always kept over one that isn't, with the link
+// moving over on merge — the sync only ever creates a new row when
+// matching an existing one failed, so the unlinked side is the
+// pre-existing, likely-real one. Outside that case (two ordinary
+// customers, or — practically never, since Xero contact ids are
+// unique — two already linked to the same or different contacts),
+// there's no such signal, so the older row (lower id) survives and the
+// newer one, most likely the accidental repeat, is the one merged away.
+function orderPair(a, b) {
+  const aXero = !!a.xero_contact_id;
+  const bXero = !!b.xero_contact_id;
+  if (aXero !== bXero) return aXero ? [b, a] : [a, b];
+  return a.id < b.id ? [a, b] : [b, a];
 }
 
 async function computeDuplicateCandidates() {
@@ -87,15 +113,14 @@ async function computeDuplicateCandidates() {
   const all = allResult.rows;
   const dismissed = new Set(dismissedResult.rows.map((r) => `${r.survivor_id}:${r.duplicate_id}`));
 
-  // A "survivor" candidate is any customer never linked to Xero — that's
-  // exactly the set the sync would have matched against, so if one of
-  // these is a real duplicate of a source='xero' row, matching failed.
-  const survivors = all.filter((c) => !c.xero_contact_id);
-  const duplicates = all.filter((c) => c.source === 'xero' && c.xero_contact_id);
-
+  // Every pair, not just "unlinked" vs. "Xero-created" — see this file's
+  // header. A shop's customer list is small enough that the full O(n^2)
+  // scan is fine for an on-demand admin review screen (only ever run
+  // when someone opens this page, never polled).
   const scored = [];
-  for (const survivor of survivors) {
-    for (const duplicate of duplicates) {
+  for (let i = 0; i < all.length; i += 1) {
+    for (let j = i + 1; j < all.length; j += 1) {
+      const [survivor, duplicate] = orderPair(all[i], all[j]);
       if (dismissed.has(`${survivor.id}:${duplicate.id}`)) continue; // eslint-disable-line no-continue
       const { score, signals } = scoreDuplicatePair(survivor, duplicate);
       if (score >= POSSIBLE_FLOOR) scored.push({
@@ -105,14 +130,13 @@ async function computeDuplicateCandidates() {
   }
   scored.sort((x, y) => y.score - x.score);
 
-  const claimedSurvivor = new Set();
-  const claimedDuplicate = new Set();
+  const claimed = new Set();
   const confident = [];
   const possible = [];
   for (const pair of scored) {
-    if (claimedSurvivor.has(pair.survivor.id) || claimedDuplicate.has(pair.duplicate.id)) continue; // eslint-disable-line no-continue
-    claimedSurvivor.add(pair.survivor.id);
-    claimedDuplicate.add(pair.duplicate.id);
+    if (claimed.has(pair.survivor.id) || claimed.has(pair.duplicate.id)) continue; // eslint-disable-line no-continue
+    claimed.add(pair.survivor.id);
+    claimed.add(pair.duplicate.id);
     const row = {
       survivor: summarize(pair.survivor), duplicate: summarize(pair.duplicate), score: pair.score, signals: pair.signals,
     };
@@ -123,7 +147,9 @@ async function computeDuplicateCandidates() {
   // genuinely new customers the sync was right to create. Shown as a
   // count only, same as xeroBackfill.js's Xero-only-contacts card, since
   // there's nothing to review if nothing was suggested.
-  const duplicatesUnmatchedCount = duplicates.filter((d) => !claimedDuplicate.has(d.id)).length;
+  const duplicatesUnmatchedCount = all.filter(
+    (c) => c.source === 'xero' && c.xero_contact_id && !claimed.has(c.id),
+  ).length;
 
   return {
     confident, possible, duplicates_unmatched_count: duplicatesUnmatchedCount,
@@ -145,11 +171,14 @@ async function mergeDuplicate(survivorId, duplicateId) {
     const duplicate = rows.find((r) => r.id === duplicateId);
     if (!survivor) throw new Error('Survivor customer not found');
     if (!duplicate) throw new Error('Duplicate customer not found');
-    if (!duplicate.xero_contact_id || duplicate.source !== 'xero') {
-      throw new Error('That record was not created by the Xero sync — nothing to merge');
-    }
-    if (survivor.xero_contact_id) {
-      throw new Error('The surviving customer is already linked to a Xero contact');
+    // Two different real Xero contacts landing on one merged MC2 customer
+    // is genuinely ambiguous — nothing here can safely pick which contact
+    // should represent the result — so refuse rather than guess. Every
+    // other combination (neither linked, or only one of the two) is safe:
+    // the duplicate's link, if it has one, just moves onto the survivor.
+    if (survivor.xero_contact_id && duplicate.xero_contact_id
+      && survivor.xero_contact_id !== duplicate.xero_contact_id) {
+      throw new Error('Both customers are linked to different Xero contacts — unlink one before merging.');
     }
 
     for (const { table, column } of CHILD_TABLES) {
@@ -160,11 +189,13 @@ async function mergeDuplicate(survivorId, duplicateId) {
       );
     }
 
-    // xero_synced_at left null on purpose — see this file's header.
-    await client.query(
-      'UPDATE customers SET xero_contact_id = $1, xero_synced_at = NULL WHERE id = $2',
-      [duplicate.xero_contact_id, survivorId],
-    );
+    if (duplicate.xero_contact_id && !survivor.xero_contact_id) {
+      // xero_synced_at left null on purpose — see this file's header.
+      await client.query(
+        'UPDATE customers SET xero_contact_id = $1, xero_synced_at = NULL WHERE id = $2',
+        [duplicate.xero_contact_id, survivorId],
+      );
+    }
     await client.query('DELETE FROM customers WHERE id = $1', [duplicateId]);
   });
 }

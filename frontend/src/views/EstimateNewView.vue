@@ -379,6 +379,19 @@ onMounted(async () => {
 });
 
 // --- submit ----------------------------------------------------------------------
+// Each of these remembers what a previous, failed submit already managed to
+// create. Without this, retrying after any failure here (most commonly the
+// final `/send` call — e.g. the APP_BASE_URL misconfiguration fixed
+// separately) re-ran the whole function from scratch: the customer,
+// instruments, and estimate created by the first attempt were still sitting
+// in the database, and the retry created a second full set on top of them.
+// (POST /customers now also dedups by email as a backstop, but the estimate
+// and instrument rows have no such natural key, so this file has to avoid
+// recreating them itself.)
+const createdCustomerId = ref(null);
+const createdInstrumentByBlock = ref(new Map());
+const createdEstimateId = ref(null);
+
 async function submit(sendAfterCreate) {
   error.value = '';
 
@@ -398,58 +411,63 @@ async function submit(sendAfterCreate) {
 
   busy.value = true;
   try {
-    let resolvedCustomerId = customerId.value;
-    if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
-      const created = await api.post('/customers', {
-        name: newCustomer.value.name.trim(),
-        email: contact.value.email.trim() || null,
-        phone: contact.value.phone.trim() || null,
-        source: newCustomer.value.source || null,
-      });
-      resolvedCustomerId = created.id;
-    } else if (selectedCustomer.value
-      && (contact.value.email.trim() !== (selectedCustomer.value.email || '')
-        || contact.value.phone.trim() !== (selectedCustomer.value.phone || ''))) {
-      // Final/Approval screen doubles as "confirm this is still how to
-      // reach them" — only writes back when something actually changed.
-      await api.patch(`/customers/${resolvedCustomerId}`, {
-        email: contact.value.email.trim() || null,
-        phone: contact.value.phone.trim() || null,
-      });
-    }
-
-    const resolvedInstrumentByBlock = new Map();
-    for (const block of blocks.value) {
-      if (block.mode === 'existing') {
-        resolvedInstrumentByBlock.set(block.key, block.instrumentId || null);
-        continue;
+    if (!createdEstimateId.value) {
+      let resolvedCustomerId = createdCustomerId.value || customerId.value;
+      if (!createdCustomerId.value && newCustomer.value.enabled && newCustomer.value.name.trim()) {
+        const created = await api.post('/customers', {
+          name: newCustomer.value.name.trim(),
+          email: contact.value.email.trim() || null,
+          phone: contact.value.phone.trim() || null,
+          source: newCustomer.value.source || null,
+        });
+        resolvedCustomerId = created.id;
+        createdCustomerId.value = created.id;
+      } else if (!createdCustomerId.value && selectedCustomer.value
+        && (contact.value.email.trim() !== (selectedCustomer.value.email || '')
+          || contact.value.phone.trim() !== (selectedCustomer.value.phone || ''))) {
+        // Final/Approval screen doubles as "confirm this is still how to
+        // reach them" — only writes back when something actually changed.
+        await api.patch(`/customers/${resolvedCustomerId}`, {
+          email: contact.value.email.trim() || null,
+          phone: contact.value.phone.trim() || null,
+        });
       }
-      // eslint-disable-next-line no-await-in-loop
-      const created = await api.post('/instruments', {
-        family: block.family,
-        model: blockModelChain(block) || null,
-        year: block.year.trim() || null,
-        nickname: block.nickname.trim() || null,
-        customer_id: resolvedCustomerId || null,
-      });
-      resolvedInstrumentByBlock.set(block.key, created.id);
+
+      for (const block of blocks.value) {
+        if (createdInstrumentByBlock.value.has(block.key)) continue;
+        if (block.mode === 'existing') {
+          createdInstrumentByBlock.value.set(block.key, block.instrumentId || null);
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const created = await api.post('/instruments', {
+          family: block.family,
+          model: blockModelChain(block) || null,
+          year: block.year.trim() || null,
+          nickname: block.nickname.trim() || null,
+          customer_id: resolvedCustomerId || null,
+        });
+        createdInstrumentByBlock.value.set(block.key, created.id);
+      }
+
+      const payload = {
+        customer_id: resolvedCustomerId,
+        category_key: categoryKey.value,
+        priority_key: priorityKey.value,
+        notes: notes.value || null,
+        items: items.map((it) => ({
+          instrument_id: createdInstrumentByBlock.value.get(it.block.key),
+          procedure_id: it.procedure_id,
+          parts_variant: it.parts_variant,
+        })),
+      };
+
+      const estimate = await api.post('/quotes', payload);
+      createdEstimateId.value = estimate.id;
     }
 
-    const payload = {
-      customer_id: resolvedCustomerId,
-      category_key: categoryKey.value,
-      priority_key: priorityKey.value,
-      notes: notes.value || null,
-      items: items.map((it) => ({
-        instrument_id: resolvedInstrumentByBlock.get(it.block.key),
-        procedure_id: it.procedure_id,
-        parts_variant: it.parts_variant,
-      })),
-    };
-
-    const estimate = await api.post('/quotes', payload);
-    if (sendAfterCreate) await api.post(`/quotes/${estimate.id}/send`);
-    router.push({ name: 'estimate', params: { id: estimate.id } });
+    if (sendAfterCreate) await api.post(`/quotes/${createdEstimateId.value}/send`);
+    router.push({ name: 'estimate', params: { id: createdEstimateId.value } });
   } catch (err) {
     error.value = err.message;
   } finally {

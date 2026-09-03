@@ -19,6 +19,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const config = require('../config');
 
 const LOGO_PATH = path.resolve(__dirname, '../../../assets/CEPCO-LOGO-LIGHT.png');
 
@@ -29,6 +30,12 @@ function logoBase64() {
   }
   return cachedLogoBase64;
 }
+
+// A hosted URL (needs APP_BASE_URL configured) renders as a normal inline
+// image with no attachment icon in the recipient's mail client — see
+// routes/publicAssets.js. Falls back to the CID-attachment approach when
+// APP_BASE_URL isn't set, so sending still works, just less elegantly.
+const logoUrl = config.appBaseUrl ? `${config.appBaseUrl}/api/public/assets/logo.png` : null;
 
 const escapeHtml = (s) => String(s ?? '')
   .replace(/&/g, '&amp;')
@@ -99,7 +106,9 @@ function buildCeppyDigestEmail({ nominations }) {
 <div style="background:#f4f4f5;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e5e5;">
     <div style="background:#16181d;padding:22px 28px;">
-      <img src="cid:cepco-logo" alt="Chicago Electric Piano Company" height="30" style="display:block;border:0;" />
+      ${logoUrl
+        ? `<img src="${logoUrl}" alt="Chicago Electric Piano Company" height="30" style="display:block;border:0;" />`
+        : '<img src="cid:cepco-logo" alt="Chicago Electric Piano Company" height="30" style="display:block;border:0;" />'}
     </div>
     <div style="padding:28px;">
       <h1 style="font-size:20px;margin:0 0 4px;color:#16181d;">This week's Ceppy nominations</h1>
@@ -122,7 +131,7 @@ function buildCeppyDigestEmail({ nominations }) {
   return {
     subject: "This week's Ceppy nominations — Chicago Electric Piano Company",
     html,
-    attachments: [
+    attachments: logoUrl ? [] : [
       {
         filename: 'cepco-logo.png',
         content: logoBase64(),

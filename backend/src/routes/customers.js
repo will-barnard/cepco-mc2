@@ -42,10 +42,34 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name || !String(b.name).trim()) throw badRequest('name is required');
+  const email = b.email ? String(b.email).trim() : '';
+
+  // Every "add a customer" screen in the app (this wizard's own quick-add
+  // form, the Tickets and Estimates new-item wizards' inline "add a new
+  // customer instead" checkbox) calls this same endpoint, and none of them
+  // know about each other's in-flight state. If a later step in the same
+  // wizard submission fails (a bad send, a network blip) after the customer
+  // was already created here, retrying re-runs the whole form from scratch
+  // and would otherwise insert a second row for the same person. Treat
+  // email as the dedup key — it's the one field customers reliably repeat
+  // across attempts, and the shop already relies on it being unique enough
+  // to use for quote-confirmation lookups elsewhere — and hand back the
+  // existing customer instead of creating a duplicate.
+  if (email) {
+    const { rows: existing } = await query(
+      'SELECT * FROM customers WHERE lower(email) = lower($1) LIMIT 1',
+      [email],
+    );
+    if (existing[0]) {
+      res.status(200).json(existing[0]);
+      return;
+    }
+  }
+
   const { rows } = await query(
     `INSERT INTO customers (name, email, phone, address, source, notes)
      VALUES ($1,$2,$3,$4,COALESCE($5,'direct'),$6) RETURNING *`,
-    [String(b.name).trim(), b.email || null, b.phone || null, b.address || null,
+    [String(b.name).trim(), email || null, b.phone || null, b.address || null,
       b.source || null, b.notes || null],
   );
   res.status(201).json(rows[0]);

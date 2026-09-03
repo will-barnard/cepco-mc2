@@ -97,10 +97,10 @@ router.post('/backfill/dismiss', requireAdmin, asyncHandler(async (req, res) => 
 }));
 
 // ---------------------------------------------------------------------------
-// Duplicate-customer review (services/xeroDuplicates.js) — cleanup for
-// pre-existing customers the regular sync's exact-match-only linking
-// missed and created a second, Xero-linked row for instead. See that
-// file's header for the merge semantics.
+// Duplicate-customer review (services/xeroDuplicates.js) — originally the
+// Xero-sync cleanup screen, generalized (§2.64) to cover any two
+// duplicate customer records, Xero-linked or not. See that file's header
+// for the merge semantics.
 // ---------------------------------------------------------------------------
 router.get('/duplicates/candidates', requireAdmin, asyncHandler(async (req, res) => {
   try {

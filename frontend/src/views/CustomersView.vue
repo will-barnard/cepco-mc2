@@ -218,6 +218,9 @@ const when = (ts) => new Date(ts).toLocaleString();
         <button v-if="auth.isAdmin" class="small" @click="showXeroConfig ? (showXeroConfig = false) : openXeroConfig()">
           {{ showXeroConfig ? 'Close' : 'Xero sync' }}
         </button>
+        <RouterLink v-if="auth.isAdmin" class="btn small" to="/customers/xero-duplicates">
+          Review duplicates
+        </RouterLink>
         <button class="primary" @click="showNew = !showNew">
           {{ showNew ? 'Cancel' : 'New customer' }}
         </button>

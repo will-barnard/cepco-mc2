@@ -50,6 +50,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/estimates', require('./routes/estimates'));
 app.use('/api/quotes', require('./routes/quotes'));
 app.use('/api/public/quotes', require('./routes/publicQuotes'));
+app.use('/api/public/assets', require('./routes/publicAssets'));
 app.use('/api/progress-updates', require('./routes/progressUpdates'));
 app.use('/api/public/progress-updates', require('./routes/publicProgressUpdates'));
 app.use('/api/procedures', require('./routes/procedures'));

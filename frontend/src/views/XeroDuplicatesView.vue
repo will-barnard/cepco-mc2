@@ -1,19 +1,22 @@
 <script setup>
 /**
- * Xero duplicate review — cleanup screen for pre-existing customers the
- * regular sync's exact-email/exact-name matching missed and created a
- * second, Xero-linked row for instead (services/xeroDuplicates.js). Same
- * confirm/reject shape as XeroBackfillView.vue, reusing the same scoring
- * approach, but pairing "a customer never linked to Xero" (survivor)
- * against "a customer the sync just created from Xero" (duplicate)
- * instead of MC2 customers against raw Xero contacts.
+ * Duplicate customer review (services/xeroDuplicates.js). Started as a
+ * Xero-sync cleanup screen — pre-existing customers the sync's exact-
+ * email/exact-name matching missed and created a second, Xero-linked row
+ * for instead — then generalized (§2.64) to score and merge any two
+ * customer records that look like the same person, whatever created the
+ * second one (a Xero sync miss is still the most common case in
+ * practice, hence "survivor"/"duplicate" naming and the Xero-specific
+ * card at the bottom). Same confirm/reject shape as XeroBackfillView.vue,
+ * reusing the same scoring approach.
  *
  * Merging is the only destructive action here — it reassigns every child
  * record (tickets, instruments, emails, estimates, progress updates) from
- * the duplicate onto the survivor, moves the Xero link over, and deletes
- * the duplicate row. There's no undo once that's clicked, so unlike the
- * backfill screen's "link" this doesn't get a bulk "merge all" button —
- * each pair is confirmed one at a time.
+ * the duplicate onto the survivor, moves over a Xero link the duplicate
+ * has and the survivor doesn't, and deletes the duplicate row. There's no
+ * undo once that's clicked, so unlike the backfill screen's "link" this
+ * doesn't get a bulk "merge all" button — each pair is confirmed one at
+ * a time.
  */
 import { ref, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -38,11 +41,12 @@ async function load() {
 }
 onMounted(load);
 
-async function mergePair(survivorId, duplicateId, survivorName) {
+async function mergePair(survivorId, duplicateId, survivorName, duplicateXeroLinked) {
   if (!confirm(
     `Merge into "${survivorName}"? This moves all of that duplicate's tickets, instruments, `
-    + 'estimates, and history onto this customer, links this customer to Xero instead, and '
-    + 'deletes the duplicate record. This cannot be undone.',
+    + 'estimates, and history onto this customer'
+    + (duplicateXeroLinked ? ', links this customer to Xero instead,' : '')
+    + ' and deletes the duplicate record. This cannot be undone.',
   )) return;
   busyKey.value = `${survivorId}:${duplicateId}`;
   error.value = '';
@@ -78,10 +82,12 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
   <div class="page">
     <div class="page-head">
       <div>
-        <h1 style="margin-bottom: 4px">Xero duplicate review</h1>
+        <h1 style="margin-bottom: 4px">Duplicate customer review</h1>
         <p class="muted small" style="margin: 0">
-          Customers the sync created from Xero that look like the same person as an existing,
-          unlinked customer. Merging moves that customer's history over and removes the duplicate.
+          Customer records that look like the same person — most often one the Xero sync created
+          for an existing customer it couldn't match exactly, but any other duplicate (e.g. a
+          repeated estimate or ticket submission) shows up here too. Merging moves the duplicate's
+          history over and removes it.
         </p>
       </div>
       <RouterLink class="btn small" to="/customers">← Customers</RouterLink>
@@ -106,7 +112,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
         <div v-else class="table-wrap">
           <table>
             <thead>
-              <tr><th>Existing customer</th><th>Duplicate (from Xero)</th><th>Matched on</th><th /></tr>
+              <tr><th>Existing customer</th><th>Duplicate</th><th>Matched on</th><th /></tr>
             </thead>
             <tbody>
               <tr v-for="r in data.confident" :key="`${r.survivor.id}:${r.duplicate.id}`">
@@ -116,6 +122,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
                 </td>
                 <td>
                   <strong>{{ r.duplicate.name }}</strong>
+                  <span v-if="r.duplicate.xero_linked" class="muted small">· Xero</span>
                   <div class="muted small">{{ [r.duplicate.email, r.duplicate.phone].filter(Boolean).join(' · ') }}</div>
                 </td>
                 <td class="small muted">{{ r.signals.map((s) => signalLabel[s]).join(', ') }} · {{ scorePct(r.score) }}</td>
@@ -129,7 +136,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
                     </button>
                     <button
                       class="small primary" :disabled="busyKey === `${r.survivor.id}:${r.duplicate.id}`"
-                      @click="mergePair(r.survivor.id, r.duplicate.id, r.survivor.name)"
+                      @click="mergePair(r.survivor.id, r.duplicate.id, r.survivor.name, r.duplicate.xero_linked)"
                     >
                       Merge
                     </button>
@@ -153,7 +160,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
         <div v-else class="table-wrap">
           <table>
             <thead>
-              <tr><th>Existing customer</th><th>Duplicate (from Xero)</th><th>Matched on</th><th /></tr>
+              <tr><th>Existing customer</th><th>Duplicate</th><th>Matched on</th><th /></tr>
             </thead>
             <tbody>
               <tr v-for="r in data.possible" :key="`${r.survivor.id}:${r.duplicate.id}`">
@@ -163,6 +170,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
                 </td>
                 <td>
                   <strong>{{ r.duplicate.name }}</strong>
+                  <span v-if="r.duplicate.xero_linked" class="muted small">· Xero</span>
                   <div class="muted small">{{ [r.duplicate.email, r.duplicate.phone].filter(Boolean).join(' · ') }}</div>
                 </td>
                 <td class="small muted">{{ r.signals.map((s) => signalLabel[s]).join(', ') || '—' }} · {{ scorePct(r.score) }}</td>
@@ -176,7 +184,7 @@ const signalLabel = { email: 'email', name: 'name', phone: 'phone' };
                     </button>
                     <button
                       class="small primary" :disabled="busyKey === `${r.survivor.id}:${r.duplicate.id}`"
-                      @click="mergePair(r.survivor.id, r.duplicate.id, r.survivor.name)"
+                      @click="mergePair(r.survivor.id, r.duplicate.id, r.survivor.name, r.duplicate.xero_linked)"
                     >
                       Merge
                     </button>

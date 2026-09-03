@@ -2738,6 +2738,97 @@ both the wizard's `childrenOf()`/`pickModelNode()` and
 `InstrumentModelPicker.vue`'s own walker are already fully generic over
 depth and shape, so this was a pure data fix.
 
+### 2.64 Fix: duplicate customer records on a failed estimate submit
+
+Will reported that making a test estimate created a duplicate customer
+record, even though he'd typed the same email both times — he'd had to
+"send the email twice." Traced it to `EstimateNewView.vue`'s `submit()`:
+creating the customer, creating each new instrument, creating the
+estimate, and (when sending) emailing it were five separate sequential
+API calls with nothing tying them together. If any later call failed —
+most likely the `/quotes/:id/send` call itself, e.g. while `APP_BASE_URL`
+was still missing from `docker-compose.yml` (§ above/see the env-var fix)
+— the customer, instruments, and estimate created by the earlier calls
+in that same attempt were already committed to the database. `busy`
+cleared, the error showed, and clicking "Save & send to customer" again
+re-ran `submit()` from scratch: since nothing remembered what the first
+attempt had already created, it inserted a second customer, second set
+of instruments, and second estimate, then (this time) sent successfully.
+Same root shape exists in `TicketNewView.vue`'s inline "add a new
+customer instead" step, not yet touched here.
+
+Two layers of fix, since only the backend one is a full guarantee if
+something else in the app ever hits the same retry pattern:
+
+- **`POST /customers`** (`backend/src/routes/customers.js`) now looks up
+  an existing customer by case-insensitive email match before inserting,
+  and returns that row instead of creating a new one when found. No
+  schema change — `customers.email` has no unique index (only
+  `portal_email` and the Xero contact id do, §2.60ish/047), so this is an
+  application-level dedup, not a DB constraint. Every "add a customer"
+  screen in the app goes through this one endpoint, so this closes the
+  gap everywhere at once, including the untouched `TicketNewView.vue`
+  path above.
+- **`EstimateNewView.vue`'s `submit()`** now remembers the customer id,
+  each block's instrument id, and the estimate id as they're created
+  (`createdCustomerId` / `createdInstrumentByBlock` / `createdEstimateId`,
+  module-scoped so they survive a retry within the same page load), and
+  skips any step whose id is already resolved. A retry after a failed
+  send now only re-attempts the send — no new customer, instrument, or
+  estimate rows at all, not even ones the email-based backend dedup
+  would have to clean up after the fact.
+
+### 2.65 Generalized the Xero duplicate-merge tool to any two customers
+
+Follow-up to §2.64: fixing the estimate wizard stops it from creating new
+duplicates, but it doesn't do anything about a duplicate the bug already
+created (or any other non-Xero duplicate — Will asked "will this merge
+duplicate records?" while reviewing that fix, and the honest answer was
+no). The only merge tool in the app (Customers → Review duplicates,
+§2.56) was built specifically for Xero-sync duplicates and refused
+outright on anything else: `mergeDuplicate()` threw `"That record was
+not created by the Xero sync — nothing to merge"` unless the duplicate
+side had `source = 'xero'` and a `xero_contact_id`, and the candidate
+scan in `computeDuplicateCandidates()` only ever paired "no Xero link"
+customers against "source = 'xero', has a Xero link" customers in the
+first place — two ordinary customers would never even show up as a
+candidate pair.
+
+`backend/src/services/xeroDuplicates.js` — both changed:
+
+- `computeDuplicateCandidates()` now scores every pair of customers
+  (still small enough for an admin-triggered, on-demand page — this
+  isn't polled anywhere), ordering each pair with a new `orderPair()`:
+  a Xero-linked customer still always survives over an unlinked one (the
+  sync only creates a new row when matching an existing one fails, so
+  that's still the right call), and otherwise the older row (lower id)
+  survives over the newer one, on the theory that the newer one is the
+  accidental repeat.
+- `mergeDuplicate()` dropped the "duplicate must be Xero-sourced" /
+  "survivor must be unlinked" checks entirely. It only refuses one case
+  now: both customers already linked to two *different* Xero contacts,
+  which is genuinely ambiguous to auto-resolve. Otherwise the duplicate's
+  Xero link (if any) moves onto the survivor exactly as before; two
+  plain customers merge with no Xero step at all.
+
+`frontend/src/views/XeroDuplicatesView.vue` copy updated to not overclaim
+a Xero connection when there isn't one (heading, description, table
+header, and the merge confirmation dialog now only mention Xero when
+`r.duplicate.xero_linked` is actually true), plus a small "· Xero" tag on
+rows where it applies. The candidate/merge routes in `routes/xero.js`
+needed no changes — they already just passed ids through.
+
+Also added a "Review duplicates" link to the Customers page header
+itself (previously this screen was only reachable from inside the
+"Xero sync" config panel, so a shop that's never touched Xero — or an
+admin who hasn't opened that panel — had no way to find it even though
+it now handles ordinary duplicates too).
+
+Did not do a one-off cleanup of the specific duplicate Will's test
+estimate created — he can now merge it himself from Customers → Review
+duplicates, or ask for that cleanup separately if it's not showing up
+as a candidate.
+
 ## 4. Suggested first moves after deploy
 
 
