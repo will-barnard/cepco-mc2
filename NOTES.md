@@ -2680,6 +2680,64 @@ hide-statuses menu) showing email/phone/address, plus a "View full
 profile →" link into `/customers?id=` for anything that actually needs
 the full record (instrument/ticket history, editing).
 
+### 2.63 Real instrument model trees, sourced from Listing Trees
+
+The instrument model picker (`instrument_models`, migration 036 — the
+tree the wizard's family/model screens and the older `InstrumentModelPicker.vue`
+both walk one level at a time) only ever had placeholder seed data: a
+"1970s" root for Rhodes, a bare "Mark II," nothing at all for Hohner/
+Strings/Organ. Migration 050 replaces it with the shop's real catalog,
+pulled from the Listing Trees app (the product-description-copy source of
+truth — see the `listing-trees` skill) rather than typed up by hand, so it
+stays consistent with what the shop's own listings already say about each
+model.
+
+Per Will's call: collapsed to root + one level, even where Listing Trees
+itself goes deeper for marketing-copy purposes (Rhodes Mark I splits into
+Fender-era/Late Torrington/Singer Tines/Schaller Tines sub-eras before
+cabinet type; Wurlitzer's 200/200A eras separately list "Early" and "Late"
+sub-periods that turned out to share an identical model-number list
+underneath, so collapsing them lost no real information). Root nodes:
+
+- **Rhodes** — Mark I / Mark II (each → Stage 73/88, Suitcase 73/88),
+  Sparkletop, Rhodes 54, Mark V, Mark 8, Piano Bass, Other (→ Pre-Piano,
+  Student Model, Instructor Model).
+- **Wurlitzer** — 110 & 120 Era, 140/145 Era (Pre-B), 140B/145B Era, 200
+  Era, 200A Era (each → its individual model numbers), Other.
+- **Hohner** — Clavinet, Pianet, Cembalet (each → its individual models),
+  Other. First real data this family has ever had.
+- **Strings** — Yamaha CP Series (→ CP-70/70B/70D/70M/80/80B/80D/80M),
+  Helpinstill Roadmaster (→ Roadmaster 64/88), Other. Also first data.
+- **Organ** — every combo-organ brand CEPCo has a Listing Trees entry for,
+  as sibling root nodes rather than a single flat list: Farfisa (→ Combo
+  Compact/Mini Compact/Compact Deluxe/Compact Duo/FAST 2-5), Vox (→
+  Continental/Continental II/Jaguar), Gibson & Kalamazoo (→ Kalamazoo
+  K-101/Gibson G-101/Gibson G-201), plus four single-model brands as bare
+  root leaves (Rheem Mark VII, RMI 368X Electra-Piano, Lowrey T2, Fender
+  Contempo Organ) and Howard Combo Organ. Also first data.
+- **Other** (the amp/rarity catch-all, §2.40) is untouched — no Listing
+  Trees copy exists for it.
+
+`is_suitcase` (migration 045's per-node "self-contained amp" flag, which
+the estimate wizard checks anywhere along a picked path, not just at the
+leaf) is set on Rhodes' own Suitcase 73/88 leaves and on Wurlitzer's three
+eras that are inherently self-contained tube-amp pianos (110 & 120 / 140-
+145 Pre-B / 140B-145B — flagged once at the era root rather than on every
+child, since the wizard's path check makes that equivalent). Left FALSE
+throughout the Wurlitzer 200/200A model numbers, since which of those
+specifically have a built-in speaker vs. need an external amp is a finer
+distinction than this migration was confident calling one by one — worth
+a pass in Settings → Instrument models from whoever knows that lineup's
+cabinets by number.
+
+Since no live estimates reference the old placeholder rows yet, the
+migration deletes every `rhodes`/`wurlitzer`/`hohner`/`strings`/`organ`
+row outright (cascading to their children via the existing `parent_id`
+FK) rather than trying to preserve or remap old ids. No code changed —
+both the wizard's `childrenOf()`/`pickModelNode()` and
+`InstrumentModelPicker.vue`'s own walker are already fully generic over
+depth and shape, so this was a pure data fix.
+
 ## 4. Suggested first moves after deploy
 
 
