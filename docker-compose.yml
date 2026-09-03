@@ -39,6 +39,12 @@ services:
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       STORAGE_LOCAL_DIR: /data/uploads
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # The shop's own public URL, used to build customer-facing links that
+      # live server-side (quote confirm/decline, progress-update pages) —
+      # routes/quotes.js and routes/progressUpdates.js both refuse to send
+      # without it rather than emailing a broken link. Distinct from
+      # PUBLIC_BASE_URL above (that one's for GCS-served asset URLs).
+      APP_BASE_URL: ${APP_BASE_URL:-}
       GCS_BUCKET_NAME: ${GCS_BUCKET_NAME:-}
       GCS_SERVICE_ACCOUNT_KEY: ${GCS_SERVICE_ACCOUNT_KEY:-}
       GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
