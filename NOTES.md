@@ -3006,6 +3006,63 @@ kiosk mode is on for this device — the boot/restore path only; an
 interactive `login()` or `switchTo()` never calls `auth.load()`, so this
 can't undo a switch that just happened.
 
+### 2.73 Estimate wizard: auto-detect the key-count variant instead of asking
+
+Several Rhodes parts (grommets, hammer tips, tolex, the white key/sharp)
+price differently by key count — migration 043's four
+`parts_cost_piano_bass`/`_54_key`/`_73_key`/`_88_key` columns — and the
+wizard's procedure checklist used to make the estimator pick the right one
+from a per-line dropdown every time. But the instrument's key count is
+already settled earlier in the same flow, baked into the model it was
+picked as (walking the tree lands on a leaf like "Stage 73" or "Suitcase
+88"; the standalone leaves "Piano Bass" and "Rhodes 54" carry it directly)
+— asking again per procedure was pure friction, and an occasional source
+of a wrong pick.
+
+`EstimateNewView.vue` now derives it instead: `detectVariantKey()` matches
+"Piano Bass" or a bare 54/73/88 (word-boundaried, so "Mark 8" doesn't
+false-match "88") against the instrument's model text — the tree path
+being built live for a new instrument, or the already-saved `model` string
+for an existing one (the same text `blockModelChain()` would have written
+when that instrument was first created). `procedureVariantStatus(p,
+block)` turns that into one of four states per procedure: `none` (doesn't
+price by variant at all — most procedures), `ok` (this instrument's key
+count has a price here — resolved and applied with no prompt), `unavailable`
+(the key count is known, but this specific procedure has no price for it —
+migration 043's "blank means it doesn't apply at that key count" case,
+e.g. no tine kit variant for a Rhodes 54), or `unknown` (the model has no
+determinable key count at all — "Sparkletop", "Mark V", "Mark 8", or a
+fully manual/free-typed model name). The checklist's dropdown is gone; a
+procedure's checkbox is simply disabled for `unavailable`/`unknown`, with
+`itemCostDisplay()` explaining why inline ("not applicable to this
+instrument" / "this instrument's key count isn't set") instead of pricing
+it wrong or letting the estimator guess. `submit()` keeps the same check
+as a server-round-trip-avoiding backstop, not the primary guard anymore.
+
+### 2.74 Estimate wizard: bigger, tap-friendly checkboxes on the procedure screens
+
+The four procedure-picking screens (Standard Setup & Actions / Electronics
+/ Cosmetics / Parts) were still using the app-wide `.checklist`/`.checkbox`
+classes — a compact 9px-padding row with a 20px native checkbox, sized for
+a mouse pointer at a desk. Everything else in this same wizard already
+follows an explicit "big iPad tap targets" rule (see this file's own N10
+comment — the family/model screens use 84px-tall button tiles), so this
+was the one screen that didn't match, and it's also the screen with the
+most items to tap through per instrument.
+
+Added a `.wiz-checklist` class (scoped to this view only — the shared
+`.checklist`/`.checkbox` classes elsewhere, e.g. the shipping checklist,
+are untouched) that turns each procedure into its own card: a redrawn
+28px custom checkbox (native checkboxes render inconsistently small
+across browsers) with an explicit checkmark, 16px item text, a 56px-tall
+tap area covering the whole row via the existing `<label>` wrap, and —
+where the browser supports `:has()` (Safari 15.4+/iPadOS, which this
+screen is built for) — the whole card's border and background highlight
+on check, so a tech can tell what's selected at a glance without reading
+each tiny checkbox individually. A disabled checkbox (the auto-detected-
+variant states from §2.73) dims its whole card rather than just looking
+like an inert tiny checkbox.
+
 ## 4. Suggested first moves after deploy
 
 

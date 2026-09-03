@@ -129,7 +129,6 @@ function blankBlock() {
     nickname: '',
     step: 'pick-existing', // set properly by addAnotherInstrument()
     selected: {}, // procedure_id -> true
-    variants: {}, // procedure_id -> parts variant key
   };
 }
 const blocks = ref([]);
@@ -273,7 +272,17 @@ function blockShowsElectronics(block) {
   return true;
 }
 
-// Parts-by-variant (migration 043) — unchanged from the original builder.
+// Parts-by-variant (migration 043). Used to require the estimator to pick
+// a key-count variant from a dropdown for every parts-priced procedure —
+// but the instrument's key count is already known by this point in the
+// wizard (it's baked into the model the customer's instrument was picked
+// as, e.g. "Mark I / Stage 73" or "Piano Bass"), so asking a human to
+// re-state it per procedure was pure friction, and an occasional source of
+// mis-pricing if they picked the wrong one. Auto-detected instead: the
+// model text always carries one of "Piano Bass" / "54" / "73" / "88" for
+// every Rhodes leaf that actually has key-count-dependent parts pricing
+// (see migration 050's tree) — Wurlitzer and every other family never use
+// these columns at all (migration 044).
 const VARIANT_FIELDS = [
   { key: 'piano_bass', label: 'Piano Bass' },
   { key: '54_key', label: '54-Key' },
@@ -283,19 +292,60 @@ const VARIANT_FIELDS = [
 function variantsFor(p) {
   return VARIANT_FIELDS.filter((v) => p[`parts_cost_${v.key}`] !== null && p[`parts_cost_${v.key}`] !== undefined);
 }
+// Piano Bass checked before the digit patterns purely so a hypothetical
+// "Piano Bass 73-something" model (none exist today) would still resolve
+// to piano_bass rather than 73_key — the four are otherwise disjoint.
+function detectVariantKey(modelText) {
+  const text = modelText || '';
+  if (/piano\s*bass/i.test(text)) return 'piano_bass';
+  if (/\b54\b/.test(text)) return '54_key';
+  if (/\b73\b/.test(text)) return '73_key';
+  if (/\b88\b/.test(text)) return '88_key';
+  return null;
+}
+// An existing instrument's key count lives in its already-saved `model`
+// text (set from this same blockModelChain() when it was first created);
+// a new instrument's lives in the tree path/manual text being built right
+// now.
+function blockVariantKey(block) {
+  if (block.mode === 'existing') {
+    const inst = customerInstruments.value.find((i) => i.id === block.instrumentId);
+    return detectVariantKey(inst?.model);
+  }
+  return detectVariantKey(blockModelChain(block));
+}
+// 'none' — procedure doesn't price parts by variant at all, nothing to resolve.
+// 'ok' — this instrument's detected key count has a price on this procedure.
+// 'unavailable' — the key count is known, but this specific procedure has
+//   no price for it (migration 043: a blank variant column means that part
+//   genuinely doesn't apply at that key count, e.g. no tine kit for a
+//   Rhodes 54) — the procedure doesn't apply to this instrument.
+// 'unknown' — this instrument's key count couldn't be determined at all
+//   (a model with no digits in it, e.g. "Sparkletop", or a fully manual
+//   model name) — there's no safe price to auto-apply.
+function procedureVariantStatus(p, block) {
+  const variants = variantsFor(p);
+  if (!variants.length) return 'none';
+  const key = blockVariantKey(block);
+  if (!key) return 'unknown';
+  return variants.some((v) => v.key === key) ? 'ok' : 'unavailable';
+}
 function resolvedAmount(p, block) {
   const variants = variantsFor(p);
   if (variants.length) {
-    const chosen = block.variants[p.id];
-    return chosen ? Number(p[`parts_cost_${chosen}`]) : null;
+    const key = blockVariantKey(block);
+    const match = key && variants.find((v) => v.key === key);
+    return match ? Number(p[`parts_cost_${key}`]) : null;
   }
   if (p.flat_cost !== null && p.flat_cost !== undefined) return Number(p.flat_cost);
   return p.pricing_type === 'flat' ? null : 0;
 }
 const money = (n) => Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 function itemCostDisplay(p, block) {
+  const status = procedureVariantStatus(p, block);
+  if (status === 'unknown') return "this instrument's key count isn't set";
+  if (status === 'unavailable') return 'not applicable to this instrument';
   const amount = resolvedAmount(p, block);
-  if (variantsFor(p).length && amount === null) return 'select variant';
   if (p.pricing_type === 'flat') return money(amount || 0);
   return `${p.min_hours}-${p.max_hours} hrs${amount ? ` + ${money(amount)} parts` : ''}`;
 }
@@ -411,11 +461,19 @@ async function submit(sendAfterCreate) {
   const items = [];
   for (const block of blocks.value) {
     for (const p of selectedProceduresFor(block)) {
-      if (variantsFor(p).length && !block.variants[p.id]) {
-        error.value = `Select a key-count variant for "${p.name}".`;
+      const status = procedureVariantStatus(p, block);
+      // Both of these should already be impossible via the disabled checkbox
+      // below — this is just the same "never trust client-only validation"
+      // backstop every other submit() check here already follows.
+      if (status === 'unknown') {
+        error.value = `Can't price "${p.name}" — ${instrumentLabel(block)}'s key count isn't set.`;
         return;
       }
-      items.push({ block, procedure_id: p.id, parts_variant: block.variants[p.id] || null });
+      if (status === 'unavailable') {
+        error.value = `"${p.name}" doesn't apply to ${instrumentLabel(block)}.`;
+        return;
+      }
+      items.push({ block, procedure_id: p.id, parts_variant: status === 'ok' ? blockVariantKey(block) : null });
     }
   }
   if (!items.length) { error.value = 'Select at least one procedure for at least one instrument.'; return; }
@@ -619,24 +677,20 @@ async function submit(sendAfterCreate) {
       >
         <h2>{{ CATEGORY_LABELS[activeBlock.step] }}</h2>
         <p class="muted small">{{ instrumentLabel(activeBlock) }}</p>
-        <ul class="checklist">
-          <li v-for="p in proceduresForCategory(activeBlock, activeBlock.step)" :key="p.id" style="align-items: center">
-            <label class="checkbox" style="flex: 1">
-              <input v-model="activeBlock.selected[p.id]" type="checkbox" />
+        <ul class="checklist wiz-checklist">
+          <li v-for="p in proceduresForCategory(activeBlock, activeBlock.step)" :key="p.id">
+            <label class="checkbox">
+              <input
+                v-model="activeBlock.selected[p.id]" type="checkbox"
+                :disabled="!['none', 'ok'].includes(procedureVariantStatus(p, activeBlock))"
+              />
               <span>
                 {{ p.name }}
                 <span class="item-note">{{ itemCostDisplay(p, activeBlock) }}</span>
               </span>
             </label>
-            <select
-              v-if="activeBlock.selected[p.id] && variantsFor(p).length"
-              v-model="activeBlock.variants[p.id]" class="small" style="max-width: 140px"
-            >
-              <option value="">— select variant —</option>
-              <option v-for="v in variantsFor(p)" :key="v.key" :value="v.key">{{ v.label }}</option>
-            </select>
           </li>
-          <li v-if="!proceduresForCategory(activeBlock, activeBlock.step).length" class="muted small" style="padding: 6px 0">
+          <li v-if="!proceduresForCategory(activeBlock, activeBlock.step).length" class="muted small">
             Nothing configured under {{ CATEGORY_LABELS[activeBlock.step] }} for this instrument type yet.
           </li>
         </ul>
@@ -799,4 +853,47 @@ async function submit(sendAfterCreate) {
 .wiz-btn.ghost { background: transparent; border-style: dashed; font-weight: 500; }
 .wiz-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 .wiz-actions button { min-height: 48px; padding: 10px 18px; font-size: 15px; }
+
+/* Procedure checklist (screens 3-6) — the busiest, most-tapped screen in
+   the wizard, so it gets the same big-tap-target treatment as the
+   family/model tiles above rather than the app-wide .checklist's compact
+   desktop row (9px padding, a 20px checkbox meant for a mouse pointer).
+   Each procedure is its own card with a large custom checkbox and a
+   clear checked state, so a tech scanning the list at arm's length next
+   to an open piano can tell what's selected at a glance and tap
+   accurately without zooming in. */
+.wiz-checklist { display: flex; flex-direction: column; gap: 10px; }
+.wiz-checklist li {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); padding: 0;
+}
+.wiz-checklist li.muted { border: none; background: none; padding: 6px 0; }
+.wiz-checklist li:has(input:checked) { border-color: var(--accent); background: rgba(212, 129, 63, 0.14); }
+.wiz-checklist li:has(input:disabled) { opacity: 0.55; }
+.wiz-checklist .checkbox {
+  align-items: center; gap: 14px; margin: 0; padding: 16px;
+  min-height: 56px; cursor: pointer;
+}
+.wiz-checklist .checkbox:has(input:disabled) { cursor: not-allowed; }
+.wiz-checklist .checkbox span { font-size: 16px; }
+.wiz-checklist .item-note { margin-top: 3px; font-size: 13px; }
+/* Native checkboxes read small and mouse-tuned everywhere else in the
+   app; redrawn bigger here (28px, well past the 24px touch minimum)
+   with an explicit checked mark rather than relying on each browser's
+   own tiny native tick. */
+.wiz-checklist input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none; margin: 0; flex: none;
+  width: 28px; height: 28px; min-height: 28px;
+  border: 2px solid var(--border); border-radius: 6px;
+  background: var(--bg); position: relative; cursor: pointer;
+}
+.wiz-checklist input[type='checkbox']:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+.wiz-checklist input[type='checkbox']:checked::after {
+  content: ''; position: absolute; left: 9px; top: 4px;
+  width: 7px; height: 13px; border: solid var(--bg);
+  border-width: 0 3px 3px 0; transform: rotate(45deg);
+}
+.wiz-checklist input[type='checkbox']:disabled { cursor: not-allowed; }
 </style>
