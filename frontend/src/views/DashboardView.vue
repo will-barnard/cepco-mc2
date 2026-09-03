@@ -10,6 +10,7 @@ const settings = useSettings();
 
 const summary = ref(null);
 const myTasks = ref([]);
+const myPriorityTicketsRaw = ref([]);
 const myTickets = ref([]);
 const unassigned = ref([]);
 const departing = ref([]);
@@ -69,6 +70,28 @@ const regularTasks = computed(
   () => myTasks.value.filter((t) => !settings.highlightTasksForPriority(t.priority_key)),
 );
 
+// "Priority tickets" — a flagged priority tier is meant to make a ticket
+// impossible to miss even when nobody's added it any tasks yet (e.g. a
+// shipping ticket before this same change started auto-creating one — see
+// routes/tickets.js). priorityTasks above only ever surfaces *tasks*, so a
+// ticket with zero ticket_tasks rows never showed up there no matter how
+// urgent it was. This pulls in the raw tickets themselves — assigned to
+// me, sitting in a status that unlocks tasks (same gate as the tasks
+// list, so this only surfaces tickets actively being worked, not every
+// high-priority ticket regardless of progress), at a flagged priority
+// tier — and excludes any ticket already represented by a row in
+// priorityTasks above, so an urgent ticket that *does* have tasks doesn't
+// show up twice in the same card.
+async function loadMyPriorityTickets() {
+  myPriorityTicketsRaw.value = await api.get('/tickets', { technician_id: auth.user.id });
+}
+const priorityTaskTicketIds = computed(() => new Set(priorityTasks.value.map((t) => t.ticket_id)));
+const priorityTickets = computed(
+  () => myPriorityTicketsRaw.value.filter((t) => settings.highlightTasksForPriority(t.priority_key)
+    && settings.unlocksTasks(t.status_key)
+    && !priorityTaskTicketIds.value.has(t.id)),
+);
+
 async function toggleMyTask(task) {
   await api.patch(`/tasks/${task.id}`, { done: !task.done });
   await loadMyTasks();
@@ -104,6 +127,7 @@ onMounted(async () => {
   await Promise.all([
     api.get('/tickets/summary').then((s) => { summary.value = s; }),
     loadMyTasks(),
+    loadMyPriorityTickets(),
     loadMine(),
     loadUnassigned(),
     // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
@@ -190,14 +214,14 @@ onMounted(async () => {
       </div>
 
       <div
-        v-if="priorityTasks.length" class="card"
+        v-if="priorityTasks.length || priorityTickets.length" class="card"
         style="margin-bottom: 24px; border-color: var(--red)"
       >
         <h2>Priority tasks</h2>
         <p class="muted small" style="margin: 0 0 10px">
           From tickets at a priority level flagged to stand out — see Settings → Priority tiers.
         </p>
-        <ul class="checklist">
+        <ul v-if="priorityTasks.length" class="checklist">
           <li v-for="t in priorityTasks" :key="t.id">
             <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
             <div style="flex: 1; min-width: 0">
@@ -206,6 +230,19 @@ onMounted(async () => {
             </div>
           </li>
         </ul>
+        <template v-if="priorityTickets.length">
+          <p class="muted small" style="margin: 14px 0 10px">
+            Tickets at this priority with no tasks of their own yet.
+          </p>
+          <ul class="checklist">
+            <li v-for="t in priorityTickets" :key="t.id">
+              <div style="flex: 1; min-width: 0">
+                <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
+                <div class="muted small">{{ t.category_label }} · {{ t.priority_label }}</div>
+              </div>
+            </li>
+          </ul>
+        </template>
       </div>
 
       <div class="card" style="margin-bottom: 24px">

@@ -135,7 +135,18 @@ async function resolveStatusForCategory(key, categoryKey, isShipping = false) {
  * hand. A missing, retired, or inapplicable override is silently ignored
  * — a bad Settings value must never break ticket creation for the
  * category that set it — falling through to the same "first non-retired,
- * applicable status" default every other category already gets. */
+ * applicable status" default every other category already gets.
+ *
+ * A shipping ticket (isShipping) gets the same 'in_progress' preference
+ * directly, independent of any category override — is_shipping is a
+ * per-ticket flag, not a per-category one (migration 028), and
+ * 'orders_shipping' also carries real non-shipping billable orders that
+ * shouldn't all start on 'in_progress' just for sharing that category, so
+ * this can't be expressed as category.meta.default_status_key the way
+ * Daily To-Do's is. Its own auto-created task (insertTicketRow's
+ * is_shipping branch) would otherwise sit on 'not_started' — a status
+ * that's valid for a shipping ticket but doesn't unlock tasks — same
+ * "created but invisible" gap the Daily To-Do fix above closes. */
 async function defaultStatusForCategory(categoryKey, isShipping = false) {
   const rows = await listCategory('ticket_status');
 
@@ -152,6 +163,13 @@ async function defaultStatusForCategory(categoryKey, isShipping = false) {
     // categoryKey itself doesn't resolve — fall through to the plain
     // default below, whose own "no eligible status" check gives the
     // caller a clearer error than this lookup failing would.
+  }
+
+  if (isShipping) {
+    const inProgress = rows.find((r) => r.key === 'in_progress');
+    if (inProgress && !inProgress.retired && statusAppliesToCategory(inProgress, categoryKey, isShipping)) {
+      return inProgress;
+    }
   }
 
   const match = rows.find((r) => !r.retired && statusAppliesToCategory(r, categoryKey, isShipping));

@@ -586,25 +586,32 @@ async function insertTicketRow(client, b, resolved, createdById) {
   }
 
   // A ticket whose whole point is usually its own title ("Clean
-  // bathroom", "AM Inbox Clearing", any plain Daily To-Do) — auto-
-  // creating one ticket_tasks row from that title means it shows up on
-  // its assignee's dashboard the moment the ticket's status unlocks tasks
-  // (meta.unlocks_tasks — migration 022), the same way any other task
-  // does, rather than needing someone to open the ticket and add one by
-  // hand first. Which categories get this is a Settings-editable
-  // per-category meta flag (ticket_category.meta.auto_task_from_title,
-  // migration 051) rather than a hardcoded category key — this used to
-  // check `category.key === 'housekeeping'` directly, exactly the kind of
+  // bathroom", "AM Inbox Clearing", any plain Daily To-Do, "Ship this
+  // instrument") — auto-creating one ticket_tasks row from that title
+  // means it shows up on its assignee's dashboard the moment the
+  // ticket's status unlocks tasks (meta.unlocks_tasks — migration 022),
+  // the same way any other task does, rather than needing someone to
+  // open the ticket and add one by hand first. Which categories get this
+  // is a Settings-editable per-category meta flag
+  // (ticket_category.meta.auto_task_from_title, migration 051) rather
+  // than a hardcoded category key — this used to check
+  // `category.key === 'housekeeping'` directly, exactly the kind of
   // hardcoded-key fragility N4a already called out elsewhere (see
   // NOTES.md); Housekeeping and Daily To-Do's both have the flag set
-  // today. Every ticket-creation path funnels through this one function
-  // (manual creation, the "+ Add sub-ticket" form, and — the most common
-  // case by volume — services/recurringTickets.js's daily/weekly
-  // firings), so this one insert covers all of them instead of repeating
-  // the same check at each call site. position 10 since a fresh ticket
-  // has no other tasks yet to sit behind (same MAX(...)+10 convention as
+  // today. Shipping tickets get the same treatment via the is_shipping
+  // flag instead of a category flag, since "is this a shipping job" is
+  // already tracked per-ticket rather than per-category (migration 028)
+  // — 'orders_shipping' also carries real billable orders that shouldn't
+  // all get an auto-task just for being in that category, so this checks
+  // the ticket's own resolved is_shipping instead of category.key. Every
+  // ticket-creation path funnels through this one function (manual
+  // creation, the "+ Add sub-ticket" form, and — the most common case by
+  // volume — services/recurringTickets.js's daily/weekly firings), so
+  // this one insert covers all of them instead of repeating the same
+  // check at each call site. position 10 since a fresh ticket has no
+  // other tasks yet to sit behind (same MAX(...)+10 convention as
   // category_queue_position, just starting from empty).
-  if (category.meta && category.meta.auto_task_from_title) {
+  if ((category.meta && category.meta.auto_task_from_title) || created.is_shipping) {
     await client.query(
       `INSERT INTO ticket_tasks (ticket_id, title, technician_id, position, created_by)
        VALUES ($1, $2, $3, 10, $4)`,

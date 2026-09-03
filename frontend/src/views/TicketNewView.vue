@@ -105,12 +105,37 @@ function pickCategory(key) {
 const statusOptions = computed(
   () => settings.statusesForCategory(form.value.category_key, isShippingCategory.value),
 );
+// Mirrors services/settings.js's defaultStatusForCategory() exactly: a
+// category can name its own preferred starting status
+// (ticket_category.meta.default_status_key, migration 051 — e.g. Daily
+// To-Do's starts at 'in_progress' so its auto-created task is immediately
+// visible on "My tasks" instead of sitting invisible on Reservation), and
+// a shipping ticket prefers 'in_progress' directly regardless of category
+// override (is_shipping is per-ticket, not per-category — see the same
+// reasoning in defaultStatusForCategory's own comment). This form always
+// submits an explicit status_key (the <select> below is bound to it), so
+// neither of the backend's own fallbacks ever actually runs for a
+// manually-created ticket — they only kick in for callers that omit
+// status_key entirely (the recurring-ticket scheduler, quote conversion).
+// Without mirroring both here, a Daily To-Do or shipping ticket created
+// by hand would keep landing back on whatever sorts first (Reservation/
+// Not Started), silently undoing the override. Falls back to "first
+// applicable status" (statusOptions.value[0]) exactly like the backend
+// does when there's no override, or the override doesn't apply to this
+// category/is_shipping combination.
+const defaultStatusKey = computed(() => {
+  const category = settings.categories.find((c) => c.key === form.value.category_key);
+  const preferredKey = category?.meta?.default_status_key;
+  if (preferredKey && statusOptions.value.some((s) => s.key === preferredKey)) return preferredKey;
+  if (isShippingCategory.value && statusOptions.value.some((s) => s.key === 'in_progress')) return 'in_progress';
+  return statusOptions.value[0]?.key || '';
+});
 // If the category changes out from under the currently-picked status,
 // re-home it to that combination's default rather than silently
 // submitting a status the backend will reject.
 watch(() => form.value.category_key, () => {
   if (!statusOptions.value.some((s) => s.key === form.value.status_key)) {
-    form.value.status_key = statusOptions.value[0]?.key || '';
+    form.value.status_key = defaultStatusKey.value;
   }
 });
 
