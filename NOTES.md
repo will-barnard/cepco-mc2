@@ -2931,6 +2931,81 @@ between. Skips sending entirely (no attempt, no log rows) when Resend
 isn't configured at all, same posture as every other optional-mailer
 feature in this codebase.
 
+### 2.71 Daily To-Do's: end-of-day archive, start "in progress", auto-task from title
+
+Three related requests, all scoped to the `daily_todo` ticket category
+("Daily To-Do's" — the catch-all category staff pick by hand from the
+Queue page's "By category" picker, distinct from the automated AM/PM
+recurring-ticket-template firings under `housekeeping`/
+`orders_shipping`, which this section does not touch).
+
+**End-of-day archive.** `services/recurringTickets.js` gained
+`dailyTodoArchiveSweep()`, called from the same 60-second `tick()` that
+already drives the recurring-ticket engine (mirrors that file's own
+shop-timezone-guarded, missed-tick-recovers pattern rather than a
+separate OS-level cron): once the shop-local clock passes 23:00 and the
+sweep hasn't already run today, it archives every non-archived
+`daily_todo` ticket and records the run in a new `shop_config` /
+`daily_todo_archive` settings row's `meta.last_run_at`.
+
+**Start "in progress".** `settings.js`'s `defaultStatusForCategory()`
+now checks a new `ticket_category.meta.default_status_key` override
+before falling back to its old "first non-retired status applicable to
+this category" behavior. `daily_todo` is seeded with
+`default_status_key: 'in_progress'`. No Settings UI for this override
+yet — it's DB/migration-only this round, deliberately scoped down; a
+picker can follow if other categories want one.
+
+**Auto-task from title.** `tickets.js`'s `insertTicketRow()` used to
+create a ticket's first `ticket_tasks` row from the ticket's own title
+only `if (category.key === 'housekeeping')` — a hardcoded key check of
+exactly the kind N4a warns against. Generalized to a Settings-editable
+`ticket_category.meta.auto_task_from_title` flag (Housekeeping keeps
+`true`, nothing changes for it) and turned it on for `daily_todo` too,
+with a matching checkbox added to Settings → Ticket categories. Answers
+the "double check" directly: Daily To-Do tickets did not get this
+before — they do now.
+
+Migration: `051_daily_todo_workflow.sql`.
+
+### 2.72 Kiosk mode: PIN autofocus, switch-to-home, and a refresh bug that skipped profile select
+
+Three fixes to `UserSwitcher.vue` (the kiosk lock/switch overlay) and
+`App.vue`:
+
+**PIN input wasn't highlighted.** The PIN `<input>` had a static
+`autofocus` attribute, but it's rendered into an already-mounted page via
+`v-if`/`v-else` when an admin's tile is tapped — not present at the
+page's initial parse — and browsers don't reliably honor `autofocus` on
+an element that appears after the fact. Added a template ref plus a
+`watch(target, ...)` that imperatively calls `.focus()`/`.select()` on
+the input every time the PIN step is entered (including switching from
+one admin's PIN entry back to the grid and into a different admin's).
+
+**Switching accounts left you on the old page.** `UserSwitcher.vue`'s
+`doSwitch()` called `auth.switchTo()` and `kiosk.unlock()` but never
+navigated, and because `App.vue` mounts `<UserSwitcher>` unconditionally
+alongside `<RouterView>` (so the view never unmounts across a lock/
+switch — that's what lets a tech's in-progress typing survive a lock),
+whatever page was showing before the lock kept showing after the
+switch. `doSwitch()` now finishes with `router.push({ name:
+'dashboard' })` so switching in always lands on a known, neutral
+starting point.
+
+**Refresh silently restored the previous session, skipping profile
+select.** `kiosk.locked` is in-memory Pinia state that always
+initializes to `false` on every store creation — i.e. on every page
+load — while `auth.load()` restores a signed-in session from the
+server-side cookie on boot. The `watch(() => auth.signedIn, ...)` in
+`App.vue` only fires on a *transition* into signed-in, which never
+happens on a refresh where the cookie was already valid, so nothing
+ever re-locked the kiosk. `App.vue`'s `onMounted(() => { if
+(!auth.ready) auth.load(); })` now locks the kiosk (`kiosk.lock()`)
+once `auth.load()` resolves, if the restored session is signed in and
+kiosk mode is on for this device — the boot/restore path only; an
+interactive `login()` or `switchTo()` never calls `auth.load()`, so this
+can't undo a switch that just happened.
+
 ## 4. Suggested first moves after deploy
 
 

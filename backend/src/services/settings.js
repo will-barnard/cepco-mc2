@@ -124,9 +124,36 @@ async function resolveStatusForCategory(key, categoryKey, isShipping = false) {
 
 /** The first non-retired status usable by this category, in sort order —
  * used to default a new ticket's status, and to re-home a ticket whose
- * status stops being valid after its category changes. */
+ * status stops being valid after its category changes. A category can
+ * override this with its own preferred starting status
+ * (ticket_category.meta.default_status_key, Settings -> Ticket categories
+ * — same per-category-meta pattern as default_assignee_id) — e.g. Daily
+ * To-Do's starts at 'in_progress' (migration 051) rather than whatever
+ * status happens to sort first, so its auto-created task (see
+ * insertTicketRow's auto_task_from_title) is immediately visible on "My
+ * tasks" instead of sitting invisible until someone flips the status by
+ * hand. A missing, retired, or inapplicable override is silently ignored
+ * — a bad Settings value must never break ticket creation for the
+ * category that set it — falling through to the same "first non-retired,
+ * applicable status" default every other category already gets. */
 async function defaultStatusForCategory(categoryKey, isShipping = false) {
   const rows = await listCategory('ticket_status');
+
+  try {
+    const categoryRow = await resolve('ticket_category', categoryKey);
+    const preferredKey = categoryRow.meta && categoryRow.meta.default_status_key;
+    if (preferredKey) {
+      const preferred = rows.find((r) => r.key === preferredKey);
+      if (preferred && !preferred.retired && statusAppliesToCategory(preferred, categoryKey, isShipping)) {
+        return preferred;
+      }
+    }
+  } catch {
+    // categoryKey itself doesn't resolve — fall through to the plain
+    // default below, whose own "no eligible status" check gives the
+    // caller a clearer error than this lookup failing would.
+  }
+
   const match = rows.find((r) => !r.retired && statusAppliesToCategory(r, categoryKey, isShipping));
   if (!match) throw badRequest('No ticket statuses are configured for this category');
   return match;

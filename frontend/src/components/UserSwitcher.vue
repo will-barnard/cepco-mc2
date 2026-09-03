@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
+import { useRouter } from 'vue-router';
 import { useAuth, useKiosk, useRefData } from '../stores';
 
 // The kiosk lock screen. Mounted once, unconditionally, in App.vue — it
@@ -10,13 +11,28 @@ import { useAuth, useKiosk, useRefData } from '../stores';
 const auth = useAuth();
 const kiosk = useKiosk();
 const refData = useRefData();
+const router = useRouter();
 
 const target = ref(null); // employee currently being switched into (pin step) or null (grid step)
 const pin = ref('');
 const error = ref('');
 const busy = ref(false);
+const pinInput = ref(null); // template ref — see the watch(target) below
 
 const roster = computed(() => refData.employees.filter((e) => e.active));
+
+// A static `autofocus` attribute doesn't reliably take effect on an element
+// that's toggled into an already-mounted page via v-if (as opposed to one
+// present at initial document parse), so focus the PIN input imperatively
+// whenever the PIN step is entered — including going grid → PIN → back →
+// grid → PIN again for a different admin.
+watch(target, (employee) => {
+  if (!employee) return;
+  nextTick(() => {
+    pinInput.value?.focus();
+    pinInput.value?.select();
+  });
+});
 
 function pick(employee) {
   error.value = '';
@@ -42,6 +58,11 @@ async function doSwitch(employeeId, pinValue) {
     target.value = null;
     pin.value = '';
     kiosk.unlock();
+    // Switching accounts on a shared kiosk should land the new person on a
+    // known, neutral starting point — not wherever the previous person's
+    // browsing happened to leave the RouterView (which never unmounts
+    // across a lock/switch cycle).
+    router.push({ name: 'dashboard' });
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -98,6 +119,7 @@ function stayAsIs() {
 
         <form class="stack" style="max-width: 220px; margin: 20px auto 0" @submit.prevent="submitPin">
           <input
+            ref="pinInput"
             v-model="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4"
             autofocus placeholder="••••" style="text-align: center; font-size: 24px; letter-spacing: 10px"
           />

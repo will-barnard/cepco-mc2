@@ -585,21 +585,26 @@ async function insertTicketRow(client, b, resolved, createdById) {
     );
   }
 
-  // Housekeeping (NOTES.md): a Housekeeping ticket's whole point is
-  // usually its own title ("Clean bathroom", "AM Inbox Clearing") — auto-
+  // A ticket whose whole point is usually its own title ("Clean
+  // bathroom", "AM Inbox Clearing", any plain Daily To-Do) — auto-
   // creating one ticket_tasks row from that title means it shows up on
   // its assignee's dashboard the moment the ticket's status unlocks tasks
   // (meta.unlocks_tasks — migration 022), the same way any other task
   // does, rather than needing someone to open the ticket and add one by
-  // hand before a recurring chore or daily sweep is visible there at all.
-  // Every Housekeeping-creation path funnels through this one function
+  // hand first. Which categories get this is a Settings-editable
+  // per-category meta flag (ticket_category.meta.auto_task_from_title,
+  // migration 051) rather than a hardcoded category key — this used to
+  // check `category.key === 'housekeeping'` directly, exactly the kind of
+  // hardcoded-key fragility N4a already called out elsewhere (see
+  // NOTES.md); Housekeeping and Daily To-Do's both have the flag set
+  // today. Every ticket-creation path funnels through this one function
   // (manual creation, the "+ Add sub-ticket" form, and — the most common
-  // case by volume — services/recurringTickets.js's daily/weekly firings),
-  // so this one insert covers all of them instead of repeating the same
-  // check at each call site. position 10 since a fresh ticket has no
-  // other tasks yet to sit behind (same MAX(...)+10 convention as
+  // case by volume — services/recurringTickets.js's daily/weekly
+  // firings), so this one insert covers all of them instead of repeating
+  // the same check at each call site. position 10 since a fresh ticket
+  // has no other tasks yet to sit behind (same MAX(...)+10 convention as
   // category_queue_position, just starting from empty).
-  if (category.key === 'housekeeping') {
+  if (category.meta && category.meta.auto_task_from_title) {
     await client.query(
       `INSERT INTO ticket_tasks (ticket_id, title, technician_id, position, created_by)
        VALUES ($1, $2, $3, 10, $4)`,

@@ -225,6 +225,60 @@ async function fleetQcSweep() {
   }
 }
 
+// Deliberately later than either daily template's own fire time
+// (08:30/16:00) and the fleet QC sweep's (07:00 the *next* morning) — a
+// Daily To-Do ticket should stay workable for the rest of the day it was
+// created, not disappear out from under whoever's doing it. Not
+// admin-configurable, same "background sweep, not a Settings screen"
+// posture as FLEET_QC_SWEEP_TIME above.
+const DAILY_TODO_ARCHIVE_TIME = '23:00';
+
+/**
+ * Once a day, archive every open 'daily_todo'-category ticket — that
+ * category is a same-day catch-all (Settings -> Ticket categories'
+ * "Daily To-Do's"; migration 051 also gives it its own default starting
+ * status and auto-created task, see routes/tickets.js and
+ * services/settings.js), so whatever's still open at day's end is done or
+ * moot either way and shouldn't sit around cluttering tomorrow's queue.
+ * Same shop-local-date-guarded idiom as fleetQcSweep() above, keyed off
+ * its own shop_config row instead of piggybacking on that one.
+ */
+async function dailyTodoArchiveSweep() {
+  try {
+    const { rows: cfgRows } = await query(
+      "SELECT meta FROM settings WHERE category = 'shop_config' AND key = 'daily_todo_archive'",
+    );
+    const meta = cfgRows[0]?.meta || {};
+
+    const { rows: dateRows } = await query(
+      `SELECT to_char(now() AT TIME ZONE $1, 'HH24:MI') AS current_hhmm,
+              (now() AT TIME ZONE $1)::date             AS today,
+              ($2::timestamptz AT TIME ZONE $1)::date    AS last_local_date`,
+      [config.shopTimezone, meta.last_run_at || null],
+    );
+    const {
+      current_hhmm: currentHhmm, today, last_local_date: lastLocalDate,
+    } = dateRows[0];
+    if (currentHhmm < DAILY_TODO_ARCHIVE_TIME) return;
+    if (lastLocalDate && lastLocalDate === today) return; // already ran today
+
+    const { rowCount } = await query(
+      "UPDATE tickets SET archived = TRUE WHERE category_key = 'daily_todo' AND archived = FALSE",
+    );
+
+    await query(
+      `UPDATE settings SET meta = jsonb_set(meta, '{last_run_at}', to_jsonb(now()), true)
+        WHERE category = 'shop_config' AND key = 'daily_todo_archive'`,
+    );
+
+    if (rowCount) console.log(`[daily-todo-archive] archived ${rowCount} ticket(s)`);
+  } catch (err) {
+    // Never let a bad sweep take the process down — same "log and move
+    // on" posture as everywhere else in this file.
+    console.error('[daily-todo-archive] sweep failed', err);
+  }
+}
+
 async function tick() {
   let ids;
   try {
@@ -251,6 +305,7 @@ async function tick() {
   }
 
   await fleetQcSweep();
+  await dailyTodoArchiveSweep();
 }
 
 function start() {
@@ -259,5 +314,5 @@ function start() {
 }
 
 module.exports = {
-  start, nextRotationEmployee, fireTemplate, fleetQcSweep,
+  start, nextRotationEmployee, fireTemplate, fleetQcSweep, dailyTodoArchiveSweep,
 };

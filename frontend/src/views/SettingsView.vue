@@ -234,6 +234,21 @@ async function toggleQueuePicker(row) {
   }
 }
 
+// Auto-create-a-task-from-the-ticket's-title (routes/tickets.js's
+// insertTicketRow) — generalized off a hardcoded Housekeeping-only check,
+// migration 051. Housekeeping and Daily To-Do's both start with this on.
+async function toggleAutoTaskFromTitle(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, auto_task_from_title: !row.meta.auto_task_from_title },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-category "Status notes" (Service done / Service needed) visibility on
 // the ticket detail page — see stores.js's statusNotesAllowed. Same pattern
 // as toggleShipButton, just the opposite starting value (off by default).
@@ -488,6 +503,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Progress update</th>
                 <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
+                <th v-if="category === 'ticket_category'">Auto-task from title</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th v-if="category === 'ticket_status'">Unlocks tasks</th>
                 <th v-if="category === 'priority_tier'">Highlight in tasks</th>
@@ -572,6 +588,14 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!row.meta.hide_from_category_queue"
                       @change="toggleQueuePicker(row)"
+                    />
+                  </label>
+                </td>
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Auto-create one task from this ticket's own title as soon as it's created (e.g. &quot;AM Inbox Clearing&quot; arrives with a matching task already on it)">
+                    <input
+                      type="checkbox" :checked="!!row.meta.auto_task_from_title"
+                      @change="toggleAutoTaskFromTitle(row)"
                     />
                   </label>
                 </td>

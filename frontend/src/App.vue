@@ -53,7 +53,22 @@ watch(() => auth.signedIn, (signedIn) => {
   }
 }, { immediate: true });
 
-onMounted(() => { if (!auth.ready) auth.load(); });
+onMounted(() => {
+  if (!auth.ready) {
+    auth.load().then(() => {
+      // A page refresh restores the session from the server-side cookie
+      // before this component (or its watch(() => auth.signedIn, ...)
+      // above) ever runs — that watch only fires on a *transition* into
+      // signedIn, not on this "already signed in on boot" path, and
+      // kiosk.locked always starts false on every store init regardless of
+      // prior lock state. Without this, refreshing a kiosk device silently
+      // restores whoever was last signed in, skipping the profile-select
+      // screen entirely. Only the boot/restore path needs this — an
+      // interactive login() or switchTo() never calls auth.load().
+      if (auth.signedIn && kiosk.enabled) kiosk.lock();
+    });
+  }
+});
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick);

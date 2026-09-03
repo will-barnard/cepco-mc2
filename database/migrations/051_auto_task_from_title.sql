@@ -1,0 +1,11 @@
+-- Superseded before ever being applied -- an earlier draft of this same
+-- piece of work that scoped auto_task_from_title too broadly (housekeeping
+-- + orders_shipping) before Will clarified "Daily To-Do's" means the
+-- 'daily_todo' ticket_category specifically, not the AM/PM recurring
+-- Housekeeping/Orders & Shipping tickets. The real migration is
+-- 051_daily_todo_workflow.sql; this file is kept (rather than deleted, to
+-- avoid a filename gap/renumber) as a harmless no-op -- it cannot be
+-- deleted or renamed from this sandbox without a separate device
+-- permission prompt, and it was never applied to any database, so leaving
+-- it inert here is simpler than spending that prompt on pure tidiness.
+SELECT 1;
