@@ -526,9 +526,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
-       family_queue_position, is_shipping
+       family_queue_position, is_shipping, recurring_ticket_template_id
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27,$28)
+               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27,$28,$29)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -558,6 +558,11 @@ async function insertTicketRow(client, b, resolved, createdById) {
       // POST /tickets field (see resolveNewTicketFields's isShipping,
       // which reads this same b.is_shipping to pick the right status set).
       b.is_shipping === true,
+      // Set only by services/recurringTickets.js's fireTemplate() — every
+      // other caller (POST /tickets, purchases.js, the shipping-ticket
+      // flow) leaves this unset and it stays NULL, same posture as
+      // source_ticket_id/source_estimate_id above.
+      b.recurring_ticket_template_id || null,
     ],
   );
   const created = rows[0];

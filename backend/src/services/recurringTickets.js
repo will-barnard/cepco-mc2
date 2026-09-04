@@ -32,16 +32,24 @@ const { resolveNewTicketFields, insertTicketRow } = require('../routes/tickets')
 const CHECK_INTERVAL_MS = 60_000;
 
 /**
- * The next tech in the rotation, given who fired last time. Deliberately
- * "next id after this one, wrapping around" rather than a stored numeric
- * index — an index drifts the moment the eligible pool's size changes
- * (someone new hired, someone excluded, someone deactivated), while
- * walking the *current* eligible list by id and finding the one after the
- * last assignee self-heals from all of that automatically, including the
- * case where the last assignee themselves is no longer eligible (an
- * id that's no longer in the list simply isn't found, and the search
- * falls through to the first eligible person — see the findIndex/-1 case
- * below).
+ * The next tech in the rotation, given who fired last time. Used to be
+ * deterministic — "next id after this one, wrapping around" — but with
+ * every weekly chore template starting from rotation_last_employee_id =
+ * NULL, each one's *first* firing independently landed on the same first
+ * eligible employee (the old `if (!lastEmployeeId) return rows[0].id`
+ * branch), so a whole week of housekeeping chores could land on one
+ * person purely by construction, not chance. Picking randomly among the
+ * eligible (active, not excluded) pool fixes that directly, and is also
+ * just what was asked for ("more random").
+ *
+ * Excludes whoever went last (when there's someone else to pick) rather
+ * than a plain uniform draw — a plain draw would still let the same
+ * person come up two weeks running fairly often, which reads as "broken"
+ * even though it's correctly random; this keeps every firing genuinely
+ * random while guaranteeing it's *someone new*. Falls back to the full
+ * pool when there's only one eligible person, or when the last assignee
+ * isn't in the current pool at all (excluded/deactivated since, or no
+ * prior firing) — same self-healing posture the old id-walk had.
  */
 async function nextRotationEmployee(client, lastEmployeeId) {
   const { rows } = await client.query(
@@ -50,9 +58,10 @@ async function nextRotationEmployee(client, lastEmployeeId) {
       ORDER BY id`,
   );
   if (!rows.length) return null;
-  if (!lastEmployeeId) return rows[0].id;
-  const idx = rows.findIndex((r) => r.id === lastEmployeeId);
-  return rows[(idx + 1) % rows.length].id;
+  const ids = rows.map((r) => r.id);
+  const pool = ids.length > 1 ? ids.filter((id) => id !== lastEmployeeId) : ids;
+  const candidates = pool.length ? pool : ids;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 async function fireTemplate(templateId) {
@@ -108,7 +117,17 @@ async function fireTemplate(templateId) {
     });
     await insertTicketRow(
       client,
-      { title: t.title, notes: t.notes || null, technician_ids: technicianIds },
+      {
+        title: t.title,
+        notes: t.notes || null,
+        technician_ids: technicianIds,
+        // Lets a re-roll (routes/recurringTicketTemplates.js) find "the
+        // ticket this template most recently generated" instead of
+        // guessing from title + date. Every other insertTicketRow caller
+        // leaves this unset, so it stays NULL for tickets nothing to do
+        // with the recurring-ticket engine created.
+        recurring_ticket_template_id: t.id,
+      },
       resolved,
       // createdById: no staff member created this ticket — same convention
       // as the Shopify order webhook's own automated ticket creation.

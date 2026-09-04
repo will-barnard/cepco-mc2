@@ -108,6 +108,32 @@ async function removeTemplate(t) {
   }
 }
 
+// Re-roll: picks a new random rotation assignee right now instead of
+// waiting for next week's firing, and — when this template's most
+// recent ticket is still open — reassigns that ticket too (backend
+// finds it via recurring_ticket_template_id, migration 053). Only makes
+// sense for a rotating template with no fixed-assignee pin; the button
+// is hidden otherwise (see template below) so this is a backstop, not
+// the primary guard.
+const rerolling = ref(null);
+async function reroll(t) {
+  error.value = '';
+  notice.value = '';
+  rerolling.value = t.id;
+  try {
+    const updated = await api.post(`/recurring-ticket-templates/${t.id}/reroll`);
+    const who = updated.rotation_last_employee_name || 'nobody eligible';
+    notice.value = updated.rerolled_ticket_id
+      ? `Re-rolled "${t.title}" — now assigned to ${who}.`
+      : `Re-rolled "${t.title}" — rotation now points at ${who} (no open ticket to reassign yet).`;
+    await load();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    rerolling.value = null;
+  }
+}
+
 function fmtLastGenerated(t) {
   if (!t.last_generated_at) return 'never';
   return new Date(t.last_generated_at).toLocaleDateString();
@@ -122,9 +148,11 @@ function fmtLastGenerated(t) {
         <p class="muted small" style="margin: 0">
           Fires automatically once a day/week at the configured shop-local time — see the four
           daily sweeps and four weekly chores seeded by default. A weekly template with "Rotate
-          among active techs" on assigns whoever's next in line, skipping anyone checked "Skip
-          chores" on Settings → Staff accounts. Pin "Fixed assignee" on any template — daily or
-          weekly — to always assign the same person instead; a pin always wins over rotation,
+          among active techs" on assigns a random eligible tech each time (never the same person
+          twice in a row when there's someone else to pick), skipping anyone checked "Skip
+          chores" on Settings → Staff accounts. Don't like who it picked? "🎲 Re-roll" draws again
+          right now, without waiting for next week. Pin "Fixed assignee" on any template — daily
+          or weekly — to always assign the same person instead; a pin always wins over rotation,
           and clearing it later just resumes rotation where it left off.
         </p>
       </div>
@@ -268,10 +296,17 @@ function fmtLastGenerated(t) {
             <span v-if="t.fixed_assignee_employee_id" class="muted small">
               fixed: {{ t.fixed_assignee_name }}
             </span>
-            <span v-else class="muted small">next up: {{ t.rotation_last_employee_name || '—' }}</span>
+            <span v-else class="muted small">currently: {{ t.rotation_last_employee_name || '—' }}</span>
             <span class="muted small">last: {{ fmtLastGenerated(t) }}</span>
             <span :class="['pill', t.active ? 'green' : 'slate']">{{ t.active ? 'Active' : 'Paused' }}</span>
             <div class="spacer" />
+            <button
+              v-if="t.rotate_among_active_techs && !t.fixed_assignee_employee_id"
+              class="small" title="Pick a new random assignee now"
+              :disabled="rerolling === t.id" @click="reroll(t)"
+            >
+              {{ rerolling === t.id ? 'Re-rolling…' : '🎲 Re-roll' }}
+            </button>
             <button class="small" @click="updateField(t, { active: !t.active })">
               {{ t.active ? 'Pause' : 'Resume' }}
             </button>

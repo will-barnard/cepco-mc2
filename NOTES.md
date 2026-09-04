@@ -3062,6 +3062,43 @@ on check, so a tech can tell what's selected at a glance without reading
 each tiny checkbox individually. A disabled checkbox (the auto-detected-
 variant states from §2.73) dims its whole card rather than just looking
 like an inert tiny checkbox.
+### 2.75 Weekly chore rotation: random instead of deterministic, plus a re-roll button
+
+Boss flagged that all four weekly housekeeping chores (A2, migration 033 —
+"Clean bathroom/floor/showroom/kitchen") had landed on the same tech.
+Root cause: `nextRotationEmployee()` (services/recurringTickets.js) was
+deterministic — "next employee id after whoever went last, wrapping
+around" — and each of the four templates tracks its own
+`rotation_last_employee_id`, all seeded NULL. A template's *first* firing
+with no prior assignee always picked the same first eligible employee
+(`if (!lastEmployeeId) return rows[0].id`), so four independent templates
+each having their first firing this early in the shop's use of the
+feature landed on that same person four times over — not a fluke, just
+what the deterministic id-walk does from a cold start.
+
+`nextRotationEmployee()` now draws randomly from the eligible (active,
+not `excluded_from_chore_rotation`) pool instead, excluding whoever went
+last when there's someone else to draw from (so it's still guaranteed to
+be *someone new*, not just theoretically random-but-often-repeats).
+Independent templates no longer have any reason to sync up.
+
+Also added a way to redo a bad roll without waiting a week: a "🎲
+Re-roll" button (Settings → Recurring tickets, weekly rows, only shown
+when rotation is on and there's no fixed-assignee pin) hits
+`POST /recurring-ticket-templates/:id/reroll`. To make that actually
+reassign *today's* ticket rather than just changing who's picked next
+time, tickets now remember which template generated them —
+`tickets.recurring_ticket_template_id` (migration 053), set only by
+`fireTemplate()`'s `insertTicketRow()` call, NULL for every other
+ticket-creation path. Reroll finds that template's most recent
+still-open ticket (if any) and moves the assignment over; if there isn't
+one yet, it just updates `rotation_last_employee_id`, which is also what
+the row's "currently: <name>" label reads (renamed from the old,
+inaccurate "next up" — with a random draw there's no meaningful "next"
+to preview ahead of time, only who's currently on it).
+
+Migration: `053_recurring_ticket_reroll.sql`.
+
 
 ## 4. Suggested first moves after deploy
 
