@@ -128,7 +128,19 @@ async function runXeroSync() {
   // Only real, active customers — not the shop's own parts-vendor/supplier
   // contacts this same Xero org also tracks for its AP side, and not a
   // contact either side has already archived.
-  const xeroCandidates = xeroContacts.filter((c) => c.IsCustomer === true && c.ContactStatus !== 'ARCHIVE');
+  //
+  // Filtering on IsCustomer used to seem like the obvious way to say that,
+  // but IsCustomer isn't a tag anyone sets on the contact — Xero computes
+  // it after the fact, true only once an actual Invoice has been raised
+  // against them (a Quote/estimate doesn't count). A contact freshly
+  // added in Xero — exactly the "a customer was created in Xero" case
+  // this sync exists for — reports IsCustomer: false right up until their
+  // first invoice, so this filter was silently dropping every brand-new
+  // customer no "Sync now" could ever recover, since running the sync
+  // again doesn't change that flag. !IsSupplier says what was actually
+  // meant (not one of the shop's AP-side vendor contacts) without relying
+  // on invoice history that hasn't happened yet.
+  const xeroCandidates = xeroContacts.filter((c) => !c.IsSupplier && c.ContactStatus !== 'ARCHIVE');
 
   const mcByXeroId = new Map(mcCustomers.filter((c) => c.xero_contact_id).map((c) => [c.xero_contact_id, c]));
   const unlinkedMc = mcCustomers.filter((c) => !c.xero_contact_id);

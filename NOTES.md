@@ -3099,6 +3099,44 @@ to preview ahead of time, only who's currently on it).
 
 Migration: `053_recurring_ticket_reroll.sql`.
 
+### 2.76 Fix: Xero sync silently dropped brand-new customers
+
+Will: a customer created in Xero (an estimate had already been written up
+for them there) never showed up in MC2 — "Sync now" reported all zeros,
+no error, every time.
+
+Root cause: `xeroSync.js`'s `runXeroSync()` and `xeroBackfill.js`'s
+`computeBackfillCandidates()` both filtered the Xero contact list down to
+`c.IsCustomer === true` before doing anything else. `IsCustomer` isn't a
+tag anyone sets on a contact — Xero computes it after the fact, and only
+flips it to `true` once an actual *Invoice* has been raised against that
+contact. A Quote/estimate doesn't count, so a contact with nothing but an
+estimate on it — exactly this case — reports `IsCustomer: false`
+indefinitely. The filter was dropping it before either function's own
+matching/creation logic ever ran, which is why re-running the sync any
+number of times couldn't fix it: nothing about running it again changes
+that flag.
+
+Both filters now read `!c.IsSupplier` instead of `c.IsCustomer === true`.
+`IsSupplier` is the same kind of Xero-computed flag (true once a Bill's
+been raised against them) rather than a real settable tag, but it's the
+correct side of this to check either way: the filter's actual job was
+always "exclude the shop's own AP-side parts-vendor contacts," never
+"require proof this contact has already been invoiced as a customer" —
+this just makes the code check the thing it meant to. A brand-new Xero
+contact with no transaction history at all now passes both filters
+correctly (neither flag is true yet), which is the common case this bug
+was actually breaking.
+
+Next "Sync now" (or the nightly run) will pick up this customer and any
+other not-yet-invoiced Xero contact the same way. Worth knowing: if the
+shop ever adds a genuine parts vendor to Xero and hasn't billed them
+there yet either, that contact will briefly look like a customer to this
+sync (same not-yet-computed-either-way gap, just the opposite direction)
+until it either gets billed in Xero or is dismissed here as a false match
+— the Xero Duplicates/backfill review screens (§2.53/§2.56) are where
+that gets cleaned up if it happens.
+
 
 ## 4. Suggested first moves after deploy
 

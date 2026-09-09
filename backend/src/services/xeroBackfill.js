@@ -133,8 +133,13 @@ async function computeBackfillCandidates() {
   );
   const dismissed = new Set(dismissedResult.rows.map((r) => `${r.customer_id}:${r.xero_contact_id}`));
 
+  // See xeroSync.js's runXeroSync() for why this excludes suppliers
+  // (!IsSupplier) rather than requiring IsCustomer -- that flag only
+  // turns true after a contact's first Xero invoice, so it was hiding
+  // exactly the brand-new, not-yet-invoiced contacts this review screen
+  // is meant to help match up.
   const unlinkedXero = xeroContacts.filter(
-    (c) => c.IsCustomer === true && c.ContactStatus !== 'ARCHIVE' && !linkedXeroIds.has(c.ContactID),
+    (c) => !c.IsSupplier && c.ContactStatus !== 'ARCHIVE' && !linkedXeroIds.has(c.ContactID),
   );
 
   // Every pair above the floor, best first.
