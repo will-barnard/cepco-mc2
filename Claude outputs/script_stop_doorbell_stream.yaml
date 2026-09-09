@@ -1,0 +1,7 @@
+alias: Stop Doorbell Stream (Big TV)
+description: Turns off the Big TV to end the continuous doorbell stream.
+sequence:
+  - action: media_player.turn_off
+    target:
+      entity_id: media_player.big_tv
+mode: single

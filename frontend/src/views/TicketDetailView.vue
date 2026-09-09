@@ -4,6 +4,7 @@ import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings } from '../stores';
 import TicketPhotos from '../components/TicketPhotos.vue';
+import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import TicketQc from '../components/TicketQc.vue';
 import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
@@ -62,6 +63,58 @@ const customerMenuEl = ref(null);
 function closeCustomerMenu() {
   customerMenuOpen.value = false;
 }
+
+// Customer/instrument used to be set once at intake and never touched
+// again -- a ticket created without one (or with the wrong one) had no way
+// to fix that short of editing the DB directly. Both follow the same
+// "Change" toggle shape as Assigned technicians above/below. Customer goes
+// through an explicit Save rather than patching on every CustomerSearchSelect
+// `change` event, because that component fires `change: null` on the very
+// first keystroke of a new search (see its onInput) -- patching immediately
+// would clear the ticket's customer the moment someone started typing to
+// replace it. Instrument uses a plain native <select>, which only fires
+// `change` on an actual pick, so it can patch straight away like Status/
+// Priority/Category above do.
+const editingCustomer = ref(false);
+const customerEditValue = ref('');
+function startEditCustomer() {
+  customerEditValue.value = ticket.value.customer_id || '';
+  editingCustomer.value = true;
+}
+function toggleEditCustomer() {
+  if (editingCustomer.value) editingCustomer.value = false;
+  else startEditCustomer();
+}
+async function saveCustomer() {
+  await patch({ customer_id: customerEditValue.value || null });
+  if (!error.value) editingCustomer.value = false;
+}
+
+const editingInstrument = ref(false);
+const instrumentOptions = ref([]);
+const loadingInstrumentOptions = ref(false);
+// Scoped to the ticket's current customer, same as the instrument dropdown
+// on TicketNewView.vue -- or to the fleet when there's no customer, since
+// that's the only other place a ticket's instrument comes from.
+async function startEditInstrument() {
+  editingInstrument.value = true;
+  loadingInstrumentOptions.value = true;
+  try {
+    instrumentOptions.value = ticket.value.customer_id
+      ? await api.get('/instruments', { customer_id: ticket.value.customer_id })
+      : await api.get('/instruments', { fleet: 'true' });
+  } finally {
+    loadingInstrumentOptions.value = false;
+  }
+}
+function toggleEditInstrument() {
+  if (editingInstrument.value) editingInstrument.value = false;
+  else startEditInstrument();
+}
+async function onInstrumentChange(event) {
+  await patch({ instrument_id: event.target.value || null });
+  if (!error.value) editingInstrument.value = false;
+}
 function onDocumentClick(event) {
   if (customerMenuOpen.value && customerMenuEl.value && !customerMenuEl.value.contains(event.target)) {
     closeCustomerMenu();
@@ -70,13 +123,29 @@ function onDocumentClick(event) {
 function onDocumentKeydown(event) {
   if (event.key === 'Escape') closeCustomerMenu();
 }
+
+// Below 640px -- the breakpoint styles.css already uses elsewhere (e.g.
+// .page's rules) and where .grid.cols-2 itself collapses to one column --
+// Photos moves up to sit right under Details instead of trailing after
+// QC/Shipment further down. Kept as a single conditionally-placed instance
+// rather than one hidden with CSS in each spot: TicketPhotos registers a
+// page-wide paste listener onMounted, so two live copies would
+// double-handle every pasted photo.
+const mobileQuery = window.matchMedia('(max-width: 640px)');
+const isMobile = ref(mobileQuery.matches);
+function onMobileQueryChange(event) {
+  isMobile.value = event.matches;
+}
+
 onMounted(() => {
   document.addEventListener('click', onDocumentClick);
   document.addEventListener('keydown', onDocumentKeydown);
+  mobileQuery.addEventListener('change', onMobileQueryChange);
 });
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
   document.removeEventListener('keydown', onDocumentKeydown);
+  mobileQuery.removeEventListener('change', onMobileQueryChange);
 });
 
 async function load() {
@@ -297,42 +366,80 @@ const showProgressUpdate = computed(() => (
 
           <div class="field-row">
             <div>
-              <label>Customer</label>
-              <div v-if="ticket.customer_id" ref="customerMenuEl" class="customer-contact-field">
-                <button
-                  type="button" class="customer-contact-toggle"
-                  @click="customerMenuOpen = !customerMenuOpen"
-                >
-                  <span>{{ ticket.customer_name }}</span>
-                  <span class="customer-contact-caret">▾</span>
+              <div class="row" style="margin-bottom: 4px">
+                <label style="margin: 0">Customer</label>
+                <div class="spacer" />
+                <button class="small" @click="toggleEditCustomer">
+                  {{ editingCustomer ? 'Cancel' : 'Change' }}
                 </button>
-                <div v-if="customerMenuOpen" class="customer-contact-menu">
-                  <div v-if="ticket.customer_email"><span class="muted small">Email</span><br />{{ ticket.customer_email }}</div>
-                  <div v-if="ticket.customer_phone"><span class="muted small">Phone</span><br />{{ ticket.customer_phone }}</div>
-                  <div v-if="ticket.customer_address"><span class="muted small">Address</span><br />{{ ticket.customer_address }}</div>
-                  <p
-                    v-if="!ticket.customer_email && !ticket.customer_phone && !ticket.customer_address"
-                    class="muted small"
-                  >
-                    No contact info on file.
-                  </p>
-                  <RouterLink
-                    :to="`/customers?id=${ticket.customer_id}`" class="small"
-                    style="margin-top: 4px" @click="closeCustomerMenu"
-                  >
-                    View full profile →
-                  </RouterLink>
-                </div>
               </div>
-              <p v-else style="margin: 0">
-                <span class="muted">
-                  {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : '—' }}
-                </span>
-              </p>
+              <div v-if="editingCustomer">
+                <CustomerSearchSelect
+                  v-model="customerEditValue"
+                  placeholder="Search customers (leave blank for internal / fleet)…"
+                />
+                <button class="small primary" style="margin-top: 6px" @click="saveCustomer">
+                  Save
+                </button>
+              </div>
+              <template v-else>
+                <div v-if="ticket.customer_id" ref="customerMenuEl" class="customer-contact-field">
+                  <button
+                    type="button" class="customer-contact-toggle"
+                    @click="customerMenuOpen = !customerMenuOpen"
+                  >
+                    <span>{{ ticket.customer_name }}</span>
+                    <span class="customer-contact-caret">▾</span>
+                  </button>
+                  <div v-if="customerMenuOpen" class="customer-contact-menu">
+                    <div v-if="ticket.customer_email"><span class="muted small">Email</span><br />{{ ticket.customer_email }}</div>
+                    <div v-if="ticket.customer_phone"><span class="muted small">Phone</span><br />{{ ticket.customer_phone }}</div>
+                    <div v-if="ticket.customer_address"><span class="muted small">Address</span><br />{{ ticket.customer_address }}</div>
+                    <p
+                      v-if="!ticket.customer_email && !ticket.customer_phone && !ticket.customer_address"
+                      class="muted small"
+                    >
+                      No contact info on file.
+                    </p>
+                    <RouterLink
+                      :to="`/customers?id=${ticket.customer_id}`" class="small"
+                      style="margin-top: 4px" @click="closeCustomerMenu"
+                    >
+                      View full profile →
+                    </RouterLink>
+                  </div>
+                </div>
+                <p v-else style="margin: 0">
+                  <span class="muted">
+                    {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : '—' }}
+                  </span>
+                </p>
+              </template>
             </div>
             <div>
-              <label>Instrument</label>
-              <p style="margin: 0">
+              <div class="row" style="margin-bottom: 4px">
+                <label style="margin: 0">Instrument</label>
+                <div class="spacer" />
+                <button class="small" @click="toggleEditInstrument">
+                  {{ editingInstrument ? 'Cancel' : 'Change' }}
+                </button>
+              </div>
+              <div v-if="editingInstrument">
+                <select
+                  :value="ticket.instrument_id || ''"
+                  :disabled="loadingInstrumentOptions"
+                  @change="onInstrumentChange"
+                >
+                  <option value="">— none —</option>
+                  <option v-for="i in instrumentOptions" :key="i.id" :value="i.id">
+                    {{ i.family }} · <template v-if="i.nickname">"{{ i.nickname }}" </template>{{ i.model }}
+                  </option>
+                </select>
+                <p v-if="!ticket.customer_id" class="muted small" style="margin: 4px 0 0">
+                  Showing CEPCo fleet instruments — this ticket has no customer.
+                </p>
+              </div>
+              <p v-else style="margin: 0">
                 <span v-if="ticket.instrument_family">
                   {{ ticket.instrument_family }} · {{ ticket.instrument_model }}
                 </span>
@@ -385,6 +492,8 @@ const showProgressUpdate = computed(() => (
           </div>
         </div>
 
+        <TicketPhotos v-if="isMobile" :ticket-id="ticket.id" />
+
         <TicketSubTickets :ticket="ticket" @changed="load" />
         <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
 
@@ -403,7 +512,7 @@ const showProgressUpdate = computed(() => (
              to work through — TicketPhotos comes after it instead of
              before, just for this ticket type. -->
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
-        <TicketPhotos :ticket-id="ticket.id" />
+        <TicketPhotos v-if="!isMobile" :ticket-id="ticket.id" />
 
         <div v-if="showProgressUpdate" class="card">
           <div class="row" style="margin-bottom: 12px">

@@ -1,0 +1,32 @@
+# Home Assistant SCRIPTS (not automations) - each block below is a separate
+# script entity. Create two scripts via Settings > Automations & Scenes >
+# Scripts > + Add Script > (three-dot menu) Edit in YAML, and paste one
+# block into each.
+
+# ---------------- Script 1: Start Doorbell Stream (Big TV) ----------------
+alias: Start Doorbell Stream (Big TV)
+description: >
+  Casts a continuous live feed from the UniFi doorbell camera to the Big TV.
+  Keeps playing until you run "Stop Doorbell Stream (Big TV)".
+sequence:
+  - action: media_player.turn_on
+    target:
+      entity_id: media_player.big_tv
+  - action: media_player.play_media
+    target:
+      entity_id: media_player.big_tv
+    data:
+      media_content_id: media-source://camera/camera.cep_doorbell_high_resolution_channel
+      media_content_type: application/vnd.apple.mpegurl
+mode: single
+
+---
+
+# ---------------- Script 2: Stop Doorbell Stream (Big TV) ----------------
+alias: Stop Doorbell Stream (Big TV)
+description: Turns off the Big TV to end the continuous doorbell stream.
+sequence:
+  - action: media_player.turn_off
+    target:
+      entity_id: media_player.big_tv
+mode: single
