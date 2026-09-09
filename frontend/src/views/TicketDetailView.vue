@@ -2,9 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
-import { useAuth, useSettings } from '../stores';
+import { useAuth, useSettings, useRefData } from '../stores';
 import TicketPhotos from '../components/TicketPhotos.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
+import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import TicketQc from '../components/TicketQc.vue';
 import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
@@ -18,6 +19,7 @@ const props = defineProps({ id: { type: String, required: true } });
 
 const auth = useAuth();
 const settings = useSettings();
+const refData = useRefData();
 const router = useRouter();
 
 const ticket = ref(null);
@@ -114,6 +116,50 @@ function toggleEditInstrument() {
 async function onInstrumentChange(event) {
   await patch({ instrument_id: event.target.value || null });
   if (!error.value) editingInstrument.value = false;
+}
+
+// A brand-new customer (just attached via the Customer "Change" control
+// above) has no instruments of their own yet, so the existing-instrument
+// dropdown alone can't cover "this ticket had no customer, someone added
+// one, now their instrument needs to exist too." Mirrors TicketNewView.vue's
+// "Add a new instrument instead" card almost exactly, just POSTing
+// immediately and attaching it instead of waiting on a create-time submit.
+const addingInstrument = ref(false);
+const creatingInstrument = ref(false);
+const blankNewInstrument = () => ({
+  family: refData.families[0] || '', model: '', year: '', serial_no: '', nickname: '',
+});
+const newInstrumentDraft = ref(blankNewInstrument());
+function startAddInstrument() {
+  newInstrumentDraft.value = blankNewInstrument();
+  addingInstrument.value = true;
+}
+async function createAndAttachInstrument() {
+  if (!newInstrumentDraft.value.model) {
+    error.value = 'Model is required to add a new instrument.';
+    return;
+  }
+  error.value = '';
+  creatingInstrument.value = true;
+  try {
+    const created = await api.post('/instruments', {
+      family: newInstrumentDraft.value.family,
+      model: newInstrumentDraft.value.model,
+      year: newInstrumentDraft.value.year || null,
+      serial_no: newInstrumentDraft.value.serial_no || null,
+      nickname: newInstrumentDraft.value.nickname.trim() || null,
+      customer_id: ticket.value.customer_id || null,
+    });
+    await patch({ instrument_id: created.id });
+    if (!error.value) {
+      addingInstrument.value = false;
+      editingInstrument.value = false;
+    }
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    creatingInstrument.value = false;
+  }
 }
 function onDocumentClick(event) {
   if (customerMenuOpen.value && customerMenuEl.value && !customerMenuEl.value.contains(event.target)) {
@@ -427,7 +473,7 @@ const showProgressUpdate = computed(() => (
               <div v-if="editingInstrument">
                 <select
                   :value="ticket.instrument_id || ''"
-                  :disabled="loadingInstrumentOptions"
+                  :disabled="loadingInstrumentOptions || addingInstrument"
                   @change="onInstrumentChange"
                 >
                   <option value="">— none —</option>
@@ -437,6 +483,58 @@ const showProgressUpdate = computed(() => (
                 </select>
                 <p v-if="!ticket.customer_id" class="muted small" style="margin: 4px 0 0">
                   Showing CEPCo fleet instruments — this ticket has no customer.
+                </p>
+
+                <div v-if="ticket.customer_id" style="margin-top: 8px">
+                  <button v-if="!addingInstrument" type="button" class="link small" @click="startAddInstrument">
+                    + Add a new instrument for {{ ticket.customer_name }}
+                  </button>
+                  <div v-else class="card tight" style="margin-top: 6px">
+                    <div class="field-row">
+                      <div class="field">
+                        <label>Family</label>
+                        <select v-model="newInstrumentDraft.family">
+                          <option v-for="f in refData.families" :key="f" :value="f">
+                            {{ refData.familyLabel(f) }}
+                          </option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label>Model</label>
+                        <InstrumentModelPicker
+                          :family="newInstrumentDraft.family" v-model="newInstrumentDraft.model"
+                        />
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <div class="field">
+                        <label>Year</label>
+                        <input v-model="newInstrumentDraft.year" placeholder="1972" />
+                      </div>
+                      <div class="field">
+                        <label>Serial</label>
+                        <input v-model="newInstrumentDraft.serial_no" />
+                      </div>
+                      <div class="field">
+                        <label>Nickname</label>
+                        <input v-model="newInstrumentDraft.nickname" placeholder="e.g. Old Betsy" />
+                      </div>
+                    </div>
+                    <div class="row">
+                      <button
+                        class="small primary" :disabled="creatingInstrument"
+                        @click="createAndAttachInstrument"
+                      >
+                        {{ creatingInstrument ? 'Adding…' : 'Add & attach' }}
+                      </button>
+                      <button class="small" :disabled="creatingInstrument" @click="addingInstrument = false">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="muted small" style="margin: 8px 0 0">
+                  Set a customer above before adding a new instrument for them.
                 </p>
               </div>
               <p v-else style="margin: 0">
