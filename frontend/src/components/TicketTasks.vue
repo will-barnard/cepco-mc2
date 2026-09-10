@@ -49,12 +49,16 @@ const customTitle = ref('');
 // task starts with none picked.
 const newTaskTechLevel = ref('');
 
-async function load() {
-  loading.value = true;
+// `silent` skips the loading flag so a reload after a mutation (checking
+// a box, assigning someone, adding/removing a task) doesn't blank the
+// whole checklist back to "Loading..." -- only the very first load, before
+// there's anything on screen yet, does that.
+async function load(silent = false) {
+  if (!silent) loading.value = true;
   try {
     tasks.value = await api.get('/tasks', { ticket_id: props.ticket.id });
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -96,7 +100,7 @@ async function addProcedureTask() {
     });
     selectedProcedureId.value = '';
     newTaskTechLevel.value = '';
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -113,7 +117,7 @@ async function addCustomTask() {
     await api.post('/tasks', { ticket_id: props.ticket.id, title, tech_level_key: newTaskTechLevel.value || null });
     customTitle.value = '';
     newTaskTechLevel.value = '';
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -125,7 +129,7 @@ async function toggleDone(task) {
   error.value = '';
   try {
     await api.patch(`/tasks/${task.id}`, { done: !task.done });
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   }
@@ -135,7 +139,7 @@ async function assign(task, technicianId) {
   error.value = '';
   try {
     await api.patch(`/tasks/${task.id}`, { technician_id: technicianId || null });
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   }
@@ -145,7 +149,7 @@ async function setTechLevel(task, techLevelKey) {
   error.value = '';
   try {
     await api.patch(`/tasks/${task.id}`, { tech_level_key: techLevelKey || null });
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   }
@@ -165,7 +169,7 @@ async function removeTask(task) {
   error.value = '';
   try {
     await api.del(`/tasks/${task.id}`);
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   }

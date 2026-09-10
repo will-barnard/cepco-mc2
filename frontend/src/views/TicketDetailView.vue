@@ -194,13 +194,26 @@ onBeforeUnmount(() => {
   mobileQuery.removeEventListener('change', onMobileQueryChange);
 });
 
-async function load() {
-  loading.value = true;
+// `silent` distinguishes a genuine page load (first mount, or switching to
+// a different ticket -- nothing on screen yet, so blanking to "Loading..."
+// below is fine) from a refresh after some small edit elsewhere on this
+// page (patch(), or a child panel's @changed -- a shipment checkbox, a QC
+// note, etc). Those refreshes used to share the same `loading` flag, which
+// tore the *entire* ticket page down to "Loading..." on every single field
+// edit or checkbox click. Call them silently instead so they swap in the
+// fresh ticket data in place, without the flash.
+async function load(silent = false) {
+  if (!silent) loading.value = true;
   try {
     ticket.value = await api.get(`/tickets/${props.id}`);
-    notesDraft.value = ticket.value.notes || '';
-    serviceDoneDraft.value = ticket.value.service_done_notes || '';
-    serviceNeededDraft.value = ticket.value.service_needed_notes || '';
+    // Only resync the drafts on a real load -- a silent background refresh
+    // shouldn't clobber text someone is still mid-typing in Notes / status
+    // notes with whatever the server happened to have at that moment.
+    if (!silent) {
+      notesDraft.value = ticket.value.notes || '';
+      serviceDoneDraft.value = ticket.value.service_done_notes || '';
+      serviceNeededDraft.value = ticket.value.service_needed_notes || '';
+    }
     if (lastInitializedTicketId.value !== ticket.value.id) {
       showTechnicians.value = !(ticket.value.technicians || []).length;
       lastInitializedTicketId.value = ticket.value.id;
@@ -208,18 +221,18 @@ async function load() {
     const updates = await api.get('/progress-updates', { ticket_id: props.id });
     progressUpdate.value = updates[0] || null;
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
-onMounted(load);
-watch(() => props.id, load);
+onMounted(() => load());
+watch(() => props.id, () => load());
 
 async function patch(payload) {
   error.value = '';
   try {
     await api.patch(`/tickets/${props.id}`, payload);
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
   }
@@ -592,24 +605,24 @@ const showProgressUpdate = computed(() => (
 
         <TicketPhotos v-if="isMobile" :ticket-id="ticket.id" />
 
-        <TicketSubTickets :ticket="ticket" @changed="load" />
+        <TicketSubTickets :ticket="ticket" @changed="load(true)" />
         <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
 
-        <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load" />
-        <TicketEstimate v-if="!isShipping" :ticket="ticket" @changed="load" />
-        <TicketHours v-if="!isShipping" :ticket="ticket" @changed="load" />
+        <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load(true)" />
+        <TicketEstimate v-if="!isShipping" :ticket="ticket" @changed="load(true)" />
+        <TicketHours v-if="!isShipping" :ticket="ticket" @changed="load(true)" />
       </div>
 
       <!-- --------------------------------------- right: QC, photos, log -->
       <div class="stack">
         <TicketQc
           v-if="!isShipping" :ticket="ticket"
-          @changed="load" @task-created="ticketTasksRef?.load()"
+          @changed="load(true)" @task-created="ticketTasksRef?.load(true)"
         />
         <!-- Shipping tickets lead with the checklist they're actually here
              to work through — TicketPhotos comes after it instead of
              before, just for this ticket type. -->
-        <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load" />
+        <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load(true)" />
         <TicketPhotos v-if="!isMobile" :ticket-id="ticket.id" />
 
         <div v-if="showProgressUpdate" class="card">

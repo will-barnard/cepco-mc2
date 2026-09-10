@@ -70,8 +70,18 @@ const error = ref('');
 const saving = ref(false);
 const dragIndex = ref(null);
 
-async function load() {
-  loading.value = true;
+// `silent` keeps a filter tweak (ticking "Hide statuses", flipping "Show
+// archived", typing a search term) from blanking the whole list to
+// "Loading..." on every change — that used to happen because this same
+// `load()`, and the same `loading` flag, backed both the very first fetch
+// and every refetch after. Now only the first fetch (onMounted below) does
+// the full-page "Loading..." state; filter-driven refetches just dim the
+// existing list (see `refreshing` in the template) while the new page of
+// tickets comes in.
+const refreshing = ref(false);
+
+async function load(silent = false) {
+  if (silent) refreshing.value = true; else loading.value = true;
   error.value = '';
   try {
     tickets.value = await api.get('/tickets', {
@@ -82,7 +92,7 @@ async function load() {
   } catch (err) {
     error.value = err.message;
   } finally {
-    loading.value = false;
+    if (silent) refreshing.value = false; else loading.value = false;
   }
 }
 
@@ -95,7 +105,7 @@ watch(filters, (f) => {
       .filter(([, v]) => v !== '' && v !== false),
   );
   router.replace({ query });
-  load();
+  load(true);
 }, { deep: true });
 
 function reset() {
@@ -261,7 +271,7 @@ async function persistOrder(statusKey) {
     await api.post('/tickets/reorder-queue', body);
   } catch (err) {
     error.value = `${err.message} The queue below has been reloaded.`;
-    await load();
+    await load(true);
   } finally {
     saving.value = false;
   }
@@ -424,13 +434,13 @@ function dropOffDate(t) {
 
     <!-- Not a clean single queue right now (see canReorder) — same plain,
          optionally status-grouped table the old Tickets page rendered. -->
-    <div v-else-if="!canReorder" class="card tight">
+    <div v-else-if="!canReorder" class="card tight" :style="refreshing ? 'opacity: 0.6' : ''">
       <TicketTable :tickets="tickets" :group-by-status="isQueueOrdered" />
     </div>
 
     <div v-else-if="!tickets.length" class="empty">No tickets in this queue.</div>
 
-    <div v-else class="stack" :style="saving ? 'opacity: 0.6; pointer-events: none' : ''">
+    <div v-else class="stack" :style="(saving || refreshing) ? 'opacity: 0.6; pointer-events: none' : ''">
       <template v-for="(row, i) in rowInfo" :key="row.ticket.id">
         <div
           v-if="row.isGroupStart" class="muted small"
