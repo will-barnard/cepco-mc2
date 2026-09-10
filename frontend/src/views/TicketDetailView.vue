@@ -7,7 +7,6 @@ import TicketPhotos from '../components/TicketPhotos.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import TicketQc from '../components/TicketQc.vue';
-import TicketHours from '../components/TicketHours.vue';
 import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
@@ -26,6 +25,14 @@ const ticket = ref(null);
 // Q5: lets TicketQc.vue's "report an issue" flow refresh the Tasks panel
 // it doesn't otherwise talk to (see TicketTasks.vue's defineExpose).
 const ticketTasksRef = ref(null);
+// Let the page header's consolidated quick-action buttons reach into
+// TicketSubTickets.vue/TicketEstimate.vue and open their own "+ Add…"
+// forms, the same way ticketTasksRef reaches into TicketTasks.vue above —
+// those forms still need to live in their own cards, which now only
+// render once there's something in them (see each component's own
+// defineExpose/docstring).
+const subTicketsRef = ref(null);
+const estimateRef = ref(null);
 const loading = ref(true);
 const error = ref('');
 const statusNote = ref('');
@@ -275,9 +282,38 @@ async function createInvoice() {
   error.value = '';
   try {
     await api.post('/invoices', { ticket_id: ticket.value.id });
-    await load();
+    await load(true);
   } catch (err) {
     error.value = err.message;
+  }
+}
+
+// "Ship this instrument" — moved here from TicketSubTickets.vue (see that
+// file's updated docstring) since it's a page-header quick action now,
+// same one-click "create the shipping sub-ticket, then jump straight to
+// it" shortcut as before (routes/tickets.js's create-shipping-ticket
+// route). hasShippingChild/shipButtonVisible mirror what that component
+// used to compute internally.
+const shippingBusy = ref(false);
+const hasShippingChild = computed(() => (ticket.value?.child_tickets || []).some((c) => c.is_shipping));
+// Settings -> Ticket categories -> "Ship button" lets an admin turn this
+// quick-action off per category (e.g. a Shipping ticket has no business
+// offering to spin off *another* shipping ticket) — see stores.js's
+// shipButtonAllowed.
+const shipButtonVisible = computed(() => (
+  !!ticket.value?.instrument_id && !hasShippingChild.value
+    && settings.shipButtonAllowed(ticket.value?.category_key)
+));
+async function createShippingTicket() {
+  error.value = '';
+  shippingBusy.value = true;
+  try {
+    const created = await api.post(`/tickets/${ticket.value.id}/create-shipping-ticket`);
+    router.push({ name: 'ticket', params: { id: created.id } });
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    shippingBusy.value = false;
   }
 }
 
@@ -345,7 +381,32 @@ const showProgressUpdate = computed(() => (
         <span :class="['pill', settings.colorFor(ticket.status_key)]">
           {{ ticket.status_label }}
         </span>
-        <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
+
+        <!-- Quick actions, consolidated here from their own cards below
+             (NOTES.md-style rationale: those cards were cumbersome to have
+             all showing at once) — each card now only appears once it
+             actually has something in it, or its own form is open; these
+             buttons are what puts something in it. -->
+        <button
+          v-if="shipButtonVisible" class="small"
+          :disabled="shippingBusy" @click="createShippingTicket"
+        >{{ shippingBusy ? 'Creating…' : 'Ship this instrument' }}</button>
+        <button class="small" @click="subTicketsRef?.openForm()">+ Add sub-ticket</button>
+        <button v-if="!isShipping && auth.isSenior" class="small" @click="estimateRef?.openForm()">
+          + Add estimate
+        </button>
+        <button
+          v-if="showProgressUpdate && !progressUpdate" class="small"
+          :disabled="generatingUpdate" @click="generateUpdate"
+        >{{ generatingUpdate ? 'Generating…' : 'Generate progress update' }}</button>
+        <button
+          v-if="!isShipping && auth.isSenior && !ticket.invoices.length" class="small"
+          @click="createInvoice"
+        >Create invoice record</button>
+
+        <span class="row" style="border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px">
+          <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
+        </span>
       </div>
     </div>
 
@@ -605,39 +666,40 @@ const showProgressUpdate = computed(() => (
 
         <TicketPhotos v-if="isMobile" :ticket-id="ticket.id" />
 
-        <TicketSubTickets :ticket="ticket" @changed="load(true)" />
+        <TicketSubTickets ref="subTicketsRef" :ticket="ticket" @changed="load(true)" />
         <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load(true)" />
-        <TicketEstimate v-if="!isShipping" :ticket="ticket" @changed="load(true)" />
-        <TicketHours v-if="!isShipping" :ticket="ticket" @changed="load(true)" />
+        <TicketEstimate v-if="!isShipping" ref="estimateRef" :ticket="ticket" @changed="load(true)" />
+        <!-- TicketHours.vue (ticket-level manual hours entry) is hidden for now —
+             hours are captured per-task instead, right where a task is marked done
+             (see TicketTasks.vue's inline hours field, and routes/tasks.js's PATCH
+             /:id, migration 055). -->
       </div>
 
-      <!-- --------------------------------------- right: QC, photos, log -->
+      <!-- --------------------------------------- right: photos, QC, log -->
       <div class="stack">
-        <TicketQc
-          v-if="!isShipping" :ticket="ticket"
-          @changed="load(true)" @task-created="ticketTasksRef?.load(true)"
-        />
         <!-- Shipping tickets lead with the checklist they're actually here
-             to work through — TicketPhotos comes after it instead of
-             before, just for this ticket type. -->
+             to work through, then photos — TicketQc never renders for a
+             shipping ticket anyway (below), so these two never actually
+             compete for the same ticket. Every other ticket leads with
+             photos, then QC. -->
         <TicketShipment v-if="ticket.shipments?.length" :ticket="ticket" @changed="load(true)" />
         <TicketPhotos v-if="!isMobile" :ticket-id="ticket.id" />
+        <TicketQc
+          v-if="!isShipping && settings.qcAllowed(ticket.category_key)" :ticket="ticket"
+          @changed="load(true)" @task-created="ticketTasksRef?.load(true)"
+        />
 
-        <div v-if="showProgressUpdate" class="card">
+        <!-- Generating one navigates straight to it (see generateUpdate),
+             so this card only has anything to show once one already
+             exists — the "Generate progress update" action itself lives
+             in the page header now. -->
+        <div v-if="progressUpdate" class="card">
           <div class="row" style="margin-bottom: 12px">
             <h2 style="margin: 0">Customer progress update</h2>
           </div>
-          <div v-if="!progressUpdate" class="row">
-            <p class="muted small" style="margin: 0; flex: 1">
-              Pulls the status notes and photos above into an update you can email the customer.
-            </p>
-            <button class="small" :disabled="generatingUpdate" @click="generateUpdate">
-              {{ generatingUpdate ? 'Generating…' : 'Generate progress update' }}
-            </button>
-          </div>
-          <div v-else class="row">
+          <div class="row">
             <span :class="['pill', progressUpdate.status === 'sent' ? 'green' : 'slate']">
               {{ progressUpdate.status === 'sent' ? 'Sent' : 'Draft' }}
             </span>
@@ -654,20 +716,17 @@ const showProgressUpdate = computed(() => (
           </div>
         </div>
 
-        <div v-if="!isShipping" class="card">
+        <!-- "Create invoice record" lives in the page header now; a ticket
+             that isn't invoiced yet has nothing else this card would show
+             (the old "QC must pass first" hint was informational only —
+             invoices.js already rejects the attempt with that exact
+             reason, which surfaces through the page's own error banner
+             above), so this only renders once an invoice actually exists. -->
+        <div v-if="!isShipping && ticket.invoices.length" class="card">
           <div class="row" style="margin-bottom: 12px">
             <h2 style="margin: 0">Invoicing</h2>
-            <div class="spacer" />
-            <button
-              v-if="auth.isSenior && !ticket.invoices.length"
-              class="small" @click="createInvoice"
-            >Create invoice record</button>
           </div>
-          <p v-if="ticket.qc_required && !ticket.qc_passed_at" class="muted small">
-            QC must pass before this ticket can be invoiced.
-          </p>
-          <div v-if="!ticket.invoices.length" class="empty">No invoice yet.</div>
-          <ul v-else class="timeline">
+          <ul class="timeline">
             <li v-for="inv in ticket.invoices" :key="inv.id">
               <strong>{{ inv.status }}</strong>
               <span v-if="inv.amount"> · ${{ inv.amount }}</span>

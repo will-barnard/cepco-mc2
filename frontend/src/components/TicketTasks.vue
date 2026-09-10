@@ -155,6 +155,24 @@ async function setTechLevel(task, techLevelKey) {
   }
 }
 
+// Migration 055: once a task is marked done, we ask how long it actually
+// took instead of the old ticket-wide hours card (TicketHours.vue, now
+// removed from TicketDetailView.vue) -- capturing hours per-task, and
+// linking them to the task's standard_procedure_id when it has one, is
+// what eventually lets us show "this procedure has been averaging N hours
+// in practice" back on EstimateNewView.vue instead of a guessed default.
+// Backed by hours_log.ticket_task_id (routes/tasks.js's PATCH /:id), which
+// upserts one row per task -- clearing the field deletes that row.
+async function setHours(task, value) {
+  error.value = '';
+  try {
+    await api.patch(`/tasks/${task.id}`, { hours: value === '' ? null : value });
+    await load(true);
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Q5: TicketQc.vue creates tasks directly (its "report an issue" flow, an
 // alternative to failing a round) without going through this component at
 // all, and — per its own docstring above — this component doesn't emit
@@ -199,6 +217,14 @@ async function removeTask(task) {
           <span :style="t.done ? 'text-decoration: line-through; color: var(--text-dim)' : ''" style="flex: 1">
             {{ t.title }}
           </span>
+          <!-- Migration 055: only asked once the task is actually done --
+               see setHours() above for why this feeds back into estimates. -->
+          <input
+            v-if="t.done"
+            type="number" min="0" max="24" step="0.25" class="small" style="max-width: 70px"
+            title="Hours it took" placeholder="hrs"
+            :value="t.logged_hours ?? ''" @change="setHours(t, $event.target.value)"
+          />
           <!-- N8: tech level lives on the task now, not the ticket — see
                NOTES.md and migration 031. -->
           <select

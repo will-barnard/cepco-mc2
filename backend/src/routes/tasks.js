@@ -4,12 +4,18 @@
  * Ticket tasks (migration 022, NOTES.md §2.28) — a ticket's short-lived,
  * per-tech work items. Deliberately lighter than every other per-ticket
  * concept it sits next to: no status workflow of its own (just done/not
- * done), no queue position that other queues need to agree with, no hours
- * logging (that stays exactly where it already was — hours_log/routes/
- * hours.js), no reviewer sign-off (that's QC's job, routes/qc.js). A task
- * either snapshots a standard_procedures row it was created from
+ * done), no queue position that other queues need to agree with, no
+ * reviewer sign-off (that's QC's job, routes/qc.js). A task either
+ * snapshots a standard_procedures row it was created from
  * (standard_procedure_id + title) or is free-form (standard_procedure_id
  * NULL, title typed directly) — see the migration for why both exist.
+ *
+ * Migration 055: hours now live here too, not in a separate ticket-level
+ * form (TicketHours.vue is hidden from TicketDetailView.vue for this
+ * reason). PATCH /:id accepts an optional `hours` alongside `done: true` —
+ * one upserted hours_log row per task (hours_log.ticket_task_id), so the
+ * number recorded is tied to whatever specific piece of work the task
+ * represents, catalog procedure included when there is one.
  *
  * Migration 054 widens this to "ephemeral" tasks too: a row with no
  * ticket_id at all, for shop-wide scratch work that isn't attached to any
@@ -48,13 +54,15 @@ const TASK_SELECT = `
          t.priority_key, pr.label AS priority_label, pr.sort_order AS priority_sort_order,
          t.archived AS ticket_archived,
          e.name AS technician_name,
-         db.name AS done_by_name
+         db.name AS done_by_name,
+         hl.hours AS logged_hours
     FROM ticket_tasks tk
     LEFT JOIN tickets t ON t.id = tk.ticket_id
     LEFT JOIN settings st ON st.category = 'ticket_status' AND st.key = t.status_key
     LEFT JOIN settings pr ON pr.category = 'priority_tier' AND pr.key = t.priority_key
     LEFT JOIN employees e  ON e.id = tk.technician_id
     LEFT JOIN employees db ON db.id = tk.done_by
+    LEFT JOIN hours_log hl ON hl.ticket_task_id = tk.id
 `;
 
 // ---------------------------------------------------------------------------
@@ -242,6 +250,32 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       WHERE id = $1`,
     [req.params.id, title, technicianId, done, doneAt, doneBy, techLevelKey, techLevelLabel],
   );
+
+  // Migration 055: "how many hours did this take" lives on the task now,
+  // recorded (or edited, or cleared) whenever the caller explicitly sends
+  // one — typically alongside `done: true`, but not required to be, so
+  // fixing a number later doesn't need to also re-toggle done. One row per
+  // task (hours_log.ticket_task_id, unique when set) rather than an
+  // appending ledger — re-submitting just replaces the number. Doesn't
+  // apply to an ephemeral task, which has no ticket_id for hours_log to
+  // hang off of in the first place.
+  if (b.hours !== undefined) {
+    if (!existing.ticket_id) throw badRequest('hours require a real ticket, not an ephemeral task');
+    if (b.hours === null || b.hours === '') {
+      await query('DELETE FROM hours_log WHERE ticket_task_id = $1', [req.params.id]);
+    } else {
+      const hours = Number(b.hours);
+      if (!Number.isFinite(hours) || hours <= 0) throw badRequest('hours must be a positive number');
+      if (hours > 24) throw badRequest('hours must be 24 or less for a single entry');
+      await query(
+        `INSERT INTO hours_log (ticket_id, ticket_task_id, employee_id, hours, task_description)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (ticket_task_id) WHERE ticket_task_id IS NOT NULL
+         DO UPDATE SET hours = EXCLUDED.hours, task_description = EXCLUDED.task_description`,
+        [existing.ticket_id, req.params.id, req.user.id, hours, title],
+      );
+    }
+  }
 
   const { rows: updated } = await query(`${TASK_SELECT} WHERE tk.id = $1`, [req.params.id]);
   res.json(updated[0]);

@@ -133,6 +133,17 @@ export const useSettings = defineStore('settings', {
     progressUpdateAllowed: (s) => (categoryKey) => (
       !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_progress_update
     ),
+    // TicketDetailView.vue's QC panel (TicketQc.vue) — a category like
+    // Daily To-Do's or Housekeeping has no instrument going through a
+    // quality-control pass at all, so there's nothing for that panel to
+    // ever do there. Same meta-on-the-category-row mechanism and same
+    // default-permissive convention as shipButtonAllowed/
+    // progressUpdateAllowed above (absent/false meta = shown) — an admin
+    // opts specific categories out from Settings -> Ticket categories'
+    // "QC" column rather than this defaulting to hidden everywhere.
+    qcAllowed: (s) => (categoryKey) => (
+      !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_qc
+    ),
     // DashboardView.vue's "My tasks" — a priority tier flagged this way
     // (Settings -> Priority tiers' "Highlight in tasks" column) gets its
     // tasks pulled into their own separate box below the regular list

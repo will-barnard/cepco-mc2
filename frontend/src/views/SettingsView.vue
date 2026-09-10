@@ -265,6 +265,24 @@ async function toggleAutoTaskFromTitle(row) {
   }
 }
 
+// Per-category QC panel visibility on the ticket detail page (see
+// stores.js's qcAllowed) — same pattern and same starting value (on by
+// default) as toggleShipButton. For a category that never involves an
+// instrument going through quality control (Daily To-Do's, Housekeeping,
+// SideQuests, ...), this hides the panel entirely instead of showing an
+// always-empty "Start round 1" button.
+async function toggleQc(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, hide_qc: !row.meta.hide_qc },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-category "Status notes" (Service done / Service needed) visibility on
 // the ticket detail page — see stores.js's statusNotesAllowed. Same pattern
 // as toggleShipButton, just the opposite starting value (off by default).
@@ -521,6 +539,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Status notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_category'">Auto-task from title</th>
+                <th v-if="category === 'ticket_category'">QC</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th v-if="category === 'ticket_status'">Unlocks tasks</th>
                 <th v-if="category === 'priority_tier'">Highlight in tasks</th>
@@ -613,6 +632,14 @@ onMounted(refresh);
                     <input
                       type="checkbox" :checked="!!row.meta.auto_task_from_title"
                       @change="toggleAutoTaskFromTitle(row)"
+                    />
+                  </label>
+                </td>
+                <td v-if="category === 'ticket_category'">
+                  <label class="checkbox" title="Show the QC panel on tickets in this category">
+                    <input
+                      type="checkbox" :checked="!row.meta.hide_qc"
+                      @change="toggleQc(row)"
                     />
                   </label>
                 </td>

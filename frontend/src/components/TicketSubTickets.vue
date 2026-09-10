@@ -22,14 +22,22 @@
  *     this component is rendered unconditionally in TicketDetailView, so
  *     nesting is allowed rather than special-cased away.
  *
- * "Ship this instrument" is folded in here as a quick-action rather than
- * living as its own header button, since it's just a sub-ticket creation
- * shortcut (routes/tickets.js's create-shipping-ticket route) that
- * pre-fills category/title/notes for the one sub-ticket type common enough
- * to deserve a single click.
+ * "Ship this instrument" used to be folded in here as a quick-action
+ * (routes/tickets.js's create-shipping-ticket route, pre-filling category/
+ * title/notes for the one sub-ticket type common enough to deserve a
+ * single click) but now lives up in TicketDetailView.vue's page header
+ * instead, alongside this ticket's other quick actions — see that file's
+ * createShippingTicket. This component only handles "+ Add sub-ticket"
+ * (a real form, which does need to live here) now.
+ *
+ * This card only renders once there's something to show — an existing
+ * sub-ticket, an open "+ Add sub-ticket" form, or an error from one —
+ * rather than sitting on every ticket page as an empty "No sub-tickets
+ * yet." card. openForm() is exposed so the page header's "+ Add
+ * sub-ticket" button can trigger it from outside.
  */
 import { ref, computed } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings } from '../stores';
 import TechnicianPicker from './TechnicianPicker.vue';
@@ -38,23 +46,12 @@ const props = defineProps({ ticket: { type: Object, required: true } });
 const emit = defineEmits(['changed']);
 
 const settings = useSettings();
-const router = useRouter();
 
 const error = ref('');
-const shippingBusy = ref(false);
 const showForm = ref(false);
 const creating = ref(false);
 
 const children = computed(() => props.ticket.child_tickets || []);
-// Driven by is_shipping (migration 028), not category_key — N2b retired
-// the old dedicated 'shipping' category (see that migration's header),
-// so a shipping sub-ticket is no longer identifiable by category alone.
-const hasShippingChild = computed(() => children.value.some((c) => c.is_shipping));
-// Settings -> Ticket categories -> "Ship button" lets an admin turn this
-// quick-action off per category (e.g. a Shipping ticket has no business
-// offering to spin off *another* shipping ticket) — see stores.js's
-// shipButtonAllowed.
-const shipButtonAllowed = computed(() => settings.shipButtonAllowed(props.ticket.category_key));
 
 const blank = () => ({
   title: '',
@@ -64,19 +61,6 @@ const blank = () => ({
   notes: '',
 });
 const form = ref(blank());
-
-async function createShippingTicket() {
-  error.value = '';
-  shippingBusy.value = true;
-  try {
-    const created = await api.post(`/tickets/${props.ticket.id}/create-shipping-ticket`);
-    router.push({ name: 'ticket', params: { id: created.id } });
-  } catch (err) {
-    error.value = err.message;
-  } finally {
-    shippingBusy.value = false;
-  }
-}
 
 function openForm() {
   form.value = blank();
@@ -114,17 +98,15 @@ async function createSubTicket() {
 function techNames(c) {
   return (c.technicians || []).map((x) => x.name).join(', ') || 'unassigned';
 }
+
+defineExpose({ openForm });
 </script>
 
 <template>
-  <div class="card">
+  <div v-if="children.length || showForm || error" class="card">
     <div class="row" style="margin-bottom: 12px">
       <h2 style="margin: 0">Sub-tickets</h2>
       <div class="spacer" />
-      <button
-        v-if="ticket.instrument_id && !hasShippingChild && shipButtonAllowed"
-        class="small" :disabled="shippingBusy" @click="createShippingTicket"
-      >{{ shippingBusy ? 'Creating…' : 'Ship this instrument' }}</button>
       <button class="small" @click="showForm ? (showForm = false) : openForm()">
         {{ showForm ? 'Cancel' : '+ Add sub-ticket' }}
       </button>

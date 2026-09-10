@@ -1,4 +1,13 @@
 <script setup>
+/**
+ * Estimate — this card only renders once there's an actual estimate on the
+ * ticket, an open "+ Add estimate"/"New revision" form, or an error from
+ * one, rather than sitting on every ticket page as an empty "No estimate
+ * yet." card. The "+ Add estimate" action itself lives up in
+ * TicketDetailView.vue's page header now, alongside this ticket's other
+ * quick actions — openForm() below is exposed so that button can trigger
+ * this card's form from outside.
+ */
 import { ref, computed, onMounted } from 'vue';
 import api from '../api';
 import { useAuth } from '../stores';
@@ -10,6 +19,11 @@ const auth = useAuth();
 const showForm = ref(false);
 const error = ref('');
 const busy = ref(false);
+
+function openForm() {
+  showForm.value = true;
+}
+defineExpose({ openForm });
 
 const form = ref({
   estimated_hours: '',
@@ -73,7 +87,7 @@ const money = (n) => `$${Number(n).toLocaleString(undefined, { minimumFractionDi
 </script>
 
 <template>
-  <div class="card">
+  <div v-if="ticket.estimates?.length || showForm || error" class="card">
     <div class="row" style="margin-bottom: 12px">
       <h2 style="margin: 0">Estimate</h2>
       <div class="spacer" />
