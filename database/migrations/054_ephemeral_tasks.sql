@@ -1,0 +1,14 @@
+-- Ephemeral tasks: the same lightweight "what do I actually do next" item
+-- ticket_tasks already models for a ticket (migration 022), just not
+-- attached to one at all -- a shop-wide scratch to-do list for things like
+-- "restock solder" or "call the landlord about the leak" that don't belong
+-- on a customer's job. Reusing ticket_tasks rather than a parallel table
+-- means an ephemeral task gets the same assignee/tech-level fields and the
+-- same toggle-done API (routes/tasks.js) as a real ticket task, and shows
+-- up in the Dashboard's existing "My tasks" box for free when it's
+-- assigned to you -- see routes/tasks.js's GET / and DashboardView.vue.
+--
+-- ON DELETE CASCADE on ticket_id is untouched and still correct: it only
+-- ever fires for a row that actually has a ticket_id, which an ephemeral
+-- task never does.
+ALTER TABLE ticket_tasks ALTER COLUMN ticket_id DROP NOT NULL;

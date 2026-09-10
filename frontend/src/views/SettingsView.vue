@@ -7,7 +7,7 @@
  * tickets. Renaming edits the label only. Deleting is refused while any ticket
  * still carries the key; retiring hides it from new tickets instead.
  */
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -148,6 +148,22 @@ async function remove(row) {
     error.value = err.message;
   }
 }
+
+// Only these two shop_config rows are meant to be edited from this
+// generic "Shop configuration" card below. `ceppys_schedule` and
+// `xero_sync` already have their own dedicated config panels (Ceppys
+// page's "Configure Ceppys", Customers page's Xero sync panel) whose meta
+// shape (enabled/day_of_week/time, etc.) this card's plain number box
+// doesn't match at all; `fleet_qc_sweep` and `daily_todo_archive` aren't
+// admin-configurable in the first place -- they're bookkeeping-only rows
+// (migrations 034/051) that just happen to live in the same `shop_config`
+// category, and were showing up here with a number box that saved a
+// `meta.value` nothing on the backend ever reads.
+const genericShopConfigRows = computed(
+  () => (settings.data.shop_config || []).filter(
+    (row) => row.key === 'labor_rate' || row.key === 'shopify_default_category',
+  ),
+);
 
 async function setShopValue(row, value) {
   error.value = '';
@@ -451,6 +467,7 @@ onMounted(refresh);
         </RouterLink>
         <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'ephemeral-tasks' }">Ephemeral tasks →</RouterLink>
       </div>
     </div>
 
@@ -466,7 +483,7 @@ onMounted(refresh);
           rate they were quoted at.
         </p>
         <div class="field-row">
-          <div v-for="row in settings.data.shop_config || []" :key="row.id" class="field">
+          <div v-for="row in genericShopConfigRows" :key="row.id" class="field">
             <label>{{ row.label }}</label>
             <select
               v-if="row.key === 'shopify_default_category'"

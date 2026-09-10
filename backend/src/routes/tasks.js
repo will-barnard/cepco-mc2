@@ -11,10 +11,26 @@
  * (standard_procedure_id + title) or is free-form (standard_procedure_id
  * NULL, title typed directly) — see the migration for why both exist.
  *
- * Open to any signed-in user, not admin-gated — same reasoning as
- * ticket_technicians assignment and sub-ticket creation (routes/tickets.js,
- * TicketSubTickets.vue): assigning/completing day-to-day work items isn't
- * an admin-only action in this shop.
+ * Migration 054 widens this to "ephemeral" tasks too: a row with no
+ * ticket_id at all, for shop-wide scratch work that isn't attached to any
+ * ticket (EphemeralTasksView.vue's `?ephemeral_only=true`). Everywhere
+ * below that reads or writes `ticket_id` treats it as optional rather than
+ * always present; TASK_SELECT's LEFT JOIN is what keeps a plain SELECT *
+ * from silently dropping those rows.
+ *
+ * A ticket task is open to any signed-in user, not admin-gated — same
+ * reasoning as ticket_technicians assignment and sub-ticket creation
+ * (routes/tickets.js, TicketSubTickets.vue): assigning/completing
+ * day-to-day work items isn't an admin-only action in this shop. An
+ * ephemeral task is different — it lives on the admin-only Settings page
+ * (EphemeralTasksView.vue) — so every mutation below checks req.user.role
+ * itself for the ticket_id-is-null case, same "GET open to everyone,
+ * mutations admin-only" split routes/procedures.js and
+ * routes/recurringTicketTemplates.js already use for their own admin-only
+ * settings pages. Reading (GET, including ?ephemeral_only=true) stays
+ * unrestricted either way, and the frontend route itself is admin-gated
+ * too (router.js's meta.admin), so this is defense in depth more than the
+ * only thing standing between a non-admin and this list.
  */
 const express = require('express');
 const { query } = require('../db');
@@ -34,7 +50,7 @@ const TASK_SELECT = `
          e.name AS technician_name,
          db.name AS done_by_name
     FROM ticket_tasks tk
-    JOIN tickets t ON t.id = tk.ticket_id
+    LEFT JOIN tickets t ON t.id = tk.ticket_id
     LEFT JOIN settings st ON st.category = 'ticket_status' AND st.key = t.status_key
     LEFT JOIN settings pr ON pr.category = 'priority_tier' AND pr.key = t.priority_key
     LEFT JOIN employees e  ON e.id = tk.technician_id
@@ -64,8 +80,21 @@ router.get('/', asyncHandler(async (req, res) => {
   // before work starts — so this is opt-in via the query param, not the
   // list's default.
   if (req.query.unlocked_only === 'true') {
-    clauses.push("t.archived = FALSE AND COALESCE((st.meta->>'unlocks_tasks')::boolean, FALSE)");
+    // An ephemeral task (no ticket at all) has no status to gate on, so
+    // it's always "unlocked" -- only a ticket-linked task still needs its
+    // ticket to be active and currently sitting in an unlocks_tasks status.
+    clauses.push(`(
+      tk.ticket_id IS NULL
+      OR (t.archived = FALSE AND COALESCE((st.meta->>'unlocks_tasks')::boolean, FALSE))
+    )`);
   }
+
+  // The dedicated Ephemeral Tasks page (EphemeralTasksView.vue): every task
+  // with no ticket at all, regardless of done/assignee -- same opt-in-via-
+  // query-param posture as unlocked_only above rather than the list's
+  // default, since a ticket's own detail page (?ticket_id=) never wants
+  // this and neither does the plain "everything" list.
+  if (req.query.ephemeral_only === 'true') clauses.push('tk.ticket_id IS NULL');
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   // Dashboard ordering: whichever ticket has the higher-priority tier
@@ -89,10 +118,21 @@ router.post('/', asyncHandler(async (req, res) => {
   const {
     ticket_id: ticketId, standard_procedure_id: procedureId, technician_id: technicianId,
   } = req.body || {};
-  if (!ticketId) throw badRequest('ticket_id is required');
 
-  const { rows: ticketRows } = await query('SELECT id FROM tickets WHERE id = $1', [ticketId]);
-  if (!ticketRows[0]) throw notFound('Ticket not found');
+  // No ticket_id at all = an ephemeral task (migration 054) -- a shop-wide
+  // scratch to-do item, not attached to any customer job, that lives on
+  // the admin-only Settings page (EphemeralTasksView.vue) rather than
+  // being open to everyone like a ticket task. It also can't be sourced
+  // from the procedures catalog (that's family-filtered against an
+  // instrument this task doesn't have), so it always needs an explicit
+  // title, checked alongside the free-form-ticket-task case below.
+  if (ticketId) {
+    const { rows: ticketRows } = await query('SELECT id FROM tickets WHERE id = $1', [ticketId]);
+    if (!ticketRows[0]) throw notFound('Ticket not found');
+  } else {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (procedureId) throw badRequest('standard_procedure_id requires a ticket_id');
+  }
 
   let title = req.body && req.body.title ? String(req.body.title).trim() : '';
   // N8: a procedure can name the tech level its own work usually calls for
@@ -123,11 +163,15 @@ router.post('/', asyncHandler(async (req, res) => {
   let techLevel = null;
   if (techLevelKey) techLevel = await settings.resolveActive('tech_level', techLevelKey);
 
-  // Back of the line for this ticket — same MAX(...)+10 convention as
-  // category_queue_position/family_queue_position (migrations 007/015).
+  // Back of the line — same MAX(...)+10 convention as
+  // category_queue_position/family_queue_position (migrations 007/015),
+  // just scoped to "this ticket's tasks" or, with no ticket_id, the
+  // ephemeral pool instead.
   const { rows: posRows } = await query(
-    'SELECT COALESCE(MAX(position), 0) + 10 AS next FROM ticket_tasks WHERE ticket_id = $1',
-    [ticketId],
+    ticketId
+      ? 'SELECT COALESCE(MAX(position), 0) + 10 AS next FROM ticket_tasks WHERE ticket_id = $1'
+      : 'SELECT COALESCE(MAX(position), 0) + 10 AS next FROM ticket_tasks WHERE ticket_id IS NULL',
+    ticketId ? [ticketId] : [],
   );
 
   const { rows: inserted } = await query(
@@ -137,7 +181,7 @@ router.post('/', asyncHandler(async (req, res) => {
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
-      ticketId, procedureId || null, title, technicianId || null, posRows[0].next, req.user.id,
+      ticketId || null, procedureId || null, title, technicianId || null, posRows[0].next, req.user.id,
       techLevel ? techLevel.key : null, techLevel ? techLevel.label : null,
     ],
   );
@@ -156,6 +200,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { rows: existingRows } = await query('SELECT * FROM ticket_tasks WHERE id = $1', [req.params.id]);
   const existing = existingRows[0];
   if (!existing) throw notFound('Task not found');
+  // Same admin-only-for-ephemeral split as POST / above.
+  if (existing.ticket_id === null && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
 
   const b = req.body || {};
   const title = b.title !== undefined ? String(b.title).trim() : existing.title;
@@ -203,8 +251,15 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 // Delete — e.g. a procedure attached to the wrong ticket by mistake.
 // ---------------------------------------------------------------------------
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const { rowCount } = await query('DELETE FROM ticket_tasks WHERE id = $1', [req.params.id]);
-  if (!rowCount) throw notFound('Task not found');
+  const { rows: existingRows } = await query('SELECT ticket_id FROM ticket_tasks WHERE id = $1', [req.params.id]);
+  const existing = existingRows[0];
+  if (!existing) throw notFound('Task not found');
+  // Same admin-only-for-ephemeral split as POST / and PATCH /:id above.
+  if (existing.ticket_id === null && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  await query('DELETE FROM ticket_tasks WHERE id = $1', [req.params.id]);
   res.json({ deleted: true });
 }));
 

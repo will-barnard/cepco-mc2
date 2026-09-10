@@ -142,7 +142,15 @@ onMounted(async () => {
   <div class="page">
     <div class="page-head">
       <h1>Shop overview</h1>
-      <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
+      <div class="row nowrap">
+        <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
+        <!-- Ephemeral tasks live on the admin-only Settings page now, so this
+             shortcut is admin-only too -- otherwise a non-admin would click it
+             and just get bounced back here by the router's admin guard. -->
+        <RouterLink v-if="auth.isAdmin" to="/settings/ephemeral-tasks" class="btn">
+          New ephemeral task
+        </RouterLink>
+      </div>
     </div>
 
     <div v-if="loading" class="empty">Loading…</div>
@@ -205,8 +213,17 @@ onMounted(async () => {
           <li v-for="t in regularTasks" :key="t.id">
             <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
             <div style="flex: 1; min-width: 0">
-              <RouterLink :to="{ name: 'ticket', params: { id: t.ticket_id } }">{{ t.title }}</RouterLink>
-              <div class="muted small">{{ t.ticket_title }} · {{ t.priority_label }}</div>
+              <!-- Ephemeral tasks (migration 054) have no ticket_id/ticket_title
+                   at all -- plain text and an "Ephemeral task" tag instead of a
+                   ticket link and priority for those. -->
+              <RouterLink v-if="t.ticket_id" :to="{ name: 'ticket', params: { id: t.ticket_id } }">
+                {{ t.title }}
+              </RouterLink>
+              <span v-else>{{ t.title }}</span>
+              <div class="muted small">
+                <template v-if="t.ticket_id">{{ t.ticket_title }} · {{ t.priority_label }}</template>
+                <template v-else>Ephemeral task</template>
+              </div>
             </div>
           </li>
         </ul>

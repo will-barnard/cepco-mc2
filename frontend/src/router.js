@@ -48,6 +48,10 @@ const routes = [
     component: () => import('./views/RecurringTicketsView.vue'), meta: { admin: true },
   },
   {
+    path: '/settings/ephemeral-tasks', name: 'ephemeral-tasks',
+    component: () => import('./views/EphemeralTasksView.vue'), meta: { admin: true },
+  },
+  {
     path: '/settings/instrument-models', name: 'instrument-models',
     component: () => import('./views/InstrumentModelsView.vue'), meta: { admin: true },
   },
