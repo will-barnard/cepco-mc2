@@ -535,20 +535,26 @@ async function createTicketsForEstimate(estimate, createdById) {
       const notes = `From Estimate #${locked.id}${locked.title ? ` — "${locked.title}"` : ''}:\n${lines}`
         + (locked.notes ? `\n\n${locked.notes}` : '');
 
-      // N10: same standardized "[Client] - ["Nickname"] [Year] [Family]
-      // [Model]" title every other ticket-creation path uses (routes/
-      // tickets.js's composeTicketTitle) — an estimate-originated ticket
+      // N10: same standardized, per-category-templated title every other
+      // ticket-creation path uses (routes/tickets.js's composeTicketTitle,
+      // now driven by the naming panel's ticket_category.meta.naming_template
+      // rather than one hardcoded format) — an estimate-originated ticket
       // used to instead get its own "[Family] [Model] — [Procedure]"
       // format built right here, so the same customer's instrument looked
       // different depending on whether its ticket came from a walk-in
-      // intake or a confirmed estimate. A "General" group (no instrument
-      // on this line item at all — items with no instrument_id share the
-      // 'none' bucket in byInstrument above) has nothing for
+      // intake or a confirmed estimate. resolved.category (from
+      // resolveNewTicketFields above) is this ticket's actual destination
+      // category, so its template applies here too. A "General" group (no
+      // instrument on this line item at all — items with no instrument_id
+      // share the 'none' bucket in byInstrument above) has nothing for
       // composeTicketTitle to describe beyond the customer name, so the
       // procedure(s) are appended the same way the old title did, instead
       // of losing that distinguishing info entirely.
       // eslint-disable-next-line no-await-in-loop
-      let title = await composeTicketTitle(locked.customer_id, first.instrument_id);
+      let title = await composeTicketTitle(
+        locked.customer_id, first.instrument_id,
+        resolved.category.meta && resolved.category.meta.naming_template,
+      );
       if (!first.instrument_id) {
         const procedurePart = `${first.procedure_name}${groupItems.length > 1 ? ' + more' : ''}`;
         title = title ? `${title} - ${procedurePart}` : procedurePart;

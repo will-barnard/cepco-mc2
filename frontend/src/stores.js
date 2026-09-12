@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import api from './api';
+import { DEFAULT_NAMING_TEMPLATE } from './ticketNaming';
 
 export const useAuth = defineStore('auth', {
   state: () => ({ user: null, ready: false }),
@@ -143,6 +144,21 @@ export const useSettings = defineStore('settings', {
     // "QC" column rather than this defaulting to hidden everywhere.
     qcAllowed: (s) => (categoryKey) => (
       !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_qc
+    ),
+    // TicketNewView.vue's title field (Settings -> Ticket naming). A
+    // category with no naming_template set yet (e.g. one added after
+    // migration 056 seeded every existing row) falls back to the same
+    // DEFAULT_NAMING_TEMPLATE the backend renders from, so a brand-new
+    // category previews and behaves identically until someone edits it.
+    namingTemplateFor: (s) => (categoryKey) => (
+      (s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_template
+      || DEFAULT_NAMING_TEMPLATE
+    ),
+    // true once an admin has locked this category to its generated name
+    // (Settings -> Ticket naming) -- TicketNewView.vue disables its title
+    // input rather than letting anyone type over it.
+    namingEnforced: (s) => (categoryKey) => (
+      !!(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_enforced
     ),
     // DashboardView.vue's "My tasks" — a priority tier flagged this way
     // (Settings -> Priority tiers' "Highlight in tasks" column) gets its

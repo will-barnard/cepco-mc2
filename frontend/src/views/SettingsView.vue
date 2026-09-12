@@ -486,6 +486,7 @@ onMounted(refresh);
         <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'ephemeral-tasks' }">Ephemeral tasks →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'ticket-naming' }">Ticket naming →</RouterLink>
       </div>
     </div>
 

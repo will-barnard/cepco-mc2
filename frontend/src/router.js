@@ -52,6 +52,10 @@ const routes = [
     component: () => import('./views/EphemeralTasksView.vue'), meta: { admin: true },
   },
   {
+    path: '/settings/ticket-naming', name: 'ticket-naming',
+    component: () => import('./views/TicketNamingView.vue'), meta: { admin: true },
+  },
+  {
     path: '/settings/instrument-models', name: 'instrument-models',
     component: () => import('./views/InstrumentModelsView.vue'), meta: { admin: true },
   },

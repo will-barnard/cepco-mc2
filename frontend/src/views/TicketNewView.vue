@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
+import { renderNamingTemplate } from '../ticketNaming';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
@@ -226,6 +227,11 @@ function modelLeaf(model) {
   const segments = String(model).split('/').map((s) => s.trim()).filter(Boolean);
   return segments.length ? segments[segments.length - 1] : '';
 }
+// Settings -> Ticket naming's per-category template, rendered against
+// whatever's picked so far — the exact same renderer/template
+// routes/tickets.js's composeTicketTitle uses server-side (stores.js's
+// namingTemplateFor reads the category row this all comes from), so what
+// shows here is what the ticket will actually be titled.
 const autoTitlePreview = computed(() => {
   const customerName = newCustomer.value.enabled
     ? newCustomer.value.name.trim()
@@ -234,17 +240,20 @@ const autoTitlePreview = computed(() => {
   const inst = newInstrument.value.enabled
     ? newInstrument.value
     : instruments.value.find((i) => i.id === form.value.instrument_id);
-  const nicknamePart = inst?.nickname?.trim() ? `"${inst.nickname.trim()}"` : '';
-  const instrumentTypeParts = [];
-  if (inst?.year) instrumentTypeParts.push(String(inst.year).trim());
-  if (inst?.family) instrumentTypeParts.push(refData.familyLabel(inst.family));
+  const nickname = inst?.nickname?.trim() || '';
+  const year = inst?.year ? String(inst.year).trim() : '';
+  const familyLabel = inst?.family ? refData.familyLabel(inst.family) : '';
   const leaf = modelLeaf(inst?.model);
-  if (leaf) instrumentTypeParts.push(leaf);
-  const descriptor = [nicknamePart, instrumentTypeParts.join(' ')].filter(Boolean).join(' ');
 
-  if (customerName && descriptor) return `${customerName} - ${descriptor}`;
-  return customerName || descriptor;
+  const template = settings.namingTemplateFor(form.value.category_key);
+  return renderNamingTemplate(template, { customerName, nickname, year, familyLabel, modelLeaf: leaf });
 });
+
+// Settings -> Ticket naming's "Standardize" toggle for whichever category
+// is currently picked — locks the Title field below to this preview
+// instead of letting anyone type over it (backend enforces the same rule
+// independently — see routes/tickets.js's namingEnforced).
+const namingEnforced = computed(() => settings.namingEnforced(form.value.category_key));
 
 // Auto-fill on every *change* of instrument type — not on every keystroke
 // elsewhere in the form, and not a one-time default, so switching types
@@ -280,8 +289,13 @@ async function submit() {
   }
   // N1: title itself is only required when there's nothing to auto-generate
   // one from (see autoTitlePreview and composeTicketTitle in
-  // routes/tickets.js — this mirrors that exact rule).
-  if (!form.value.title.trim() && !autoTitlePreview.value) {
+  // routes/tickets.js — this mirrors that exact rule). A naming-enforced
+  // category never requires one typed in — it always gets the generated
+  // name, even if that generated name happens to be empty (an admin's
+  // template problem to notice and fix, not something to block this form
+  // over — the backend will surface it as its own "title is required"
+  // error if it truly comes up empty).
+  if (!namingEnforced.value && !form.value.title.trim() && !autoTitlePreview.value) {
     error.value = 'Give this ticket a title, or pick a customer/instrument to generate one.';
     return;
   }
@@ -291,8 +305,12 @@ async function submit() {
     if (payload.subcategory_other_text) payload.subcategory_other_text = payload.subcategory_other_text.trim();
     // A blank title is a real, valid submission now (N1) — POST /tickets
     // composes one from the customer/instrument. Trim rather than send a
-    // whitespace-only title through as if it were meaningful.
-    payload.title = payload.title.trim() || null;
+    // whitespace-only title through as if it were meaningful. A
+    // naming-enforced category ignores this field server-side regardless
+    // (routes/tickets.js), but sending null rather than whatever's stale
+    // in the (disabled) input keeps the request honest about what this
+    // form actually let someone type.
+    payload.title = namingEnforced.value ? null : (payload.title.trim() || null);
 
     if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
       const created = await api.post('/customers', {
@@ -410,16 +428,24 @@ async function submit() {
 
     <form class="card" @submit.prevent="submit">
       <div class="field">
-        <label>Title{{ autoTitlePreview ? '' : ' *' }}</label>
+        <label>Title{{ namingEnforced || autoTitlePreview ? '' : ' *' }}</label>
         <input
+          v-if="namingEnforced"
+          :value="autoTitlePreview" disabled
+          title="This category uses a standardized name (Settings → Ticket naming) — nothing to type here."
+        />
+        <input
+          v-else
           v-model="form.title"
           :required="!autoTitlePreview"
           :placeholder="autoTitlePreview || 'e.g. Steve Dawson — Wurlitzer 200A full resto'"
         />
         <!-- N1: only shown once there's actually something to preview — a
              blank title plus no customer/instrument is still a hard error
-             (submit() above), same as before this packet. -->
-        <p v-if="autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
+             (submit() above), same as before this packet. Not shown at all
+             once naming_enforced -- the disabled field above already shows
+             exactly what the ticket will be titled, live. -->
+        <p v-if="!namingEnforced && autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
           Left blank, this ticket will be titled "{{ autoTitlePreview }}".
         </p>
       </div>

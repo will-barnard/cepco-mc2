@@ -627,22 +627,59 @@ async function insertTicketRow(client, b, resolved, createdById) {
   return created;
 }
 
-// N10: standardized ticket title, replacing N1's original space-joined
-// version — "[Client Name] - ["Nickname"] [Year] [Family] [Model leaf]",
-// e.g. `Dolly Jones - "Old Betsy" 1973 Rhodes Stage 73`. Still whichever
-// pieces are actually present: no dash when either side is empty, no
-// nickname quotes when there isn't one, etc. This is the fallback
-// POST /tickets reaches for when the request didn't supply a title of its
-// own (see below), and — since N10 — the same function quotes.js's
-// createTicketsForEstimate calls for a ticket spun off an estimate,
-// so every ticket-creation path renders an instrument identically no
-// matter where it came from. Deliberately NOT wired into
-// resolveNewTicketFields/insertTicketRow themselves, so the other callers
-// of those two functions (fleet restorations, inventory purchases, Shopify
-// orders, the create-shipping-ticket route) keep supplying their own
-// explicit titles completely unaffected, exactly as the boss-list scope
-// doc asked.
+// N10/naming panel: standardized ticket title, now driven by a
+// per-category template instead of one hardcoded format — see Settings ->
+// Ticket categories -> Naming (ticket_category.meta.naming_template /
+// meta.naming_enforced). DEFAULT_NAMING_TEMPLATE below reproduces N10's
+// original fixed format exactly, and is what every pre-existing category
+// was seeded with (migration 056), so nothing changes for anyone until an
+// admin actually edits a category's template.
 //
+// Template syntax is deliberately small: `{token}` substitutes a value
+// (empty string if that piece isn't on this ticket), and a `[...]` group
+// is dropped in its entirety — including any literal punctuation inside
+// it — unless at least one token inside it has a value; groups don't
+// nest. That's enough to express "only show the dash if there's a
+// customer" and "only show the quotes if there's a nickname" without a
+// bigger templating engine. A leftover dangling separator at either end
+// (e.g. a customer-only ticket under a template that leads with
+// `[{customer} - ]`) is trimmed in the final cleanup pass regardless.
+const NAMING_TOKENS = {
+  customer: (ctx) => ctx.customerName,
+  // Quotes live in DEFAULT_NAMING_TEMPLATE's own `["{nickname}"]` group,
+  // not here -- a token that pre-quoted itself would double up with any
+  // template (including a custom one) that also quotes it literally.
+  nickname: (ctx) => ctx.nickname,
+  year: (ctx) => ctx.year,
+  family: (ctx) => ctx.familyLabel,
+  model: (ctx) => ctx.modelLeaf,
+};
+
+const DEFAULT_NAMING_TEMPLATE = '[{customer} - ]["{nickname}"][ {year}][ {family}][ {model}]';
+
+function renderNamingTemplate(template, ctx) {
+  let out = String(template || DEFAULT_NAMING_TEMPLATE).replace(/\[([^[\]]*)\]/g, (_, inner) => {
+    let any = false;
+    const rendered = inner.replace(/\{(\w+)\}/g, (m, name) => {
+      const val = (NAMING_TOKENS[name] ? NAMING_TOKENS[name](ctx) : '') || '';
+      if (val) any = true;
+      return val;
+    });
+    return any ? rendered : '';
+  });
+  out = out.replace(/\{(\w+)\}/g, (m, name) => (NAMING_TOKENS[name] ? NAMING_TOKENS[name](ctx) : '') || '');
+  // Collapse-then-trim before stripping a dangling leading/trailing
+  // separator -- a dropped group can leave the separator sitting right
+  // before a trailing space (e.g. "Dolly Jones - "), and the trim has to
+  // happen first or the separator is never actually the last character
+  // when the dangling-separator regexes below run.
+  return out.replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[-\u2013\u2014,|]\s*/, '')
+    .replace(/\s*[-\u2013\u2014,|]$/, '')
+    .trim();
+}
+
 // `model` on `instruments` is still a plain string (the InstrumentModelPicker/
 // estimate-wizard's cascading tree pick, flattened to a " / "-joined chain
 // like "Mark I / Stage 73", or manual free text) — there's no live FK back
@@ -657,46 +694,45 @@ function modelLeaf(model) {
   return segments.length ? segments[segments.length - 1] : '';
 }
 
-async function composeTicketTitle(customerId, instrumentId) {
+// POST /tickets reaches for this when the request didn't supply a title of
+// its own (see below), and quotes.js's createTicketsForEstimate calls it
+// for a ticket spun off an estimate, so every ticket-creation path renders
+// an instrument identically no matter where it came from — both now pass
+// the resolved category's own naming_template through `template` (falling
+// back to DEFAULT_NAMING_TEMPLATE when a category hasn't set one).
+// Deliberately NOT wired into resolveNewTicketFields/insertTicketRow
+// themselves, so the other callers of those two functions (fleet
+// restorations, inventory purchases, Shopify orders, the
+// create-shipping-ticket route) keep supplying their own explicit titles
+// completely unaffected, exactly as the boss-list scope doc asked.
+async function composeTicketTitle(customerId, instrumentId, template) {
   let customerName = '';
   if (customerId) {
     const { rows } = await query('SELECT name FROM customers WHERE id = $1', [customerId]);
     if (rows[0] && rows[0].name) customerName = rows[0].name;
   }
 
-  let nicknamePart = '';
-  const instrumentTypeParts = [];
+  let nickname = '';
+  let year = '';
+  let familyLabel = '';
+  let leaf = '';
   if (instrumentId) {
     const { rows } = await query(
       'SELECT nickname, model, year, family FROM instruments WHERE id = $1', [instrumentId],
     );
     if (rows[0]) {
-      if (rows[0].nickname) nicknamePart = `"${rows[0].nickname}"`;
-      if (rows[0].year) instrumentTypeParts.push(String(rows[0].year).trim());
-      if (rows[0].family) instrumentTypeParts.push(FAMILY_LABELS[rows[0].family] || rows[0].family);
-      const leaf = modelLeaf(rows[0].model);
-      if (leaf) instrumentTypeParts.push(leaf);
+      nickname = rows[0].nickname || '';
+      year = rows[0].year ? String(rows[0].year).trim() : '';
+      familyLabel = rows[0].family ? (FAMILY_LABELS[rows[0].family] || rows[0].family) : '';
+      leaf = modelLeaf(rows[0].model);
     }
   }
-  const instrumentType = instrumentTypeParts.join(' ');
-  const descriptor = [nicknamePart, instrumentType].filter(Boolean).join(' ');
 
-  if (customerName && descriptor) return `${customerName} - ${descriptor}`;
-  return (customerName || descriptor).trim();
+  return renderNamingTemplate(template, { customerName, nickname, year, familyLabel, modelLeaf: leaf });
 }
 
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
-
-  // N1: title used to be flatly required; a walk-in ticket with a customer
-  // and/or instrument picked now gets one composed for it instead (see
-  // composeTicketTitle above) — still required when there's neither (e.g.
-  // an internal SideQuest with nothing to build a name from), same as
-  // before. TicketNewView.vue mirrors this exact rule client-side so its
-  // own title field only becomes required when the preview would be empty.
-  let title = b.title && String(b.title).trim();
-  if (!title) title = await composeTicketTitle(b.customer_id || null, b.instrument_id || null);
-  if (!title) throw badRequest('title is required');
 
   // is_shipping used to be settable only by the "Ship this instrument"
   // flow below (create-shipping-ticket) — a normal ticket-creation request
@@ -712,8 +748,32 @@ router.post('/', asyncHandler(async (req, res) => {
   // this line has no effect on that path at all). Every other caller of
   // resolveNewTicketFields/insertTicketRow still builds its own plain
   // object rather than forwarding a raw request body.
+  //
+  // Resolved before the title below now (it used to come after) since the
+  // naming panel needs to know this ticket's category to know whether it's
+  // even allowed to keep a client-supplied title at all.
   const category = await settings.resolveActive('ticket_category', b.category_key);
   const isShipping = category.key === 'orders_shipping';
+
+  // N1: title used to be flatly required; a walk-in ticket with a customer
+  // and/or instrument picked now gets one composed for it instead (see
+  // composeTicketTitle above) — still required when there's neither (e.g.
+  // an internal SideQuest with nothing to build a name from), same as
+  // before. TicketNewView.vue mirrors this exact rule client-side so its
+  // own title field only becomes required when the preview would be empty.
+  //
+  // Naming panel: a category with meta.naming_enforced never gets to keep
+  // a hand-typed title, even from a raw API call that skips the (locked,
+  // read-only) field TicketNewView.vue shows for it — the generated name
+  // is the only name that category's tickets ever get.
+  const namingEnforced = !!(category.meta && category.meta.naming_enforced);
+  let title = namingEnforced ? '' : (b.title && String(b.title).trim());
+  if (!title) {
+    title = await composeTicketTitle(
+      b.customer_id || null, b.instrument_id || null, category.meta && category.meta.naming_template,
+    );
+  }
+  if (!title) throw badRequest('title is required');
 
   const fields = { ...b, title, is_shipping: isShipping };
   const resolved = await resolveNewTicketFields(fields);
@@ -804,6 +864,32 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     }
   }
 
+  // Naming panel (Settings -> Ticket categories -> Naming; meta.naming_enforced
+  // + meta.naming_template, routes/tickets.js's composeTicketTitle) — a
+  // category that's opted into a standardized name keeps its title in sync
+  // with whichever customer/instrument it actually ends up on, the same
+  // template POST / seeds a *new* ticket's title from. A free-naming
+  // category is untouched here, exactly as before PATCH ever knew about
+  // this: swapping the customer or instrument on one never silently
+  // rewrites a hand-typed title, and only actually resolves the category's
+  // meta (one extra query) when something that could matter — the title
+  // itself, or the customer/instrument/category — is actually in this
+  // request.
+  let titleOverride = b.title === undefined ? null : String(b.title).trim();
+  const namingRelevantChange = b.customer_id !== undefined || b.instrument_id !== undefined
+    || (resolved.category && resolved.category.key !== existing.category_key);
+  if (namingRelevantChange || titleOverride) {
+    const namingCategory = resolved.category || await settings.resolve('ticket_category', effectiveCategoryKey);
+    if (namingCategory.meta && namingCategory.meta.naming_enforced) {
+      const effectiveCustomerId = b.customer_id !== undefined ? (b.customer_id || null) : existing.customer_id;
+      const effectiveInstrumentId = b.instrument_id !== undefined
+        ? (b.instrument_id || null) : existing.instrument_id;
+      titleOverride = await composeTicketTitle(
+        effectiveCustomerId, effectiveInstrumentId, namingCategory.meta.naming_template,
+      );
+    }
+  }
+
   const updated = await withTransaction(async (client) => {
     // Changing a ticket's category moves it into a different queue — it
     // always joins that queue at the bottom (same rule as a brand-new
@@ -870,7 +956,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
        RETURNING *`,
       [
         req.params.id,
-        b.title === undefined ? null : String(b.title).trim(),
+        titleOverride,
         resolved.category ? resolved.category.key : null,
         resolved.category ? resolved.category.label : null,
         resolved.priority ? resolved.priority.key : null,
