@@ -15,7 +15,8 @@ const ROLES = ['admin', 'senior', 'junior'];
 // admins see anything beyond name/role/initials.
 router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT id, name, email, role, initials, active, excluded_from_chore_rotation, created_at
+    `SELECT id, name, email, role, initials, active, excluded_from_chore_rotation,
+            show_parts_on_dashboard, created_at
        FROM employees ORDER BY active DESC, name`,
   );
   res.json(rows);
@@ -42,6 +43,10 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
 router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
   const {
     name, email, role, initials, active, password, pin, excluded_from_chore_rotation: excludedFromChoreRotation,
+    // Settings -> Staff accounts' "Parts/Supplies on dashboard" checkbox
+    // (migration 058) -- same admin-sets-it-for-anyone shape as
+    // excluded_from_chore_rotation just above.
+    show_parts_on_dashboard: showPartsOnDashboard,
   } = req.body || {};
   if (role !== undefined && !ROLES.includes(role)) {
     throw badRequest(`role must be one of: ${ROLES.join(', ')}`);
@@ -79,9 +84,11 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
         active                       = COALESCE($6, active),
         password_hash                = COALESCE($7, password_hash),
         pin_hash                     = CASE WHEN $8 THEN $9 ELSE pin_hash END,
-        excluded_from_chore_rotation = COALESCE($10, excluded_from_chore_rotation)
+        excluded_from_chore_rotation = COALESCE($10, excluded_from_chore_rotation),
+        show_parts_on_dashboard      = COALESCE($11, show_parts_on_dashboard)
       WHERE id = $1
-      RETURNING id, name, email, role, initials, active, excluded_from_chore_rotation, created_at`,
+      RETURNING id, name, email, role, initials, active, excluded_from_chore_rotation,
+                show_parts_on_dashboard, created_at`,
     [
       req.params.id,
       name === undefined ? null : String(name).trim(),
@@ -93,6 +100,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       pinHash !== undefined,
       pinHash === undefined ? null : pinHash,
       excludedFromChoreRotation === undefined ? null : excludedFromChoreRotation,
+      showPartsOnDashboard === undefined ? null : showPartsOnDashboard,
     ],
   );
   if (!rows[0]) throw notFound('Employee not found');

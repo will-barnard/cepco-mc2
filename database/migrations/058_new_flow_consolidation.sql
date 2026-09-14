@@ -1,0 +1,16 @@
+-- "+ New..." consolidation (Dashboard's New ticket / New ephemeral task
+-- buttons and the dedicated Parts/Supplies page all become one tabbed
+-- page, frontend/src/views/NewView.vue) plus its Parts/Supplies dashboard
+-- widget. Only one schema change is actually needed -- parts_orders
+-- already supports a ticket link (parts_order_tickets, migration 001) and
+-- a vendor (vendor_id/vendor_other), which turned out to be exactly the
+-- "category" the Custom Shop ticket box needed, so nothing new there.
+--
+-- employees.show_parts_on_dashboard -- Settings -> Staff accounts, an
+-- admin-set per-employee flag (same shape as excluded_from_chore_rotation,
+-- migration 033) controlling whether that person's Dashboard shows a
+-- Parts/Supplies card. View + status-change only there; creating a new
+-- order still only happens from the "+ New" page's Parts/Supplies tab.
+-- Defaults FALSE for everyone -- opt-in per person, not a shop-wide
+-- default that suddenly adds a card to every dashboard.
+ALTER TABLE employees ADD COLUMN show_parts_on_dashboard BOOLEAN NOT NULL DEFAULT FALSE;

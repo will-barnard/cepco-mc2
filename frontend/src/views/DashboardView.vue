@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
+import PartsOrdersPanel from '../components/PartsOrdersPanel.vue';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -143,13 +144,9 @@ onMounted(async () => {
     <div class="page-head">
       <h1>Shop overview</h1>
       <div class="row nowrap">
-        <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
-        <!-- Ephemeral tasks live on the admin-only Settings page now, so this
-             shortcut is admin-only too -- otherwise a non-admin would click it
-             and just get bounced back here by the router's admin guard. -->
-        <RouterLink v-if="auth.isAdmin" to="/settings/ephemeral-tasks" class="btn">
-          New ephemeral task
-        </RouterLink>
+        <!-- Consolidated: New ticket/New task/Parts & Supplies are one
+             tabbed page now (NewView.vue) -- see NOTES.md. -->
+        <RouterLink to="/new" class="btn primary">+ New…</RouterLink>
       </div>
     </div>
 
@@ -260,6 +257,20 @@ onMounted(async () => {
             </li>
           </ul>
         </template>
+      </div>
+
+      <!-- Settings -> Staff accounts' "Parts on dashboard" checkbox
+           (employees.show_parts_on_dashboard, migration 058) -- view and
+           status-change only, same PartsOrdersPanel.vue the "+ New" page's
+           Parts/Supplies tab uses, just with allow-create off. Creating a
+           new order only ever happens from that tab. -->
+      <div v-if="auth.user.show_parts_on_dashboard" class="card" style="margin-bottom: 24px">
+        <div class="row" style="margin-bottom: 12px">
+          <h2 style="margin: 0">Parts / Supplies</h2>
+          <div class="spacer" />
+          <RouterLink to="/new?tab=parts" class="small">Add an order →</RouterLink>
+        </div>
+        <PartsOrdersPanel :allow-create="false" />
       </div>
 
       <div class="card" style="margin-bottom: 24px">

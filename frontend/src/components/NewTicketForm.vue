@@ -1,4 +1,12 @@
 <script setup>
+/**
+ * New-ticket form -- the "New Ticket" tab of the consolidated "+ New" page
+ * (NewView.vue), which replaced the old standalone /tickets/new route
+ * (still reachable: router.js redirects it here) as part of folding
+ * ticket/task/parts-order creation into one page (NOTES.md). Lives as its
+ * own component rather than inline in NewView.vue purely because of size
+ * -- nothing here assumes a particular parent, so it takes no props.
+ */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
@@ -25,6 +33,24 @@ const busy = ref(false);
 // still point the user at the ticket that *did* get made, rather than
 // stranding them on a form that looks like nothing happened.
 const createdTicketId = ref(null);
+
+// Custom Shop (bottom-of-form disclosure) -- an optional supplies order,
+// named after this ticket, created right after it via the same
+// parts_orders/parts_order_tickets link TicketCustomShop.vue's ticket-page
+// box reads (GET /parts?ticket_id=). Vendor is deliberately the only
+// "category" here (see NOTES.md) -- parts_orders already had vendor_id/
+// vendor_other, so nothing new was needed for it. '__other__' is the same
+// vendor-picker sentinel PartsOrdersPanel.vue uses, resolved into
+// vendor_other (free text) at submit time.
+const OTHER_VENDOR = '__other__';
+const vendors = ref([]);
+const customShopOpen = ref(false);
+const customShop = ref({
+  vendor_id: '', vendor_other: '', quantity: '', notes: '',
+});
+function resetCustomShop() {
+  customShop.value = { vendor_id: '', vendor_other: '', quantity: '', notes: '' };
+}
 
 // Family -> default technician ids (Settings -> Default instrument
 // assignments). Pre-fills the picker below the moment an instrument type
@@ -284,6 +310,7 @@ watch(selectedFamily, (family) => {
 
 onMounted(async () => {
   defaultTechsByFamily.value = await api.get('/instruments/default-technicians');
+  vendors.value = await api.get('/parts/vendors');
   form.value.status_key = settings.statuses.find((s) => !s.retired)?.key || '';
   // Prefer the historical default if it's still active; otherwise fall
   // back to whatever sorts first, same "don't assume a key survives"
@@ -368,6 +395,31 @@ async function submit() {
     const ticket = await api.post('/tickets', payload);
     createdTicketId.value = ticket.id;
 
+    // Custom Shop (bottom-of-form disclosure): only fires once the
+    // section was actually opened *and* a vendor picked -- opening it and
+    // leaving it blank creates nothing, same "only submit if there's
+    // actually something there" gating the primary instrument's own
+    // inline-add form uses above. Runs after the ticket exists (needs its
+    // real id for parts_order_tickets, and its real title -- not the
+    // client-side autoTitlePreview -- for a naming-enforced category
+    // whose composed title this form can only ever approximate).
+    let customShopError = '';
+    const usingOtherVendor = customShop.value.vendor_id === OTHER_VENDOR;
+    if (customShopOpen.value && (customShop.value.vendor_id || customShop.value.vendor_other.trim())) {
+      try {
+        await api.post('/parts', {
+          vendor_id: usingOtherVendor ? null : (customShop.value.vendor_id || null),
+          vendor_other: usingOtherVendor ? customShop.value.vendor_other.trim() : null,
+          item: ticket.title,
+          quantity: customShop.value.quantity || null,
+          notes: customShop.value.notes || null,
+          ticket_ids: [ticket.id],
+        });
+      } catch (err) {
+        customShopError = err.message;
+      }
+    }
+
     // N9: one sibling ticket per additional instrument, each linked back
     // via source_ticket_id — same category/priority/technicians/notes as
     // the primary (not re-resolved per family), title left blank so N1's
@@ -427,14 +479,18 @@ async function submit() {
       }
     }
 
-    if (siblingFailures.length) {
+    if (siblingFailures.length || customShopError) {
       // The primary (and any siblings that DID succeed) are real,
       // already-created tickets — staying put with a link beats
       // navigating away and losing track of a partial failure, or
       // silently swallowing it.
-      error.value = `Ticket #${ticket.id} was created, but ${siblingFailures.length} `
-        + `additional instrument(s) failed: ${siblingFailures.join('; ')}. `
-        + `You can add the missing one(s) as a sub-ticket from the ticket page.`;
+      const parts = [];
+      if (siblingFailures.length) {
+        parts.push(`${siblingFailures.length} additional instrument(s) failed: ${siblingFailures.join('; ')}`);
+      }
+      if (customShopError) parts.push(`its Custom Shop order failed: ${customShopError}`);
+      error.value = `Ticket #${ticket.id} was created, but ${parts.join('; and ')}. `
+        + `You can add what's missing from the ticket page.`;
       return;
     }
 
@@ -448,9 +504,7 @@ async function submit() {
 </script>
 
 <template>
-  <div class="page" style="max-width: 780px">
-    <div class="page-head"><h1>New ticket</h1></div>
-
+  <div style="max-width: 780px">
     <form class="card" @submit.prevent="submit">
       <div class="field">
         <label>Title{{ namingEnforced || autoTitlePreview ? '' : ' *' }}</label>
@@ -736,6 +790,48 @@ async function submit() {
           <div class="field" style="flex: none; margin: 0">
             <label>&nbsp;</label>
             <button type="button" class="small" @click="removeSibling(i)">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom Shop: collapsed by default, at the bottom of the form --
+           creates one supplies order named after this ticket once it
+           exists (see submit()). Nothing here is required; opening it and
+           picking nothing creates no order at all. -->
+      <div class="field">
+        <button
+          type="button" class="disclosure-toggle"
+          :class="{ open: customShopOpen }" :aria-expanded="customShopOpen ? 'true' : 'false'"
+          @click="customShopOpen = !customShopOpen"
+        >
+          <span class="disclosure-caret">▸</span> Custom Shop
+        </button>
+        <div v-if="customShopOpen" class="card tight" style="margin-top: 10px">
+          <p class="muted small" style="margin-top: 0">
+            Order supplies for this job, named after the ticket itself. Shows up here and on the
+            ticket's own Custom Shop box once it's created, and in Parts / Supplies either way.
+          </p>
+          <div class="field-row" style="align-items: end">
+            <div class="field" style="margin-bottom: 0">
+              <label>Vendor</label>
+              <select v-model="customShop.vendor_id">
+                <option value="">— none —</option>
+                <option v-for="v in vendors" :key="v.id" :value="v.id">{{ v.name }}</option>
+                <option :value="OTHER_VENDOR">Other…</option>
+              </select>
+            </div>
+            <div v-if="customShop.vendor_id === OTHER_VENDOR" class="field" style="margin-bottom: 0">
+              <label>Vendor name</label>
+              <input v-model="customShop.vendor_other" placeholder="New supplier's name" />
+            </div>
+            <div class="field" style="margin-bottom: 0">
+              <label>Quantity</label>
+              <input v-model="customShop.quantity" />
+            </div>
+            <div class="field" style="flex: 2; min-width: 200px; margin-bottom: 0">
+              <label>Notes</label>
+              <input v-model="customShop.notes" />
+            </div>
           </div>
         </div>
       </div>

@@ -145,7 +145,7 @@ export const useSettings = defineStore('settings', {
     qcAllowed: (s) => (categoryKey) => (
       !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_qc
     ),
-    // TicketNewView.vue's title field (Settings -> Ticket naming). A
+    // NewTicketForm.vue's title field (Settings -> Ticket naming). A
     // category with no naming_template set yet (e.g. one added after
     // migration 056 seeded every existing row) falls back to the same
     // DEFAULT_NAMING_TEMPLATE the backend renders from, so a brand-new
@@ -155,13 +155,13 @@ export const useSettings = defineStore('settings', {
       || DEFAULT_NAMING_TEMPLATE
     ),
     // true once an admin has locked this category to its generated name
-    // (Settings -> Ticket naming) -- TicketNewView.vue disables its title
+    // (Settings -> Ticket naming) -- NewTicketForm.vue disables its title
     // input rather than letting anyone type over it.
     namingEnforced: (s) => (categoryKey) => (
       !!(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_enforced
     ),
     // true once a category's own template actually references
-    // {ticket_name} (Settings -> Ticket naming) -- TicketNewView.vue only
+    // {ticket_name} (Settings -> Ticket naming) -- NewTicketForm.vue only
     // shows its free-text "Name" input when a category is *both*
     // Standardize (namingEnforced above) *and* its template would
     // actually do something with what gets typed into it.

@@ -13,7 +13,7 @@ const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
 const router = express.Router();
 router.use(requireAuth);
 
-// Matches TicketNewView's default priority for a fresh ticket — the intake
+// Matches NewTicketForm.vue's default priority for a fresh ticket — the intake
 // form doesn't expose a priority picker (not part of what was asked for),
 // so every inventory purchase lands here and gets triaged from the queue.
 // Preferred, not guaranteed — Settings can retire it (N4a), so it goes

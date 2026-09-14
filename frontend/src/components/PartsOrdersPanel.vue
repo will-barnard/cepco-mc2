@@ -1,18 +1,39 @@
 <script setup>
+/**
+ * Parts / Supplies -- used two places:
+ *   - The "+ New" page's Parts/Supplies tab (NewView.vue), full view: filter
+ *     by status, show/hide archived (delivered/cancelled), and add a new
+ *     order. This replaced the old standalone /parts route (PartsView.vue,
+ *     now removed -- router.js no longer has that route; App.vue's nav
+ *     link points here instead). See NOTES.md.
+ *   - DashboardView.vue's Parts/Supplies card, for whichever employees
+ *     Settings -> Staff accounts has opted in (employees.show_parts_on_dashboard,
+ *     migration 058) -- `allow-create="false"` there: view and status-change
+ *     only, no filter controls and no way to add an order, per that same
+ *     product decision -- creating one only ever happens from the tab
+ *     above.
+ *
+ * A ticket-linked order (Custom Shop, TicketCustomShop.vue) is just a
+ * normal row here too -- parts_order_tickets was already many-to-many
+ * (migration 001), so nothing about this component needed to change for
+ * that; a ticket tag just shows up in the table alongside vendor/status.
+ */
 import { ref, computed, onMounted } from 'vue';
+import { RouterLink } from 'vue-router';
 import api from '../api';
+
+const props = defineProps({
+  allowCreate: { type: Boolean, default: true },
+});
 
 const orders = ref([]);
 const vendors = ref([]);
 const statusFilter = ref('needed');
-// Delivered orders archive themselves (P2) — hidden by default like
-// tickets' own archived filter, this just reveals them again.
+// Delivered orders archive themselves (P2) -- hidden by default like
+// tickets' own archived filter, this just reveals them again. Only
+// offered in the full (allowCreate) view -- see this file's header note.
 const showArchived = ref(false);
 const error = ref('');
-// '__other__' is a picker sentinel, not a real vendor id — resolved into
-// vendor_other (free text) at submit time (P3). Vendors have no Settings
-// screen of their own, so a bare "Other" row there would be useless;
-// nobody could say *who*.
 const OTHER_VENDOR = '__other__';
 const form = ref({
   vendor_id: '', vendor_other: '', item: '', quantity: '', notes: '',
@@ -34,10 +55,13 @@ const grouped = computed(() => {
 });
 
 async function load() {
-  orders.value = await api.get('/parts', {
-    status: statusFilter.value,
-    archived: showArchived.value ? 'true' : 'false',
-  });
+  // The compact (dashboard) view skips the status/archived filters
+  // entirely -- no `status` param and no `archived` param means "every
+  // non-archived order, any status," which is the useful "what's
+  // outstanding" glance a dashboard card wants, without a dropdown to
+  // operate first.
+  const params = props.allowCreate ? { status: statusFilter.value, archived: showArchived.value ? 'true' : 'false' } : {};
+  orders.value = await api.get('/parts', params);
 }
 
 async function create() {
@@ -71,15 +95,16 @@ async function setStatus(order, status) {
 }
 
 onMounted(async () => {
-  vendors.value = await api.get('/parts/vendors');
+  if (props.allowCreate) vendors.value = await api.get('/parts/vendors');
   await load();
 });
+
+defineExpose({ load });
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-head">
-      <h1>Parts / Supplies</h1>
+  <div>
+    <div v-if="allowCreate" class="row" style="margin-bottom: 16px">
       <select v-model="statusFilter" style="width: auto; min-width: 160px" @change="load">
         <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
       </select>
@@ -91,7 +116,7 @@ onMounted(async () => {
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
-    <form class="card" style="margin-bottom: 16px" @submit.prevent="create">
+    <form v-if="allowCreate" class="card" style="margin-bottom: 16px" @submit.prevent="create">
       <div class="field-row" style="align-items: end">
         <div>
           <label>Vendor</label>
@@ -121,7 +146,9 @@ onMounted(async () => {
       </div>
     </form>
 
-    <div v-if="!orders.length" class="empty">Nothing with status "{{ statusFilter }}".</div>
+    <div v-if="!orders.length" class="empty">
+      {{ allowCreate ? `Nothing with status "${statusFilter}".` : 'Nothing outstanding right now.' }}
+    </div>
 
     <div v-else class="stack">
       <div v-for="[vendor, items] in grouped" :key="vendor" class="card tight">
@@ -129,13 +156,23 @@ onMounted(async () => {
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Item</th><th>Qty</th><th>Notes</th><th>Status</th><th /></tr>
+              <tr><th>Item</th><th>Qty</th><th>Notes</th><th>Ticket</th><th>Status</th><th /></tr>
             </thead>
             <tbody>
               <tr v-for="o in items" :key="o.id">
                 <td>{{ o.item }}</td>
                 <td class="small">{{ o.quantity || '—' }}</td>
                 <td class="small muted">{{ o.notes || '—' }}</td>
+                <td class="small">
+                  <template v-if="o.tickets?.length">
+                    <RouterLink
+                      v-for="t in o.tickets" :key="t.id"
+                      :to="{ name: 'ticket', params: { id: t.id } }" class="tag"
+                      style="margin-right: 4px"
+                    >#{{ t.id }}</RouterLink>
+                  </template>
+                  <span v-else class="muted">—</span>
+                </td>
                 <td><span :class="['pill', pill[o.status]]">{{ o.status }}</span></td>
                 <td class="right nowrap">
                   <button

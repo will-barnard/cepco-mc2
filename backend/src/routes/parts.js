@@ -39,8 +39,17 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   // Delivered orders are archived automatically (see PATCH below) so the
   // list doesn't accumulate — same "hidden unless asked for, nothing truly
-  // lost" archived convention routes/tickets.js already uses.
-  clauses.push(req.query.archived === 'true' ? 'p.archived = TRUE' : 'p.archived = FALSE');
+  // lost" archived convention routes/tickets.js already uses. That default
+  // only applies when nothing said otherwise, though: a ticket's own
+  // Custom Shop box (TicketCustomShop.vue, ?ticket_id=) wants its full
+  // history — delivered orders included — since it's a small, bounded
+  // list tied to one job rather than an unbounded operational board, so it
+  // deliberately omits `archived` from its request to get both.
+  if (req.query.archived !== undefined) {
+    clauses.push(req.query.archived === 'true' ? 'p.archived = TRUE' : 'p.archived = FALSE');
+  } else if (!req.query.ticket_id) {
+    clauses.push('p.archived = FALSE');
+  }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const { rows } = await query(

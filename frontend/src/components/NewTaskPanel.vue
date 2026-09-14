@@ -1,24 +1,23 @@
 <script setup>
 /**
- * Ephemeral tasks (migration 054) -- the same lightweight, per-tech work
- * item ticket_tasks already models for a ticket (TicketTasks.vue,
- * routes/tasks.js), just with no ticket_id at all: a shop-wide scratch
- * to-do list for things that don't belong on a customer's job ("restock
- * solder", "call the landlord about the leak"). Reusing ticket_tasks means
- * these get the same assignee/tech-level fields and the same toggle-done
- * API as a real ticket task, and one assigned to you also shows up in the
- * Dashboard's "My tasks" box (DashboardView.vue) right alongside real
- * ticket tasks -- routes/tasks.js's `unlocked_only` treats a task with no
- * ticket as always "unlocked" for exactly that reason.
+ * New Task tab of the consolidated "+ New" page (NewView.vue) -- what used
+ * to be the admin-only Settings -> Ephemeral tasks page (EphemeralTasksView.vue,
+ * now removed; router.js no longer has that route at all -- see NOTES.md).
+ * Ephemeral tasks (migration 054) are the same lightweight, per-tech
+ * ticket_tasks row a real ticket's task list already uses, just with no
+ * ticket_id -- a shop-wide scratch to-do list for things that don't
+ * belong on a customer's job ("restock solder", "call the landlord about
+ * the leak"). One assigned to you also shows up in the Dashboard's "My
+ * tasks" box (DashboardView.vue) right alongside real ticket tasks.
  *
- * Lives on the admin-only Settings page (Settings -> "Ephemeral tasks"),
- * unlike ticket tasks themselves, which stay open to everyone -- reading
- * this list is unrestricted (GET /tasks has no role check), but creating,
- * editing or removing an ephemeral task requires an admin, same "GET open
- * to everyone, mutations admin-only" split as routes/procedures.js and
- * routes/recurringTicketTemplates.js. The route itself is admin-gated
- * (router.js's meta.admin) so a non-admin never lands here in the first
- * place.
+ * This tab sits on a page every signed-in user opens from the dashboard,
+ * so adding a task is open to everyone now (routes/tasks.js's POST /
+ * dropped its admin-only check for the no-ticket_id case) -- marking one
+ * done/not-done is too, same everyday action a real ticket task already
+ * lets anyone do. Reassigning, changing tech level, or removing an
+ * *existing* one stays admin-only (the same file's PATCH/DELETE still
+ * check req.user.role), so those controls below are hidden for anyone
+ * else rather than shown and silently failing.
  *
  * Completed tasks are collapsed behind a toggle by default: unlike a
  * ticket's own task list (which naturally goes away once the ticket is
@@ -26,9 +25,10 @@
  * otherwise slowly fill up with old completed odds and ends.
  */
 import { ref, computed, onMounted } from 'vue';
+import { useAuth, useSettings, useRefData } from '../stores';
 import api from '../api';
-import { useSettings, useRefData } from '../stores';
 
+const auth = useAuth();
 const settings = useSettings();
 const refData = useRefData();
 
@@ -41,10 +41,6 @@ const showDone = ref(false);
 const newTitle = ref('');
 const newTechLevel = ref('');
 
-// `silent` mirrors TicketTasks.vue's own load() -- only the very first
-// load, before anything's on screen, blanks the page to "Loading…"; every
-// reload after a mutation (adding/toggling/assigning/removing a task) just
-// swaps the list in place.
 async function load(silent = false) {
   if (!silent) loading.value = true;
   try {
@@ -122,16 +118,11 @@ async function removeTask(task) {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-head">
-      <div>
-        <h1 style="margin-bottom: 4px">Ephemeral Tasks</h1>
-        <p class="muted small" style="margin: 0">
-          A shop-wide scratch to-do list for work that isn't tied to any ticket. Assign one to
-          yourself and it also shows up in your Dashboard "My tasks" box.
-        </p>
-      </div>
-    </div>
+  <div>
+    <p class="muted small" style="margin: 0 0 14px">
+      A shop-wide scratch to-do list for work that isn't tied to any ticket. Assign one to
+      yourself and it also shows up in your Dashboard "My tasks" box.
+    </p>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
@@ -156,28 +147,34 @@ async function removeTask(task) {
     <div v-if="loading" class="empty">Loading…</div>
     <template v-else>
       <div class="card tight">
-        <div v-if="!openTasks.length" class="empty">No open ephemeral tasks.</div>
+        <div v-if="!openTasks.length" class="empty">No open tasks right now.</div>
         <ul v-else class="checklist">
           <li v-for="t in openTasks" :key="t.id">
             <input type="checkbox" :checked="t.done" @change="toggleDone(t)" />
             <span style="flex: 1">{{ t.title }}</span>
-            <select
-              class="small" style="max-width: 140px"
-              :value="t.tech_level_key || ''" @change="setTechLevel(t, $event.target.value)"
-            >
-              <option value="">Any level</option>
-              <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
-                {{ lvl.label }}
-              </option>
-            </select>
-            <select
-              class="small" style="max-width: 160px"
-              :value="t.technician_id || ''" @change="assign(t, $event.target.value)"
-            >
-              <option value="">Unassigned</option>
-              <option v-for="e in refData.employees" :key="e.id" :value="e.id">{{ e.name }}</option>
-            </select>
-            <button type="button" class="small" title="Remove task" @click="removeTask(t)">✕</button>
+            <!-- Reassigning/tech-level on an existing task stays admin-only
+                 (routes/tasks.js's PATCH) -- shown only to an admin so a
+                 non-admin never sees a control that would just 403. -->
+            <template v-if="auth.isAdmin">
+              <select
+                class="small" style="max-width: 140px"
+                :value="t.tech_level_key || ''" @change="setTechLevel(t, $event.target.value)"
+              >
+                <option value="">Any level</option>
+                <option v-for="lvl in settings.active('tech_level')" :key="lvl.key" :value="lvl.key">
+                  {{ lvl.label }}
+                </option>
+              </select>
+              <select
+                class="small" style="max-width: 160px"
+                :value="t.technician_id || ''" @change="assign(t, $event.target.value)"
+              >
+                <option value="">Unassigned</option>
+                <option v-for="e in refData.employees" :key="e.id" :value="e.id">{{ e.name }}</option>
+              </select>
+              <button type="button" class="small" title="Remove task" @click="removeTask(t)">✕</button>
+            </template>
+            <span v-else class="muted small nowrap">{{ t.technician_name || 'Unassigned' }}</span>
           </li>
         </ul>
       </div>
@@ -197,7 +194,9 @@ async function removeTask(task) {
               {{ t.title }}
             </span>
             <span class="muted small nowrap">{{ t.technician_name || 'Unassigned' }}</span>
-            <button type="button" class="small" title="Remove task" @click="removeTask(t)">✕</button>
+            <button v-if="auth.isAdmin" type="button" class="small" title="Remove task" @click="removeTask(t)">
+              ✕
+            </button>
           </li>
         </ul>
       </div>

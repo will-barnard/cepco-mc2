@@ -64,7 +64,7 @@ async function load(silent = false) {
 
 // N8: picking a procedure pre-fills the tech-level picker sitting next to
 // it from that procedure's own default — still just a starting point,
-// same "pre-fill, don't lock" reasoning as TicketNewView.vue's
+// same "pre-fill, don't lock" reasoning as NewTicketForm.vue's
 // defaultTechsByFamily watch.
 function onProcedureChange() {
   const proc = procedures.value.find((p) => p.id === selectedProcedureId.value);

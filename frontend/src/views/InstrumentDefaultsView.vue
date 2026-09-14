@@ -14,7 +14,7 @@
  *     defaults. It's a real action, not a preview — it runs immediately.
  *
  * Neither of these touches ticket creation's own auto-fill behavior
- * directly; TicketNewView.vue reads the same /default-technicians endpoint
+ * directly; NewTicketForm.vue reads the same /default-technicians endpoint
  * itself and pre-fills the picker there, independently, whenever the
  * instrument/family selection changes.
  */

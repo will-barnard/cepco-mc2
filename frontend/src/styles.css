@@ -411,10 +411,74 @@ tbody tr.clickable { cursor: pointer; }
 }
 .kiosk-name { font-size: 14px; font-weight: 600; }
 
+
+/* --- disclosure toggle (NewTicketForm.vue's Custom Shop section) ----------
+   A plain expand/collapse control, distinct from the click-outside popovers
+   above (.hide-status-menu etc.) -- this just reveals more of the same
+   form in place, nothing floats over anything else. */
+.disclosure-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: none; border: none; padding: 4px 0; min-height: 0;
+  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}
+.disclosure-toggle:hover { color: var(--accent); }
+.disclosure-caret {
+  display: inline-block; color: var(--text-dim); font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.disclosure-toggle.open .disclosure-caret { transform: rotate(90deg); }
+
+/* --- folder tabs (NewView.vue's "+ New" page) ------------------------------
+   Three tabs -- New Ticket / New Task / Parts & Supplies -- styled like
+   manila-folder tabs sitting on top of the panel below them: the active
+   tab shares the panel's background and has its bottom border painted
+   over, so it reads as the same surface continuing down; the other two
+   sit a shade back, like folders stacked behind the front one. Dark-theme
+   surface/border tokens stand in for actual manila -- the folder *shape*
+   (rounded top corners, tabs overlapping the panel's top edge) is the
+   part that reads as folder tabs, not a literal paper color. */
+.folder-tabs {
+  display: flex; gap: 4px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+.folder-tab {
+  appearance: none; font: inherit; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+  padding: 10px 18px 9px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  position: relative;
+  top: 1px;
+}
+.folder-tab:hover { color: var(--text); background: #2c313b; }
+.folder-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--surface);
+  z-index: 1;
+}
+.folder-tab-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 20px;
+}
+
 @media (max-width: 640px) {
   .page { padding: 14px; }
   .topbar { padding: 10px 14px; gap: 10px; }
   /* On a phone the header has to give its width to the nav. */
   .topbar .brand-text { display: none; }
   .topbar .brand-logo { height: 22px; }
+
+  /* Three tabs at full desktop padding are tight on a phone -- shrink
+     padding rather than letting them wrap onto a second row, which would
+     break the folder illusion (a wrapped tab floats above nothing). */
+  .folder-tab { padding: 9px 12px 8px; font-size: 13px; }
+  .folder-tab-panel { padding: 14px; }
 }

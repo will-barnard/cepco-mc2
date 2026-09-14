@@ -30,7 +30,7 @@ const error = ref('');
 
 // --- nominate ----------------------------------------------------------
 // C1: award category — a Settings-driven picker (ceppy_category) plus the
-// same free-text "Other…" escape hatch PartsView.vue uses for vendors
+// same free-text "Other…" escape hatch PartsOrdersPanel.vue uses for vendors
 // (OTHER_VENDOR there, OTHER_CATEGORY here) for a one-off award category
 // the shop hasn't added to Settings yet.
 const OTHER_CATEGORY = '__other__';

@@ -36,7 +36,11 @@ async function requireAuth(req, res, next) {
   // Re-read the employee so a deactivated or role-changed account takes effect
   // immediately rather than at token expiry.
   const { rows } = await query(
-    'SELECT id, name, email, role, initials, active FROM employees WHERE id = $1',
+    // show_parts_on_dashboard (migration 058) travels on req.user (and
+    // therefore GET /auth/me) so DashboardView.vue knows, for the signed-in
+    // user specifically, whether to render its Parts/Supplies card -- same
+    // reasoning as role/active already being here rather than a separate call.
+    'SELECT id, name, email, role, initials, active, show_parts_on_dashboard FROM employees WHERE id = $1',
     [payload.sub],
   );
   const employee = rows[0];

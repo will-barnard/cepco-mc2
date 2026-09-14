@@ -50,7 +50,7 @@ router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));
 
 // Every family gets a (possibly empty) entry, not just the ones an admin
 // has actually configured — callers (this route's own consumers: the
-// Default instrument assignments page, and TicketNewView's auto-fill)
+// Default instrument assignments page, and NewTicketForm.vue's auto-fill)
 // shouldn't have to know FAMILIES themselves just to render "no defaults
 // set yet" for the rest.
 router.get('/default-technicians', asyncHandler(async (req, res) => {
@@ -257,7 +257,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 module.exports = router;
 module.exports.FAMILIES = FAMILIES;
 // N10: composeTicketTitle (routes/tickets.js) and its client-side mirror
-// (TicketNewView.vue's autoTitlePreview) both need a human family label,
+// (NewTicketForm.vue's autoTitlePreview) both need a human family label,
 // not the raw key, in a standardized ticket title — same labels this
 // route's own /family-labels endpoint already serves the frontend.
 module.exports.FAMILY_LABELS = FAMILY_LABELS;

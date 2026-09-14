@@ -4,7 +4,7 @@
  * per-category title template — routes/tickets.js's composeTicketTitle
  * renders it for a new ticket whose title wasn't typed by hand, and PATCH
  * /tickets/:id keeps it in sync afterward for any category that's opted
- * into "Standardize" below. TicketNewView.vue shows the same live preview
+ * into "Standardize" below. NewTicketForm.vue shows the same live preview
  * while someone's filling out a new ticket, reading the exact same
  * template through stores.js's namingTemplateFor.
  *
@@ -14,7 +14,7 @@
  * "Housekeeping: Mop the floors") -- the one way a Standardize category
  * can still carry someone's own words instead of only auto-derived
  * pieces. ticket_name lives on the ticket itself (not this row's meta),
- * since it's per-ticket; TicketNewView.vue only shows an input for it
+ * since it's per-ticket; NewTicketForm.vue only shows an input for it
  * once a category is both Standardize and actually uses the token
  * (stores.js's namingTemplateUsesTicketName).
  *

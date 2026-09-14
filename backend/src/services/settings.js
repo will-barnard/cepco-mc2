@@ -179,7 +179,7 @@ async function defaultStatusForCategory(categoryKey, isShipping = false) {
 
 /** The first non-retired value in a category, by sort order. The generic
  * "safe default" fallback for a code path whose usual key might get
- * retired out from under it (N4a: TicketNewView.vue, FleetView.vue,
+ * retired out from under it (N4a: NewTicketForm.vue, FleetView.vue,
  * routes/tickets.js, routes/purchases.js and routes/shopifyWebhooks.js all
  * used to hardcode a category or priority key that Settings can now retire
  * at any time — see NOTES.md). Throws only if literally nothing in the

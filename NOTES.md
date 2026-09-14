@@ -3185,6 +3185,90 @@ opted into using the new token by default; an admin adds `{ticket_name}`
 to a category's own template from Settings → Ticket naming when they
 want it).
 
+### 2.78 "+ New" consolidation: one tabbed page for Ticket/Task/Parts, plus Custom Shop
+
+Will: the Dashboard had two separate "New…" buttons (New ticket, New
+ephemeral task — admin-only), and Parts/Supplies lived on its own page
+with no connection to tickets at all. He wanted all three folded into one
+"+ New" entry point with folder-style tabs, and a way to order supplies
+tied to a specific ticket from right inside ticket creation (and the
+ticket page afterward).
+
+**One page, three tabs.** `frontend/src/views/NewView.vue` (route `/new`)
+renders New Ticket / New Task / Parts & Supplies as three tabs styled like
+manila-folder tabs (`styles.css`'s `.folder-tab*` — the *shape* reads as
+folder tabs; a literal manila color would clash with the shop-floor dark
+theme, so the active tab shares the panel's surface color instead of
+using paper-yellow). The active tab lives in `?tab=`, not just component
+state, so a link can land on a specific one. Each tab's content moved into
+its own component so `NewView.vue` stays thin:
+
+- **New Ticket** — `TicketNewView.vue` → `components/NewTicketForm.vue`
+  (same form, now embeddable; `/tickets/new` redirects to `/new` for any
+  old link). Gained the Custom Shop section, below.
+- **New Task** — the old admin-only Settings → Ephemeral tasks page
+  (`EphemeralTasksView.vue`, deleted) → `components/NewTaskPanel.vue`.
+  Since this tab sits on a page every signed-in user opens from the
+  dashboard, creating an ephemeral task (and marking one done) is open to
+  everyone now — `routes/tasks.js`'s `POST /` dropped its admin check for
+  the no-`ticket_id` case, and `PATCH /:id` only admin-gates it when
+  something *other* than `done` is being changed. Reassigning, renaming,
+  changing tech level, and deleting an existing one are still admin-only
+  (same `req.user.role` checks as before), so those controls are hidden
+  in the UI for a non-admin rather than shown and silently 403ing.
+- **Parts / Supplies** — the old standalone `/parts` page
+  (`PartsView.vue`, deleted) → `components/PartsOrdersPanel.vue`, used
+  two places (see below). Functionally unchanged in the full view (same
+  status filter, archived toggle, add-order form) plus a new "Ticket"
+  column since orders can now be ticket-linked (see Custom Shop).
+
+**Parts/Supplies on the Dashboard.** `PartsOrdersPanel.vue` takes an
+`allow-create` prop; the "+ New" tab passes `true` (the form above), and
+a new Dashboard card passes `false` — view and status-change ("Mark
+ordered"/"Mark delivered") only, no add-order form, no status/archived
+filter controls (it just shows every non-archived order, any status —
+the "what's outstanding" glance a dashboard card wants). Which employees
+get that card is admin-set per person: Settings → Staff accounts gained
+a "Parts on dashboard" checkbox
+(`employees.show_parts_on_dashboard`, migration 058, same shape as
+`excluded_from_chore_rotation` — migration 033), off by default. It
+travels on `req.user`/`GET /auth/me` (`middleware/auth.js`) so
+`DashboardView.vue` knows without an extra request.
+
+**Custom Shop.** A ticket's supplies, named after the ticket. Turned out
+to need no new schema at all: `parts_orders` already links to tickets
+many-to-many (`parts_order_tickets`, migration 001) and already has a
+vendor (`vendor_id`/`vendor_other`) — which is what "a user-selected
+category" here actually meant, so that's the whole picker. Two places:
+
+- `NewTicketForm.vue` — a collapsed-by-default disclosure
+  (`.disclosure-toggle` in styles.css) at the bottom of the ticket form,
+  "▸ Custom Shop". Opening it and picking a vendor creates one supplies
+  order right after the ticket itself is created, named after the
+  ticket's real (server-composed) title — not the form's own
+  `autoTitlePreview`, which is only ever an approximation for a
+  Standardize category. Left closed, or opened and left blank, creates
+  nothing.
+- `components/TicketCustomShop.vue` — a new card on the ticket page,
+  same "only renders once there's something in it" shape as
+  `TicketSubTickets.vue`: an existing order, an open add-order form, or
+  an error. A ticket that got a Custom Shop order at creation time shows
+  this card already populated the first time it loads; any other ticket
+  gets it by clicking "+ Add Custom Shop" in the page header (next to
+  "+ Add sub-ticket"/"+ Add estimate" — same `ref` + `openForm()` wiring
+  those already use). Fetches with no `archived` filter (unlike the
+  general Parts/Supplies view's default) so a delivered order's history
+  stays on the ticket instead of dropping out the moment it's marked
+  delivered — a ticket's own box is small and bounded, not an
+  operational board that needs pruning.
+
+An order created either way is a completely normal `parts_orders` row —
+it shows up in the Parts/Supplies tab and the Dashboard card exactly like
+any other, tagged with which ticket(s) it's linked to.
+
+Migration: `058_new_flow_consolidation.sql` (`employees.show_parts_on_dashboard`
+only — everything else reused existing tables/columns).
+
 
 ## 4. Suggested first moves after deploy
 

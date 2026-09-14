@@ -8,7 +8,12 @@ const routes = [
   // is the canonical list now, /tickets just redirects here (keeping the
   // query string, e.g. DashboardView.vue's status-filtered links).
   { path: '/tickets', redirect: (to) => ({ path: '/queue', query: to.query }) },
-  { path: '/tickets/new', name: 'ticket-new', component: () => import('./views/TicketNewView.vue') },
+  // "+ New" consolidation: New ticket/New task/Parts & Supplies are one
+  // tabbed page now (NewView.vue) -- /tickets/new keeps working as a
+  // redirect (its default tab is New Ticket already, so no query needed)
+  // for any old bookmark/link rather than 404ing. See NOTES.md.
+  { path: '/tickets/new', redirect: '/new' },
+  { path: '/new', name: 'new', component: () => import('./views/NewView.vue') },
   { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue') },
   { path: '/tickets/:id', name: 'ticket', component: () => import('./views/TicketDetailView.vue'), props: true },
   { path: '/estimates', name: 'estimates', component: () => import('./views/EstimatesView.vue') },
@@ -32,7 +37,6 @@ const routes = [
   { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryRestorationsView.vue') },
   { path: '/inventory/new', name: 'inventory-purchase-new', component: () => import('./views/InventoryPurchaseNewView.vue') },
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
-  { path: '/parts', name: 'parts', component: () => import('./views/PartsView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/ceppys', name: 'ceppys', component: () => import('./views/CeppysView.vue') },
   { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
@@ -46,10 +50,6 @@ const routes = [
   {
     path: '/settings/recurring-tickets', name: 'recurring-tickets',
     component: () => import('./views/RecurringTicketsView.vue'), meta: { admin: true },
-  },
-  {
-    path: '/settings/ephemeral-tasks', name: 'ephemeral-tasks',
-    component: () => import('./views/EphemeralTasksView.vue'), meta: { admin: true },
   },
   {
     path: '/settings/ticket-naming', name: 'ticket-naming',

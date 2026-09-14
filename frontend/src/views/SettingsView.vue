@@ -485,7 +485,6 @@ onMounted(refresh);
         </RouterLink>
         <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
-        <RouterLink class="btn small" :to="{ name: 'ephemeral-tasks' }">Ephemeral tasks →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'ticket-naming' }">Ticket naming →</RouterLink>
       </div>
     </div>
@@ -768,6 +767,9 @@ onMounted(refresh);
               <tr>
                 <th>Name</th><th>Email</th><th>Role</th><th>Initials</th>
                 <th title="Weekly chore rotation (A2) skips anyone checked here">Skip chores</th>
+                <th title="Adds a view-only Parts/Supplies card to this person's Dashboard">
+                  Parts on dashboard
+                </th>
                 <th>State</th><th />
               </tr>
             </thead>
@@ -801,6 +803,12 @@ onMounted(refresh);
                     />
                   </td>
                   <td>
+                    <input
+                      type="checkbox" :checked="e.show_parts_on_dashboard"
+                      @change="updateEmployeeField(e, 'show_parts_on_dashboard', $event.target.checked)"
+                    />
+                  </td>
+                  <td>
                     <span :class="['pill', e.active ? 'green' : 'slate']">
                       {{ e.active ? 'Active' : 'Inactive' }}
                     </span>
@@ -813,7 +821,7 @@ onMounted(refresh);
                   </td>
                 </tr>
                 <tr v-if="passwordResetFor === e.id">
-                  <td colspan="7">
+                  <td colspan="8">
                     <form class="card tight" @submit.prevent="submitPasswordReset(e)">
                       <p class="muted small" style="margin-top: 0">
                         Setting a new password for {{ e.name }}. This overwrites their current

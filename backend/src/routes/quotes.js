@@ -221,7 +221,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // Create — customer + a list of {instrument_id, procedure_id} pairs.
 // Creating the customer or an instrument that doesn't exist yet happens
 // through the normal POST /customers / POST /instruments first (same as
-// TicketNewView.vue already does) — this route only ever links ids that
+// NewTicketForm.vue already does) — this route only ever links ids that
 // already exist, same division of labor as POST /tickets.
 // ---------------------------------------------------------------------------
 router.post('/', asyncHandler(async (req, res) => {

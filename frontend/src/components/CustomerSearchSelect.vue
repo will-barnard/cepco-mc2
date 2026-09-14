@@ -1,7 +1,7 @@
 <script setup>
 /**
  * Type-ahead customer picker — replaces a plain <select> listing every
- * customer (EstimateNewView.vue, TicketNewView.vue) now that scrolling a
+ * customer (EstimateNewView.vue, NewTicketForm.vue) now that scrolling a
  * giant native dropdown to find one customer is real friction on the
  * shop floor. Same open/close convention as QueueView.vue's hide-statuses
  * menu — click-outside + Escape to close (see styles.css's

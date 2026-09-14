@@ -792,12 +792,12 @@ router.post('/', asyncHandler(async (req, res) => {
   // and/or instrument picked now gets one composed for it instead (see
   // composeTicketTitle above) — still required when there's neither (e.g.
   // an internal SideQuest with nothing to build a name from), same as
-  // before. TicketNewView.vue mirrors this exact rule client-side so its
+  // before. NewTicketForm.vue mirrors this exact rule client-side so its
   // own title field only becomes required when the preview would be empty.
   //
   // Naming panel: a category with meta.naming_enforced never gets to keep
   // a hand-typed title, even from a raw API call that skips the (locked,
-  // read-only) field TicketNewView.vue shows for it — the generated name
+  // read-only) field NewTicketForm.vue shows for it — the generated name
   // is the only name that category's tickets ever get.
   const namingEnforced = !!(category.meta && category.meta.naming_enforced);
   // Naming panel (migration 057): a free-typed slot a category's template

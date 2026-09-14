@@ -2,7 +2,7 @@
  * Ticket naming panel — a client-side mirror of backend/src/routes/
  * tickets.js's renderNamingTemplate/DEFAULT_NAMING_TEMPLATE, kept here so
  * SettingsView's naming panel (TicketNamingView.vue) and the New Ticket
- * form (TicketNewView.vue) can both show a live preview of a category's
+ * form (NewTicketForm.vue) can both show a live preview of a category's
  * template without a round trip to the server. The actual title a ticket
  * gets still always comes from the backend (composeTicketTitle) — this is
  * preview-only, so a drift between the two would only ever misdraw a
@@ -61,7 +61,7 @@ export function renderNamingTemplate(template, ctx) {
 
 // True when `template` actually references `{token}` -- used to decide
 // whether a category's own naming UI needs to show anything for that
-// token at all (e.g. TicketNewView.vue's free-text "Name" field only
+// token at all (e.g. NewTicketForm.vue's free-text "Name" field only
 // appears for a Standardize category whose template uses {ticket_name} --
 // no point showing an input that would render into nothing).
 export function templateUsesToken(template, token) {

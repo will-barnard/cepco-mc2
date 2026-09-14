@@ -833,7 +833,7 @@ async function submit(sendAfterCreate) {
 <style scoped>
 /* N10: big, iPad-friendly tap targets for the estimate wizard — every
    other picker in the app (InstrumentModelPicker.vue, category buttons in
-   TicketNewView.vue) is sized for a mouse/keyboard desk; this screen is
+   NewTicketForm.vue) is sized for a mouse/keyboard desk; this screen is
    meant to be run standing at the bench next to an open piano. */
 .wiz-page { max-width: 900px; }
 .wiz-progress { margin: 0 0 10px; }

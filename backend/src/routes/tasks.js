@@ -19,24 +19,28 @@
  *
  * Migration 054 widens this to "ephemeral" tasks too: a row with no
  * ticket_id at all, for shop-wide scratch work that isn't attached to any
- * ticket (EphemeralTasksView.vue's `?ephemeral_only=true`). Everywhere
- * below that reads or writes `ticket_id` treats it as optional rather than
+ * ticket (NewTaskPanel.vue's `?ephemeral_only=true`). Everywhere below
+ * that reads or writes `ticket_id` treats it as optional rather than
  * always present; TASK_SELECT's LEFT JOIN is what keeps a plain SELECT *
  * from silently dropping those rows.
  *
  * A ticket task is open to any signed-in user, not admin-gated — same
  * reasoning as ticket_technicians assignment and sub-ticket creation
  * (routes/tickets.js, TicketSubTickets.vue): assigning/completing
- * day-to-day work items isn't an admin-only action in this shop. An
- * ephemeral task is different — it lives on the admin-only Settings page
- * (EphemeralTasksView.vue) — so every mutation below checks req.user.role
- * itself for the ticket_id-is-null case, same "GET open to everyone,
- * mutations admin-only" split routes/procedures.js and
- * routes/recurringTicketTemplates.js already use for their own admin-only
- * settings pages. Reading (GET, including ?ephemeral_only=true) stays
- * unrestricted either way, and the frontend route itself is admin-gated
- * too (router.js's meta.admin), so this is defense in depth more than the
- * only thing standing between a non-admin and this list.
+ * day-to-day work items isn't an admin-only action in this shop.
+ *
+ * Migration 058: ephemeral tasks used to be different — they lived on an
+ * admin-only Settings page, and every mutation below admin-gated the
+ * ticket_id-is-null case accordingly. They now have a home on the "+ New"
+ * page's New Task tab (NewTaskPanel.vue) that every signed-in user opens
+ * from the dashboard, so POST / (creating one) and PATCH /:id's `done`
+ * toggle are open to everyone for that case too — the same everyday
+ * actions a real ticket task already allowed anyone. Reassigning,
+ * renaming, changing tech level, or deleting an *existing* ephemeral task
+ * still checks req.user.role itself (see PATCH/DELETE below), same "a
+ * shared shop-wide list, but only admins reshuffle who's on what" split
+ * as before, just narrower than it used to be. Reading (GET, including
+ * ?ephemeral_only=true) stays unrestricted either way, and always has.
  */
 const express = require('express');
 const { query } = require('../db');
@@ -97,8 +101,8 @@ router.get('/', asyncHandler(async (req, res) => {
     )`);
   }
 
-  // The dedicated Ephemeral Tasks page (EphemeralTasksView.vue): every task
-  // with no ticket at all, regardless of done/assignee -- same opt-in-via-
+  // The "+ New" page's New Task tab (NewTaskPanel.vue): every task with
+  // no ticket at all, regardless of done/assignee -- same opt-in-via-
   // query-param posture as unlocked_only above rather than the list's
   // default, since a ticket's own detail page (?ticket_id=) never wants
   // this and neither does the plain "everything" list.
@@ -128,17 +132,26 @@ router.post('/', asyncHandler(async (req, res) => {
   } = req.body || {};
 
   // No ticket_id at all = an ephemeral task (migration 054) -- a shop-wide
-  // scratch to-do item, not attached to any customer job, that lives on
-  // the admin-only Settings page (EphemeralTasksView.vue) rather than
-  // being open to everyone like a ticket task. It also can't be sourced
-  // from the procedures catalog (that's family-filtered against an
-  // instrument this task doesn't have), so it always needs an explicit
-  // title, checked alongside the free-form-ticket-task case below.
+  // scratch to-do item, not attached to any customer job. Lives on the
+  // "+ New" page's New Task tab now (NewTaskPanel.vue, migration 058),
+  // open to everyone the same as a real ticket task (see this file's
+  // header comment for what's still admin-only). It also can't be
+  // sourced from the procedures catalog (that's family-filtered against
+  // an instrument this task doesn't have), so it always needs an
+  // explicit title, checked alongside the free-form-ticket-task case
+  // below.
   if (ticketId) {
     const { rows: ticketRows } = await query('SELECT id FROM tickets WHERE id = $1', [ticketId]);
     if (!ticketRows[0]) throw notFound('Ticket not found');
   } else {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    // Ephemeral tasks (migration 054) used to live only on the admin-only
+    // Settings page and were admin-only to create for that reason. They
+    // now have a home on the "+ New" page's New Task tab (NewTaskPanel.vue)
+    // that every signed-in user opens from the dashboard, so adding a
+    // shop-wide to-do is open to anyone the same way adding a task to a
+    // real ticket already was -- see this file's own header comment.
+    // Reassigning/tech-level/removing an *existing* one stays admin-only
+    // (PATCH/DELETE below), same as before.
     if (procedureId) throw badRequest('standard_procedure_id requires a ticket_id');
   }
 
@@ -208,12 +221,21 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { rows: existingRows } = await query('SELECT * FROM ticket_tasks WHERE id = $1', [req.params.id]);
   const existing = existingRows[0];
   if (!existing) throw notFound('Task not found');
-  // Same admin-only-for-ephemeral split as POST / above.
-  if (existing.ticket_id === null && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin only' });
-  }
 
   const b = req.body || {};
+
+  // Ephemeral task, non-admin: creation opened up to everyone above, and
+  // marking one done/not-done is the same everyday action toggling a real
+  // ticket task already is for anyone -- but reassigning, renaming, or
+  // changing tech level on a shared shop-wide list stays admin-only, same
+  // as it's always been (DELETE /:id below keeps the same split for
+  // removing one outright).
+  if (existing.ticket_id === null && req.user.role !== 'admin') {
+    const onlyTogglingDone = b.done !== undefined
+      && b.title === undefined && b.technician_id === undefined && b.tech_level_key === undefined
+      && b.hours === undefined;
+    if (!onlyTogglingDone) return res.status(403).json({ error: 'Admin only' });
+  }
   const title = b.title !== undefined ? String(b.title).trim() : existing.title;
   if (!title) throw badRequest('title cannot be blank');
   const technicianId = b.technician_id !== undefined ? (b.technician_id || null) : existing.technician_id;
