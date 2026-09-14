@@ -48,23 +48,17 @@ const unassignedTotal = ref(0);
 const minePageCount = computed(() => Math.max(1, Math.ceil(mineTotal.value / MINE_PAGE_SIZE)));
 const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal.value / UNASSIGNED_PAGE_SIZE)));
 
-// "Priority & To-Do's" (replaces the old "My tasks"/"Priority tasks" pair,
-// per the boss's dashboard-layout note) -- shop-wide by default, not
-// personal: the daily to-do's (category 'daily_todo', which already
-// auto-archives itself at end of day -- see recurringTickets.js -- so
-// "open" here already means "today's"), plus tickets sitting at whichever
+// "To-Dos" (replaces the old "My tasks"/"Priority tasks" pair, per the
+// boss's dashboard-layout note) -- yours, not shop-wide: the daily to-do's
+// (category 'daily_todo', which already auto-archives itself at end of
+// day -- see recurringTickets.js -- so "open" here already means
+// "today's") assigned to you, plus your own tickets sitting at whichever
 // priority tier(s) Settings -> Priority tiers has flagged "Highlight in
 // tasks" (stores.js's highlightTasksForPriority meta -- expedited_sos by
 // default, admin-addable). Both are ticket-level lists now, not
 // individual ticket_tasks rows -- the per-task checklist (and its
 // checkbox-to-mark-done) that used to live here is gone with "My tasks";
 // checking off a task still happens on the ticket page itself.
-//
-// Settings -> Staff accounts' "Priority & To-Do's: mine only" checkbox
-// (employees.dashboard_priority_personal_only, migration 059) narrows
-// both queries to just this person's own tickets for whoever an admin has
-// opted in -- off (shop-wide) by default, same admin-sets-it-for-anyone
-// shape as show_parts_on_dashboard.
 const dailyTodoTickets = ref([]);
 const priorityTickets = ref([]);
 
@@ -73,12 +67,11 @@ const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
   .map((r) => r.key));
 
 async function loadPriorityAndTodos() {
-  const mineOnly = !!auth.user.dashboard_priority_personal_only;
-  const scope = mineOnly ? { technician_id: auth.user.id } : {};
+  const mine = { technician_id: auth.user.id };
   const [dailyTodos, flagged] = await Promise.all([
-    api.get('/tickets', { category: 'daily_todo', ...scope }),
+    api.get('/tickets', { category: 'daily_todo', ...mine }),
     flaggedPriorityKeys.value.length
-      ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(','), ...scope })
+      ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(','), ...mine })
       : Promise.resolve([]),
   ]);
   // A finished job (status meta.terminal, e.g. 'done') is done, not
@@ -220,16 +213,10 @@ onMounted(async () => {
         v-if="dailyTodoTickets.length || priorityTickets.length" class="card"
         style="margin-bottom: 24px; border-color: var(--red)"
       >
-        <h2>Priority &amp; To-Do's</h2>
+        <h2>To-Dos</h2>
         <p class="muted small" style="margin: 0 0 10px">
-          <template v-if="auth.user.dashboard_priority_personal_only">
-            Just yours — today's Daily To-Do's, plus anything of yours at a priority level
-            flagged to stand out (Settings → Priority tiers).
-          </template>
-          <template v-else>
-            Shop-wide, not just yours — today's Daily To-Do's, plus anything at a priority level
-            flagged to stand out (Settings → Priority tiers).
-          </template>
+          Yours — today's Daily To-Do's, plus anything of yours at a priority level flagged to
+          stand out (Settings → Priority tiers).
         </p>
         <template v-if="dailyTodoTickets.length">
           <p class="muted small" style="margin: 0 0 10px"><strong>Daily To-Do's</strong></p>

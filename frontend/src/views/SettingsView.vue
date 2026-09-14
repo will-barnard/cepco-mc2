@@ -770,10 +770,6 @@ onMounted(refresh);
                 <th title="Adds a view-only Parts/Supplies card to this person's Dashboard">
                   Parts on dashboard
                 </th>
-                <th title="Scopes this person's Dashboard 'Priority & To-Do's' card to just their
-                           own tickets, instead of the shop-wide default">
-                  Priority &amp; To-Do's: mine only
-                </th>
                 <th>State</th><th />
               </tr>
             </thead>
@@ -813,12 +809,6 @@ onMounted(refresh);
                     />
                   </td>
                   <td>
-                    <input
-                      type="checkbox" :checked="e.dashboard_priority_personal_only"
-                      @change="updateEmployeeField(e, 'dashboard_priority_personal_only', $event.target.checked)"
-                    />
-                  </td>
-                  <td>
                     <span :class="['pill', e.active ? 'green' : 'slate']">
                       {{ e.active ? 'Active' : 'Inactive' }}
                     </span>
@@ -831,7 +821,7 @@ onMounted(refresh);
                   </td>
                 </tr>
                 <tr v-if="passwordResetFor === e.id">
-                  <td colspan="9">
+                  <td colspan="8">
                     <form class="card tight" @submit.prevent="submitPasswordReset(e)">
                       <p class="muted small" style="margin-top: 0">
                         Setting a new password for {{ e.name }}. This overwrites their current

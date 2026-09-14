@@ -3270,27 +3270,28 @@ Migration: `058_new_flow_consolidation.sql` (`employees.show_parts_on_dashboard`
 only — everything else reused existing tables/columns).
 
 
-### 2.79 Dashboard: "Priority & To-Do's" and "In-Progress Tickets" replace "My tasks" / "Priority tasks" / "Assigned to me"
+### 2.79 Dashboard: "To-Dos" and "In-Progress Tickets" replace "My tasks" / "Priority tasks" / "Assigned to me"
 
 Boss's dashboard-layout note: "My tasks" and "Priority tasks" (both
-personal, both task-level) are gone, replaced by "Priority & To-Do's" (a
-shop-wide, ticket-level overview) and "In-Progress Tickets" (which took
-over "Assigned to me"'s spot and scope — yours, not shop-wide — rather
-than existing as a third, separate card).
+personal, both task-level) are gone, replaced by "To-Dos" (a ticket-level
+overview, still yours) and "In-Progress Tickets" (which took over
+"Assigned to me"'s spot and scope — rather than existing as a third,
+separate card).
 
-**Priority & To-Do's.** Two groups in one card, both computed client-side
-in `DashboardView.vue` from existing `GET /tickets` filters — no new
-endpoint:
+**To-Dos.** Two groups in one card, both computed client-side in
+`DashboardView.vue` from existing `GET /tickets` filters, both scoped to
+the signed-in user (`technician_id: auth.user.id`) — no new endpoint:
 
-- **Daily To-Do's** — today's `category = 'daily_todo'` tickets (the
-  category already self-archives at end of day, so "not archived" already
-  means "today's" — see `recurringTickets.js`).
-- **Priority** — tickets at any priority tier Settings → Priority tiers
-  has flagged "Highlight in tasks" (`highlight_in_tasks` meta, migration
-  042 — `expedited_sos` by default, admin-addable; this is what "expedited
-  jobs" and "high priority status" in the boss's note both come down to,
-  today the same set). Fetched with the new comma-separated `priority`
-  filter (below) so more than one flagged tier is still a single request.
+- **Daily To-Do's** — today's `category = 'daily_todo'` tickets assigned
+  to you (the category already self-archives at end of day, so "not
+  archived" already means "today's" — see `recurringTickets.js`).
+- **Priority** — your own tickets at any priority tier Settings →
+  Priority tiers has flagged "Highlight in tasks" (`highlight_in_tasks`
+  meta, migration 042 — `expedited_sos` by default, admin-addable; this is
+  what "expedited jobs" and "high priority status" in the boss's note both
+  come down to, today the same set). Fetched with the new comma-separated
+  `priority` filter (below) so more than one flagged tier is still a
+  single request.
 
 Both exclude anything already at a terminal status (`meta.terminal`, e.g.
 'done' — new `isTerminalStatus` getter in `stores.js`, same shape as
@@ -3301,8 +3302,10 @@ something in it, same convention as the card it replaces.
 Gone along with it: the per-ticket-task checklist and its inline
 done-checkbox that used to live in "My tasks" — checking off a task is now
 only ever done from the ticket page. "My tasks" and "Priority tasks" were
-both scoped to the signed-in user; these replacements are shop-wide
-(anyone's tickets), matching how the boss described them.
+both scoped to the signed-in user, and this replacement stays that way —
+an earlier pass here briefly made it shop-wide by default before Will
+corrected that: it was never meant to show anyone else's work, so there's
+no admin toggle or shop-wide mode, just always yours.
 
 **In-Progress Tickets** is "Assigned to me," renamed and refocused: still
 `technician_id`-scoped to the signed-in tech (not shop-wide — an earlier
@@ -3421,32 +3424,6 @@ never affected -- `nav` drops back to `overflow-x: visible` under the
 `.nav-more-menu` override goes back to plain `position: static`.
 
 No migration, no API change.
-
-### 2.82 "Priority & To-Do's" gets a per-employee mine-only toggle
-
-Follow-up to §2.79: the new "Priority & To-Do's" dashboard card is
-shop-wide by default (everyone's daily to-do's and flagged-priority
-tickets, not just yours). Will wanted a way to narrow that per person.
-
-Settings -> Staff accounts gained a "Priority & To-Do's: mine only"
-checkbox (`employees.dashboard_priority_personal_only`, migration 059) --
-admin-set per employee, same shape as `show_parts_on_dashboard`
-(migration 058) and `excluded_from_chore_rotation` before it, and off
-(shop-wide) by default for the same reason those are: opt-in to the
-narrower view, not a behavior change for anyone who hasn't been switched
-over. Deliberately admin-controlled rather than self-service, matching
-how the Parts/Supplies dashboard card's own visibility already works.
-
-`DashboardView.vue`'s `loadPriorityAndTodos()` adds `technician_id:
-auth.user.id` to both of its `GET /tickets` calls (daily to-do's and
-flagged-priority) when the signed-in employee has this set -- no new
-backend filter needed, `technician_id` already existed for exactly this.
-The card's own subtitle switches between "Shop-wide, not just yours" and
-"Just yours" to match, so what's actually being shown is never a guess.
-
-Travels on `req.user`/`GET /auth/me` (`middleware/auth.js`) alongside
-`show_parts_on_dashboard`, same reasoning: the signed-in user's own
-dashboard behavior needs to be known without an extra request.
 
 ## 4. Suggested first moves after deploy
 
