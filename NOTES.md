@@ -3137,6 +3137,54 @@ until it either gets billed in Xero or is dismissed here as a false match
 — the Xero Duplicates/backfill review screens (§2.53/§2.56) are where
 that gets cleaned up if it happens.
 
+### 2.77 Ticket naming: {category} and {ticket_name} tokens
+
+Will: the naming panel's "Standardize" categories (Settings → Ticket
+naming, §2.x — `ticket_category.meta.naming_enforced`/`naming_template`)
+could only ever render a title from the customer/instrument — there was
+no way for a Standardize category to also carry anything a person typed.
+He wanted `"[category]: [ticket_name]"` — e.g. "Housekeeping: Mop the
+floors" — as a real option.
+
+Two tokens added to the existing `{customer}`/`{nickname}`/`{year}`/
+`{family}`/`{model}` set (`ticketNaming.js`'s `NAMING_TOKEN_HELP`,
+`routes/tickets.js`'s `NAMING_TOKENS`):
+
+- `{category}` — that ticket's own category label. Resolved fresh at
+  compose time from whichever category's already been looked up, same as
+  every other token here — no new column, and available to every
+  category's template, Standardize or not.
+- `{ticket_name}` — a short free-typed name. Unlike the rest, this one
+  isn't derivable from anything else already on the ticket, so it's a
+  real column (`tickets.ticket_name`, migration 057) rather than
+  computed at render time — kept separate from `title` itself so PATCH
+  /tickets/:id can keep recomposing the rest of a Standardize title
+  (customer or instrument changing later) around it without losing what
+  was typed.
+
+TicketNewView.vue's Title field still shows the fully-composed, disabled
+preview it always has for a Standardize category — but now, if that
+category's template actually references `{ticket_name}`
+(`stores.js`'s new `namingTemplateUsesTicketName`), a second "Name"
+field appears above it, editable, feeding that token live. A Standardize
+category whose template doesn't use `{ticket_name}` shows nothing extra,
+exactly as before. Free-naming categories are untouched: a hand-typed
+title still wins outright there, same as always.
+
+One rendering fix that fell out of building this: the naming template
+language already dropped a dangling `-`/`,`/`|` at either end of a
+composed title (e.g. a customer-only ticket under the default template
+never left a trailing " - "); `:` is the obvious separator for
+`{category}: {ticket_name}`, so it joins that same strip set — a blank
+`{ticket_name}` under that template now composes to plain "Housekeeping"
+rather than "Housekeeping:".
+
+Migration: `057_ticket_free_text_naming.sql` (adds `tickets.ticket_name`,
+nullable — every existing ticket is unaffected, and no category is
+opted into using the new token by default; an admin adds `{ticket_name}`
+to a category's own template from Settings → Ticket naming when they
+want it).
+
 
 ## 4. Suggested first moves after deploy
 

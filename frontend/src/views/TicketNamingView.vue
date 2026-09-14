@@ -2,11 +2,21 @@
 /**
  * Ticket naming panel (Settings -> Ticket naming). Lets an admin design a
  * per-category title template — routes/tickets.js's composeTicketTitle
- * renders it (customer/instrument only) for a new ticket whose title
- * wasn't typed by hand, and PATCH /tickets/:id keeps it in sync afterward
- * for any category that's opted into "Standardize" below. TicketNewView.vue
- * shows the same live preview while someone's filling out a new ticket,
- * reading the exact same template through stores.js's namingTemplateFor.
+ * renders it for a new ticket whose title wasn't typed by hand, and PATCH
+ * /tickets/:id keeps it in sync afterward for any category that's opted
+ * into "Standardize" below. TicketNewView.vue shows the same live preview
+ * while someone's filling out a new ticket, reading the exact same
+ * template through stores.js's namingTemplateFor.
+ *
+ * migration 057 added two tokens beyond customer/instrument:
+ * {category} (that category's own label, always available) and
+ * {ticket_name} (a free-typed slot, e.g. `{category}: {ticket_name}` ->
+ * "Housekeeping: Mop the floors") -- the one way a Standardize category
+ * can still carry someone's own words instead of only auto-derived
+ * pieces. ticket_name lives on the ticket itself (not this row's meta),
+ * since it's per-ticket; TicketNewView.vue only shows an input for it
+ * once a category is both Standardize and actually uses the token
+ * (stores.js's namingTemplateUsesTicketName).
  *
  * Only applies going forward: saving a template here, or turning
  * Standardize on/off, never touches a ticket that already exists — there's
@@ -56,7 +66,10 @@ onMounted(async () => {
 
 function previewFor(row) {
   const template = drafts[row.id];
-  return renderNamingTemplate(template, NAMING_SAMPLE_CONTEXT);
+  // categoryLabel comes from the row itself rather than a made-up sample
+  // -- {category} always resolves to a ticket's real category, so showing
+  // the real label here previews exactly what {category} will render.
+  return renderNamingTemplate(template, { ...NAMING_SAMPLE_CONTEXT, categoryLabel: row.label });
 }
 
 async function saveTemplate(row, value) {
@@ -127,6 +140,13 @@ async function toggleEnforced(row) {
         Default, used by any category that hasn't set its own:
         <code>{{ DEFAULT_NAMING_TEMPLATE }}</code>
       </p>
+      <p class="muted small" style="margin: 8px 0 0">
+        <code>{ticket_name}</code> only does anything once "Standardize" is on below -- turn it on,
+        then work <code>{ticket_name}</code> into the template (e.g.
+        <code>{category}: {ticket_name}</code> → "Housekeeping: Mop the floors") to let someone
+        type a short name for the ticket instead of it coming entirely from the customer/instrument.
+        The New Ticket form only shows that free-text field once the template actually uses it.
+      </p>
     </div>
 
     <div v-if="loading" class="empty">Loading…</div>
@@ -135,9 +155,12 @@ async function toggleEnforced(row) {
         <div class="row" style="margin-bottom: 8px">
           <h2 style="margin: 0">{{ row.label }}</h2>
           <div class="spacer" />
-          <label class="checkbox" title="Nobody can type their own title for this category">
+          <label
+            class="checkbox"
+            title="Nobody can type a whole title for this category -- the template above is all of it, unless the template itself includes {ticket_name}"
+          >
             <input type="checkbox" :checked="!!row.meta.naming_enforced" @change="toggleEnforced(row)" />
-            Standardize (no free-text title)
+            Standardize (generated name)
           </label>
         </div>
 

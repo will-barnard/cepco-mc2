@@ -517,7 +517,7 @@ async function insertTicketRow(client, b, resolved, createdById) {
 
   const { rows } = await client.query(
     `INSERT INTO tickets (
-       title, category_key, category_label_snapshot,
+       title, ticket_name, category_key, category_label_snapshot,
        priority_key, priority_label_snapshot,
        status_key, status_label_snapshot,
        tech_level_key, tech_level_label_snapshot,
@@ -527,11 +527,16 @@ async function insertTicketRow(client, b, resolved, createdById) {
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
        family_queue_position, is_shipping, recurring_ticket_template_id
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-               COALESCE($20,'{}'::jsonb),$21,COALESCE($22,TRUE),$23,$24,$25,$26,$27,$28,$29)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+               COALESCE($21,'{}'::jsonb),$22,COALESCE($23,TRUE),$24,$25,$26,$27,$28,$29,$30)
      RETURNING *`,
     [
       String(b.title).trim(),
+      // migration 057: the free-text slot a Standardize template can pull
+      // in via {ticket_name} -- stored whenever supplied regardless of
+      // whether this category's own template references it, same as
+      // `notes`/`drop_off_date` etc. below aren't gated on a category flag.
+      b.ticket_name || null,
       category.key, category.label,
       priority.key, priority.label,
       status.key, status.label,
@@ -645,6 +650,17 @@ async function insertTicketRow(client, b, resolved, createdById) {
 // (e.g. a customer-only ticket under a template that leads with
 // `[{customer} - ]`) is trimmed in the final cleanup pass regardless.
 const NAMING_TOKENS = {
+  // {category}/{ticket_name} added alongside the original customer/
+  // instrument tokens so a Standardize category can fold in the ticket's
+  // own category label and a person's free-typed text (e.g.
+  // `{category}: {ticket_name}` -> "Housekeeping: Mop the floors") --
+  // see migration 057. categoryLabel is resolved fresh from whichever
+  // category composeTicketTitle was actually called for (same as every
+  // other token here being resolved fresh, never snapshotted); ticketName
+  // comes from the ticket's own persisted ticket_name column, since
+  // unlike the rest it isn't derivable from anything else on the ticket.
+  category: (ctx) => ctx.categoryLabel,
+  ticket_name: (ctx) => ctx.ticketName,
   customer: (ctx) => ctx.customerName,
   // Quotes live in DEFAULT_NAMING_TEMPLATE's own `["{nickname}"]` group,
   // not here -- a token that pre-quoted itself would double up with any
@@ -673,10 +689,14 @@ function renderNamingTemplate(template, ctx) {
   // before a trailing space (e.g. "Dolly Jones - "), and the trim has to
   // happen first or the separator is never actually the last character
   // when the dangling-separator regexes below run.
+  // ':' joins the strip set alongside the original dash/comma/pipe --
+  // {category}: {ticket_name} is exactly the shape this feature exists
+  // for, and a blank {ticket_name} used to leave a dangling "Category:"
+  // behind (migration 057).
   return out.replace(/\s+/g, ' ')
     .trim()
-    .replace(/^[-\u2013\u2014,|]\s*/, '')
-    .replace(/\s*[-\u2013\u2014,|]$/, '')
+    .replace(/^[-\u2013\u2014,:|]\s*/, '')
+    .replace(/\s*[-\u2013\u2014,:|]$/, '')
     .trim();
 }
 
@@ -705,7 +725,7 @@ function modelLeaf(model) {
 // restorations, inventory purchases, Shopify orders, the
 // create-shipping-ticket route) keep supplying their own explicit titles
 // completely unaffected, exactly as the boss-list scope doc asked.
-async function composeTicketTitle(customerId, instrumentId, template) {
+async function composeTicketTitle(customerId, instrumentId, template, extra = {}) {
   let customerName = '';
   if (customerId) {
     const { rows } = await query('SELECT name FROM customers WHERE id = $1', [customerId]);
@@ -728,7 +748,20 @@ async function composeTicketTitle(customerId, instrumentId, template) {
     }
   }
 
-  return renderNamingTemplate(template, { customerName, nickname, year, familyLabel, modelLeaf: leaf });
+  // categoryLabel/ticketName (migration 057): both optional, and both
+  // default to '' as an empty token would -- a caller that doesn't pass
+  // `extra` at all (there were only two before this: POST /tickets and
+  // quotes.js's createTicketsForEstimate) renders exactly as it always
+  // has, {category}/{ticket_name} included only for callers that opt in.
+  return renderNamingTemplate(template, {
+    customerName,
+    nickname,
+    year,
+    familyLabel,
+    modelLeaf: leaf,
+    categoryLabel: extra.categoryLabel || '',
+    ticketName: extra.ticketName || '',
+  });
 }
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -767,15 +800,25 @@ router.post('/', asyncHandler(async (req, res) => {
   // read-only) field TicketNewView.vue shows for it — the generated name
   // is the only name that category's tickets ever get.
   const namingEnforced = !!(category.meta && category.meta.naming_enforced);
+  // Naming panel (migration 057): a free-typed slot a category's template
+  // can fold in via {ticket_name} (e.g. `{category}: {ticket_name}` ->
+  // "Housekeeping: Mop the floors") -- captured before namingEnforced
+  // decides what happens to `title` below since the two fields are
+  // independent: ticket_name is stored on every ticket that supplies it,
+  // whether or not this category's template actually references it.
+  const ticketName = (b.ticket_name && String(b.ticket_name).trim()) || '';
   let title = namingEnforced ? '' : (b.title && String(b.title).trim());
   if (!title) {
     title = await composeTicketTitle(
       b.customer_id || null, b.instrument_id || null, category.meta && category.meta.naming_template,
+      { categoryLabel: category.label, ticketName },
     );
   }
   if (!title) throw badRequest('title is required');
 
-  const fields = { ...b, title, is_shipping: isShipping };
+  const fields = {
+    ...b, title, is_shipping: isShipping, ticket_name: ticketName || null,
+  };
   const resolved = await resolveNewTicketFields(fields);
   const ticket = await withTransaction(async (client) => {
     const created = await insertTicketRow(client, fields, resolved, req.user.id);
@@ -876,7 +919,16 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   // itself, or the customer/instrument/category — is actually in this
   // request.
   let titleOverride = b.title === undefined ? null : String(b.title).trim();
+  // migration 057: ticket_name (the {ticket_name} free-text slot) is its
+  // own column, independent of title -- stored whenever supplied
+  // (ticketNameOverride below feeds the UPDATE further down) regardless
+  // of whether the ticket's category is enforced, same as titleOverride
+  // itself is captured unconditionally above. `null` means "not touched
+  // this request" (COALESCE keeps the existing value); '' is a real
+  // clear, same convention titleOverride already uses.
+  const ticketNameOverride = b.ticket_name === undefined ? null : String(b.ticket_name).trim();
   const namingRelevantChange = b.customer_id !== undefined || b.instrument_id !== undefined
+    || ticketNameOverride !== null
     || (resolved.category && resolved.category.key !== existing.category_key);
   if (namingRelevantChange || titleOverride) {
     const namingCategory = resolved.category || await settings.resolve('ticket_category', effectiveCategoryKey);
@@ -884,8 +936,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       const effectiveCustomerId = b.customer_id !== undefined ? (b.customer_id || null) : existing.customer_id;
       const effectiveInstrumentId = b.instrument_id !== undefined
         ? (b.instrument_id || null) : existing.instrument_id;
+      const effectiveTicketName = ticketNameOverride !== null ? ticketNameOverride : (existing.ticket_name || '');
       titleOverride = await composeTicketTitle(
         effectiveCustomerId, effectiveInstrumentId, namingCategory.meta.naming_template,
+        { categoryLabel: namingCategory.label, ticketName: effectiveTicketName },
       );
     }
   }
@@ -927,6 +981,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     const { rows } = await client.query(
       `UPDATE tickets SET
          title            = COALESCE($2, title),
+         ticket_name      = COALESCE($35, ticket_name),
          category_key     = COALESCE($3, category_key),
          category_label_snapshot = COALESCE($4, category_label_snapshot),
          priority_key     = COALESCE($5, priority_key),
@@ -984,6 +1039,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         newFamilyQueuePosition !== undefined, newFamilyQueuePosition ?? null,
         b.service_done_notes === undefined ? null : b.service_done_notes,
         b.service_needed_notes === undefined ? null : b.service_needed_notes,
+        ticketNameOverride,
       ],
     );
 

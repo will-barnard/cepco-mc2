@@ -160,6 +160,16 @@ export const useSettings = defineStore('settings', {
     namingEnforced: (s) => (categoryKey) => (
       !!(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_enforced
     ),
+    // true once a category's own template actually references
+    // {ticket_name} (Settings -> Ticket naming) -- TicketNewView.vue only
+    // shows its free-text "Name" input when a category is *both*
+    // Standardize (namingEnforced above) *and* its template would
+    // actually do something with what gets typed into it.
+    namingTemplateUsesTicketName: (s) => (categoryKey) => {
+      const template = (s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_template
+        || DEFAULT_NAMING_TEMPLATE;
+      return /\{ticket_name\}/.test(template);
+    },
     // DashboardView.vue's "My tasks" — a priority tier flagged this way
     // (Settings -> Priority tiers' "Highlight in tasks" column) gets its
     // tasks pulled into their own separate box below the regular list

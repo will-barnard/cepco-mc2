@@ -554,6 +554,10 @@ async function createTicketsForEstimate(estimate, createdById) {
       let title = await composeTicketTitle(
         locked.customer_id, first.instrument_id,
         resolved.category.meta && resolved.category.meta.naming_template,
+        // No per-line free-typed text on this path (an estimate has
+        // nothing resembling {ticket_name} to offer) -- {category} still
+        // resolves, in case a template references it.
+        { categoryLabel: resolved.category.label },
       );
       if (!first.instrument_id) {
         const procedurePart = `${first.procedure_name}${groupItems.length > 1 ? ' + more' : ''}`;

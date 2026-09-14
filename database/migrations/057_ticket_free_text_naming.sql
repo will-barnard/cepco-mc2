@@ -1,0 +1,31 @@
+-- Naming panel (Settings -> Ticket naming) follow-up: a "Standardize"
+-- category could only ever render its title from customer/instrument
+-- tokens -- there was no way to fold in anything a person actually typed.
+-- Two new tokens close that gap (see ticketNaming.js's NAMING_TOKEN_HELP
+-- and routes/tickets.js's NAMING_TOKENS/composeTicketTitle):
+--
+--   {category}     -- the ticket's own category label. Computed at
+--                      render time from the already-resolved category
+--                      (same as {customer}/{year}/etc.), so it needs no
+--                      new column and is available to every category's
+--                      template, standardized or not.
+--
+--   {ticket_name}  -- a short free-typed name, e.g. "Mop the floors",
+--                      meant to sit alongside {category} so a
+--                      Standardize category can still carry a person's
+--                      own words instead of only auto-derived pieces --
+--                      `{category}: {ticket_name}` -> "Housekeeping: Mop
+--                      the floors". Unlike the other tokens this one
+--                      isn't derivable from anything else already on the
+--                      ticket, so it needs its own column rather than
+--                      being computed at compose time. Kept on the
+--                      ticket (not folded into `title` itself) so PATCH
+--                      /tickets/:id can keep recomposing the rest of a
+--                      Standardize title (customer/instrument changing)
+--                      around it without losing what was typed.
+--
+-- Free-naming categories aren't affected: TicketNewView.vue only shows a
+-- field for this when a category is both Standardize *and* its template
+-- actually references {ticket_name}, and composeTicketTitle treats a
+-- blank value exactly like any other empty token.
+ALTER TABLE tickets ADD COLUMN ticket_name TEXT;

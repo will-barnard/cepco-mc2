@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
-import { renderNamingTemplate } from '../ticketNaming';
+import { renderNamingTemplate, templateUsesToken } from '../ticketNaming';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
@@ -63,6 +63,12 @@ const form = ref({
   // this instrument" from) carry a destination the same as one spun off
   // that way.
   shipping_contact_info: '',
+  // Naming panel (migration 057): the {ticket_name} slot a Standardize
+  // category's template can fold in alongside {category} -- e.g.
+  // "Housekeeping: Mop the floors". Only shown/used when usesTicketName
+  // below says the current category's template actually references it;
+  // harmless to submit blank otherwise.
+  ticket_name: '',
 });
 
 // True exactly when this ticket will land as an is_shipping ticket —
@@ -246,7 +252,11 @@ const autoTitlePreview = computed(() => {
   const leaf = modelLeaf(inst?.model);
 
   const template = settings.namingTemplateFor(form.value.category_key);
-  return renderNamingTemplate(template, { customerName, nickname, year, familyLabel, modelLeaf: leaf });
+  const categoryLabel = settings.categories.find((c) => c.key === form.value.category_key)?.label || '';
+  return renderNamingTemplate(template, {
+    customerName, nickname, year, familyLabel, modelLeaf: leaf,
+    categoryLabel, ticketName: form.value.ticket_name.trim(),
+  });
 });
 
 // Settings -> Ticket naming's "Standardize" toggle for whichever category
@@ -254,6 +264,14 @@ const autoTitlePreview = computed(() => {
 // instead of letting anyone type over it (backend enforces the same rule
 // independently — see routes/tickets.js's namingEnforced).
 const namingEnforced = computed(() => settings.namingEnforced(form.value.category_key));
+// True once the current category is Standardize *and* its own template
+// actually references {ticket_name} -- that's the only situation where
+// typing anything still matters (see the Name field below): otherwise
+// the whole title is auto-derived from customer/instrument with nothing
+// left for a person to contribute.
+const usesTicketName = computed(() => (
+  namingEnforced.value && templateUsesToken(settings.namingTemplateFor(form.value.category_key), 'ticket_name')
+));
 
 // Auto-fill on every *change* of instrument type — not on every keystroke
 // elsewhere in the form, and not a one-time default, so switching types
@@ -311,6 +329,12 @@ async function submit() {
     // in the (disabled) input keeps the request honest about what this
     // form actually let someone type.
     payload.title = namingEnforced.value ? null : (payload.title.trim() || null);
+    // Sent regardless of usesTicketName -- harmless for a category whose
+    // template doesn't reference {ticket_name} (backend just stores it
+    // unused, same as any other field a category's rules don't happen to
+    // care about), and keeps this in sync with whatever's actually in
+    // the (possibly hidden) Name field above.
+    payload.ticket_name = form.value.ticket_name.trim() || null;
 
     if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
       const created = await api.post('/customers', {
@@ -380,6 +404,7 @@ async function submit() {
           // eslint-disable-next-line no-await-in-loop -- see above
           await api.post('/tickets', {
             title: null,
+            ticket_name: payload.ticket_name,
             category_key: payload.category_key,
             subcategory_key: payload.subcategory_key,
             subcategory_other_text: payload.subcategory_other_text,
@@ -432,7 +457,9 @@ async function submit() {
         <input
           v-if="namingEnforced"
           :value="autoTitlePreview" disabled
-          title="This category uses a standardized name (Settings → Ticket naming) — nothing to type here."
+          :title="usesTicketName
+            ? 'This category uses a standardized name (Settings → Ticket naming) — type the Name below to fill in its {ticket_name} part.'
+            : 'This category uses a standardized name (Settings → Ticket naming) — nothing to type here.'"
         />
         <input
           v-else
@@ -447,6 +474,19 @@ async function submit() {
              exactly what the ticket will be titled, live. -->
         <p v-if="!namingEnforced && autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
           Left blank, this ticket will be titled "{{ autoTitlePreview }}".
+        </p>
+      </div>
+
+      <!-- Naming panel (migration 057): the free-text slot this category's
+           standardized template folds in via {ticket_name} -- e.g.
+           "Housekeeping: Mop the floors". Only appears once usesTicketName
+           says the template actually does something with it; every other
+           Standardize category has nothing here to type. -->
+      <div v-if="usesTicketName" class="field">
+        <label>Name</label>
+        <input v-model="form.ticket_name" placeholder="e.g. Mop the floors" />
+        <p class="muted small" style="margin: 4px 0 0">
+          Filled into the standardized title above as you type.
         </p>
       </div>
 

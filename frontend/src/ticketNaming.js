@@ -16,6 +16,8 @@
  */
 
 export const NAMING_TOKEN_HELP = [
+  { token: '{category}', description: "the ticket's category name" },
+  { token: '{ticket_name}', description: 'free text typed for this ticket (see "Standardize" below)' },
   { token: '{customer}', description: "the ticket's customer name" },
   { token: '{nickname}', description: "the instrument's nickname, if it has one" },
   { token: '{year}', description: "the instrument's year, if known" },
@@ -26,6 +28,8 @@ export const NAMING_TOKEN_HELP = [
 export const DEFAULT_NAMING_TEMPLATE = '[{customer} - ]["{nickname}"][ {year}][ {family}][ {model}]';
 
 const NAMING_TOKENS = {
+  category: (ctx) => ctx.categoryLabel,
+  ticket_name: (ctx) => ctx.ticketName,
   customer: (ctx) => ctx.customerName,
   nickname: (ctx) => ctx.nickname,
   year: (ctx) => ctx.year,
@@ -44,11 +48,24 @@ export function renderNamingTemplate(template, ctx) {
     return any ? rendered : '';
   });
   out = out.replace(/\{(\w+)\}/g, (m, name) => (NAMING_TOKENS[name] ? NAMING_TOKENS[name](ctx) : '') || '');
+  // ':' joins the strip set alongside the original dash/comma/pipe --
+  // {category}: {ticket_name} is exactly the shape this feature exists
+  // for, and a blank {ticket_name} used to leave a dangling "Category:"
+  // behind (migration 057).
   return out.replace(/\s+/g, ' ')
     .trim()
-    .replace(/^[-–—,|]\s*/, '')
-    .replace(/\s*[-–—,|]$/, '')
+    .replace(/^[-–—,:|]\s*/, '')
+    .replace(/\s*[-–—,:|]$/, '')
     .trim();
+}
+
+// True when `template` actually references `{token}` -- used to decide
+// whether a category's own naming UI needs to show anything for that
+// token at all (e.g. TicketNewView.vue's free-text "Name" field only
+// appears for a Standardize category whose template uses {ticket_name} --
+// no point showing an input that would render into nothing).
+export function templateUsesToken(template, token) {
+  return new RegExp(`\\{${token}\\}`).test(String(template || DEFAULT_NAMING_TEMPLATE));
 }
 
 // A representative sample so an admin editing a template on the Settings
@@ -56,11 +73,14 @@ export function renderNamingTemplate(template, ctx) {
 // on hand. Deliberately has every token filled in (a real ticket in
 // progress often won't), since the point here is showing what the
 // template *does*, not modeling every empty-field edge case — those are
-// exercised for real the moment a ticket is created.
+// exercised for real the moment a ticket is created. categoryLabel is
+// left out here (TicketNamingView.vue fills in each row's own real label
+// instead, which previews better than a made-up one).
 export const NAMING_SAMPLE_CONTEXT = {
   customerName: 'Dolly Jones',
   nickname: 'Old Betsy',
   year: '1973',
   familyLabel: 'Rhodes',
   modelLeaf: 'Stage 73',
+  ticketName: 'Mop the floors',
 };
