@@ -80,11 +80,26 @@ h3 { font-size: 15px; }
 /* --- "More" nav dropdown (App.vue) -----------------------------------------
    Fleet, Inventory, Parts/Supplies, Hours, and Ceppys tucked behind one nav
    item once the main row got crowded — same popover convention as the
-   hide-statuses dropdown above (absolute panel, click-outside + Escape via
-   App.vue's existing document listeners). Sits inline among the other nav
-   links (not a separate flex item of its own) so it collapses into the
-   stacked mobile nav the same way; @click.stop on the toggle keeps opening
-   it from also closing that stacked panel. */
+   hide-statuses dropdown above, with one difference forced by where it
+   lives: `.topbar nav` below carries `overflow-x: auto` (its own horizontal-
+   scroll fallback), and per the CSS overflow spec, setting overflow-x to
+   anything but visible forces the *other* axis's used value to auto too —
+   so nav is secretly clipped vertically as well, and a plain
+   `position: absolute` dropdown nested inside it (as this one used to be)
+   renders completely invisible, clipped to nothing, however correctly its
+   open/close state is toggling. Fixed position escapes that clipping
+   entirely (a `position: fixed` box isn't part of any ancestor's overflow
+   region), at the cost of needing its coordinates computed in JS off the
+   toggle button's own position (App.vue's toggleMoreMenu) instead of the
+   free `top`/`left: 0` an absolutely-positioned popover gets for free.
+   Click-outside + Escape still go through App.vue's existing document
+   listeners; a resize or a scroll of nav's own horizontal overflow closes
+   it outright rather than re-tracking the button (same trade-off QueueView's
+   hide-statuses dropdown makes by simply not living somewhere scrollable in
+   the first place). Sits inline among the other nav links (not a separate
+   flex item of its own) so it collapses into the stacked mobile nav the
+   same way; @click.stop on the toggle keeps opening it from also closing
+   that stacked panel. */
 .nav-more { position: relative; }
 .nav-more-toggle {
   display: flex; align-items: center; gap: 6px;
@@ -94,7 +109,7 @@ h3 { font-size: 15px; }
 .nav-more-toggle:hover, .nav-more-toggle.active { background: var(--surface-2); color: var(--text); }
 .nav-more-caret { font-size: 11px; }
 .nav-more-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 25;
+  position: fixed; z-index: 25;
   min-width: 200px;
   display: flex; flex-direction: column; gap: 2px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -138,6 +153,11 @@ h3 { font-size: 15px; }
   .topbar .account-row { gap: 10px; }
 
   .nav-more-toggle { width: 100%; justify-content: flex-start; padding: 12px 14px; font-size: 15px; }
+  /* Stacked mobile nav: back to a normal, static, in-flow block --
+     `nav` is fully visible (not scroll-clipped) at this width (see its
+     own mobile override below), so none of the fixed-position/JS-
+     coordinate machinery above is needed here; `top`/`left` set inline
+     by JS are simply ignored on a statically positioned box. */
   .nav-more-menu { position: static; margin-top: 4px; box-shadow: none; border-color: var(--border); }
   .nav-more-menu a { padding: 12px 14px; font-size: 15px; }
 }

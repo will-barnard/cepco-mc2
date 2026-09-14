@@ -3270,12 +3270,13 @@ Migration: `058_new_flow_consolidation.sql` (`employees.show_parts_on_dashboard`
 only — everything else reused existing tables/columns).
 
 
-### 2.79 Dashboard: "Priority & To-Do's" / "In-Progress Tickets" replace "My tasks" / "Priority tasks"; "Assigned to me" defaults to active work only
+### 2.79 Dashboard: "Priority & To-Do's" and "In-Progress Tickets" replace "My tasks" / "Priority tasks" / "Assigned to me"
 
 Boss's dashboard-layout note: "My tasks" and "Priority tasks" (both
-personal, both task-level) are gone, replaced by two shop-wide,
-ticket-level overview cards — plus "Assigned to me" now opens filtered to
-what's actually being worked instead of everything.
+personal, both task-level) are gone, replaced by "Priority & To-Do's" (a
+shop-wide, ticket-level overview) and "In-Progress Tickets" (which took
+over "Assigned to me"'s spot and scope — yours, not shop-wide — rather
+than existing as a third, separate card).
 
 **Priority & To-Do's.** Two groups in one card, both computed client-side
 in `DashboardView.vue` from existing `GET /tickets` filters — no new
@@ -3303,31 +3304,39 @@ only ever done from the ticket page. "My tasks" and "Priority tasks" were
 both scoped to the signed-in user; these replacements are shop-wide
 (anyone's tickets), matching how the boss described them.
 
-**In-Progress Tickets.** Every ticket In Progress or in QC, shop-wide,
-QC pulled to the top and visually called out — two separate
-single-status `GET /tickets` calls (`status=qc`, `status=in_progress`)
-concatenated QC-first, deliberately not one query relying on
-`sort_order`, since that's admin-editable (Settings → Ticket statuses)
-and "QC on top" shouldn't quietly stop being true if someone reorders
-statuses later. The highlight itself is a new opt-in
-`TicketTable.vue` prop, `highlight-status="qc"`: rows in that
-`groupByStatus` section get a tinted background + left accent bar in that
-status's own pill color (`styles.css`'s `.row-highlight.*`), so it stays
-correct even if a shop retints a status. Default `null` — every other
-`TicketTable` usage (Assigned to me, Unassigned, Queue) is unaffected.
+**In-Progress Tickets** is "Assigned to me," renamed and refocused: still
+`technician_id`-scoped to the signed-in tech (not shop-wide — an earlier
+pass here briefly had it as a *third*, separate, shop-wide card before
+Will corrected that; it was always meant to replace "Assigned to me"
+outright), still paginated, but now defaults to just what's actually being
+worked (`status=in_progress,qc`, that new multi-value filter below) rather
+than everything assigned to them, with QC visually pulled forward. A "Show
+all" button flips `mineShowAll` back to unfiltered and resets to page 1 —
+same reasoning as the old "unlocks tasks" gate elsewhere: a ticket that
+hasn't started yet or already cleared QC doesn't need to occupy a tech's
+personal list every day, but nothing is hidden permanently.
+
+The QC highlight is a new opt-in `TicketTable.vue` prop,
+`highlight-status="qc"`: rows in that `groupByStatus` section get a tinted
+background + left accent bar in that status's own pill color
+(`styles.css`'s `.row-highlight.*`), so it stays correct even if a shop
+retints a status. Default `null` — every other `TicketTable` usage
+(Unassigned, Queue) is unaffected. Ordering-wise this rides the *existing*
+technician-scoped queue order (`st.sort_order DESC`, same convention every
+other queue view here already uses — QC's sort_order is currently higher
+than In Progress's, hence "on top" today) rather than forcing QC first
+independent of that setting: a shop-wide unpaginated overview can cheaply
+concatenate two separately-fetched single-status result sets to guarantee
+that regardless of `sort_order`, but a paginated per-tech list can't do
+that cleanly, so this one instead just inherits the same order-by
+convention as the Queue page, Unassigned, and everywhere else.
 
 **`GET /tickets`'s `status`/`priority` filters now accept a
 comma-separated list** (`routes/tickets.js`'s new `pushAny`, `= ANY($n)`
 instead of `= $n`) — a single value still behaves exactly as before, so
-this is additive. Added for the two cards above and for:
-
-**"Assigned to me" now defaults to just In Progress + QC** (that new
-multi-value `status` filter, scoped to `technician_id`) — a "Show all"
-button flips `mineShowAll` back to unfiltered and resets to page 1. Same
-reasoning as the old "unlocks tasks" gate elsewhere: a ticket that hasn't
-started yet or already cleared QC doesn't need to occupy a tech's personal
-list every day, but nothing is hidden permanently — one click shows
-everything again.
+this is additive. Added for "Priority & To-Do's" (multiple flagged
+priority tiers in one request) and "In-Progress Tickets" (`in_progress`
++ `qc` in one request).
 
 No migration — everything here reads existing columns/tables.
 
@@ -3378,6 +3387,66 @@ act as the old one, and gets sent to `/login` outright if that identity
 turns out to be signed out entirely.
 
 No migration, no API change — purely a frontend state-management fix.
+
+### 2.81 Fix: the nav's "More" dropdown didn't visibly open
+
+Will: the "More" button in the nav (§2.79/Fleet, Inventory, Parts/Supplies,
+Hours, Ceppys) didn't do anything when clicked.
+
+Root cause: the dropdown was a plain `position: absolute` popover nested
+inside `.topbar nav` -- which carries `overflow-x: auto` as its own
+horizontal-scroll fallback for a crowded nav row. Per the CSS overflow
+spec, setting `overflow-x` to anything but `visible` forces the *other*
+axis's used value to `auto` too, even if `overflow-y` is never mentioned
+in the stylesheet at all -- so `nav` was secretly clipping vertically as
+well, and an absolutely-positioned child that extends below `nav`'s own
+(one-line-tall) box gets clipped to nothing. The click handler was firing
+and `moreMenuOpen` really was toggling; the panel just never had anywhere
+visible to render.
+
+Fixed by switching `.nav-more-menu` to `position: fixed` (a fixed box
+isn't part of any ancestor's overflow-clipped region) with its `top`/
+`left` computed in `App.vue`'s `toggleMoreMenu` from the toggle button's
+own `getBoundingClientRect()` at open time, since fixed positioning gets
+no free offset from a positioned ancestor the way absolute did. A window
+resize or *any* page scroll now closes the dropdown outright rather than
+re-tracking the button's position live -- simpler, and correct anyway
+since a `position: fixed` popover doesn't scroll away with the page the
+way its trigger button does. The scroll listener is document-level and
+capture-phase (`{ capture: true }`) since the `scroll` event doesn't
+bubble, which also sidesteps needing a template ref that might not exist
+yet the first time listeners are attached. The stacked mobile nav was
+never affected -- `nav` drops back to `overflow-x: visible` under the
+960px breakpoint, so this never clipped anything there; its own
+`.nav-more-menu` override goes back to plain `position: static`.
+
+No migration, no API change.
+
+### 2.82 "Priority & To-Do's" gets a per-employee mine-only toggle
+
+Follow-up to §2.79: the new "Priority & To-Do's" dashboard card is
+shop-wide by default (everyone's daily to-do's and flagged-priority
+tickets, not just yours). Will wanted a way to narrow that per person.
+
+Settings -> Staff accounts gained a "Priority & To-Do's: mine only"
+checkbox (`employees.dashboard_priority_personal_only`, migration 059) --
+admin-set per employee, same shape as `show_parts_on_dashboard`
+(migration 058) and `excluded_from_chore_rotation` before it, and off
+(shop-wide) by default for the same reason those are: opt-in to the
+narrower view, not a behavior change for anyone who hasn't been switched
+over. Deliberately admin-controlled rather than self-service, matching
+how the Parts/Supplies dashboard card's own visibility already works.
+
+`DashboardView.vue`'s `loadPriorityAndTodos()` adds `technician_id:
+auth.user.id` to both of its `GET /tickets` calls (daily to-do's and
+flagged-priority) when the signed-in employee has this set -- no new
+backend filter needed, `technician_id` already existed for exactly this.
+The card's own subtitle switches between "Shop-wide, not just yours" and
+"Just yours" to match, so what's actually being shown is never a guess.
+
+Travels on `req.user`/`GET /auth/me` (`middleware/auth.js`) alongside
+`show_parts_on_dashboard`, same reasoning: the signed-in user's own
+dashboard behavior needs to be known without an extra request.
 
 ## 4. Suggested first moves after deploy
 

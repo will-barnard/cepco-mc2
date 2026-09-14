@@ -30,8 +30,19 @@ function closeMobileMenu() {
 // as the mobile menu just above and QueueView's hide-statuses dropdown.
 const moreMenuOpen = ref(false);
 const moreMenuEl = ref(null);
+const moreToggleEl = ref(null);
+// Computed fresh each time the menu opens, from the toggle button's own
+// position -- styles.css's .nav-more-menu is position:fixed (see its own
+// comment for why: nav's horizontal-scroll overflow secretly clips a plain
+// absolute-positioned popover here), so it gets no free top/left from a
+// positioned ancestor and needs real viewport coordinates instead.
+const moreMenuStyle = ref({});
 
 function toggleMoreMenu() {
+  if (!moreMenuOpen.value && moreToggleEl.value) {
+    const rect = moreToggleEl.value.getBoundingClientRect();
+    moreMenuStyle.value = { top: `${rect.bottom + 6}px`, left: `${rect.left}px` };
+  }
   moreMenuOpen.value = !moreMenuOpen.value;
 }
 function closeMoreMenu() {
@@ -63,6 +74,21 @@ function onKeydown(event) {
     closeMobileMenu();
     closeMoreMenu();
   }
+}
+
+// A resize can invalidate the coordinates above (the toggle button moved,
+// or the mobile breakpoint kicked in/out); nav's own horizontal scroll can
+// too. Closing outright is simpler and less error-prone than re-tracking
+// the button's position live, and matches how a click outside already
+// handles "this popover's anchor is no longer where it opened."
+function onWindowResize() {
+  closeMoreMenu();
+}
+// Capture phase: 'scroll' doesn't bubble, but capturing still sees it fire
+// on any scrollable descendant (nav's own horizontal overflow included),
+// document-wide, regardless of which element mounted when.
+function onScroll() {
+  closeMoreMenu();
 }
 
 // Covers browser back/forward and any programmatic navigation (e.g.
@@ -133,10 +159,14 @@ onMounted(() => {
 onMounted(() => {
   document.addEventListener('click', onDocumentClick);
   document.addEventListener('keydown', onKeydown);
+  window.addEventListener('resize', onWindowResize);
+  document.addEventListener('scroll', onScroll, { capture: true, passive: true });
 });
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
   document.removeEventListener('keydown', onKeydown);
+  window.removeEventListener('resize', onWindowResize);
+  document.removeEventListener('scroll', onScroll, { capture: true });
 });
 
 // Kiosk mode (§NOTES 2.12): any real interaction resets the 5-minute idle
@@ -207,13 +237,14 @@ async function signOut() {
 
         <div class="nav-more" ref="moreMenuEl">
           <button
+            ref="moreToggleEl"
             type="button" :class="['nav-more-toggle', { active: moreActive }]"
             :aria-expanded="moreMenuOpen ? 'true' : 'false'"
             @click.stop="toggleMoreMenu"
           >
             More <span class="nav-more-caret">{{ moreMenuOpen ? '▴' : '▾' }}</span>
           </button>
-          <div v-if="moreMenuOpen" class="nav-more-menu">
+          <div v-if="moreMenuOpen" class="nav-more-menu" :style="moreMenuStyle">
             <RouterLink to="/fleet">Fleet</RouterLink>
             <RouterLink to="/inventory">Inventory</RouterLink>
             <RouterLink to="/new?tab=parts">Parts / Supplies</RouterLink>

@@ -30,12 +30,13 @@ function departureLabel(dateStr) {
   return `Leaves in ${n} days`;
 }
 
-// "Assigned to me" and "Unassigned" both paginate independently — neither
-// list is capped at a fixed size anymore (they used to just silently drop
-// anything past 15/10), backed by GET /tickets' offset support and the
-// X-Total-Count header api.js exposes as .totalCount (see routes/tickets.js
-// and api.js). Page size kept at the old limits so the common case (few
-// enough tickets to fit on one page) looks exactly like it used to.
+// "In-Progress Tickets" and "Unassigned" both paginate independently —
+// neither list is capped at a fixed size anymore (they used to just
+// silently drop anything past 15/10), backed by GET /tickets' offset
+// support and the X-Total-Count header api.js exposes as .totalCount (see
+// routes/tickets.js and api.js). Page size kept at the old "Assigned to
+// me" limit so the common case (few enough tickets to fit on one page)
+// looks exactly like it used to.
 const MINE_PAGE_SIZE = 15;
 const UNASSIGNED_PAGE_SIZE = 10;
 
@@ -48,8 +49,8 @@ const minePageCount = computed(() => Math.max(1, Math.ceil(mineTotal.value / MIN
 const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal.value / UNASSIGNED_PAGE_SIZE)));
 
 // "Priority & To-Do's" (replaces the old "My tasks"/"Priority tasks" pair,
-// per the boss's dashboard-layout note) -- a shop-wide overview, not a
-// personal one: the daily to-do's (category 'daily_todo', which already
+// per the boss's dashboard-layout note) -- shop-wide by default, not
+// personal: the daily to-do's (category 'daily_todo', which already
 // auto-archives itself at end of day -- see recurringTickets.js -- so
 // "open" here already means "today's"), plus tickets sitting at whichever
 // priority tier(s) Settings -> Priority tiers has flagged "Highlight in
@@ -58,6 +59,12 @@ const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal
 // individual ticket_tasks rows -- the per-task checklist (and its
 // checkbox-to-mark-done) that used to live here is gone with "My tasks";
 // checking off a task still happens on the ticket page itself.
+//
+// Settings -> Staff accounts' "Priority & To-Do's: mine only" checkbox
+// (employees.dashboard_priority_personal_only, migration 059) narrows
+// both queries to just this person's own tickets for whoever an admin has
+// opted in -- off (shop-wide) by default, same admin-sets-it-for-anyone
+// shape as show_parts_on_dashboard.
 const dailyTodoTickets = ref([]);
 const priorityTickets = ref([]);
 
@@ -66,10 +73,12 @@ const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
   .map((r) => r.key));
 
 async function loadPriorityAndTodos() {
+  const mineOnly = !!auth.user.dashboard_priority_personal_only;
+  const scope = mineOnly ? { technician_id: auth.user.id } : {};
   const [dailyTodos, flagged] = await Promise.all([
-    api.get('/tickets', { category: 'daily_todo' }),
+    api.get('/tickets', { category: 'daily_todo', ...scope }),
     flaggedPriorityKeys.value.length
-      ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(',') })
+      ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(','), ...scope })
       : Promise.resolve([]),
   ]);
   // A finished job (status meta.terminal, e.g. 'done') is done, not
@@ -83,30 +92,19 @@ async function loadPriorityAndTodos() {
   });
 }
 
-// "In-Progress Tickets" -- another shop-wide overview: every ticket
-// currently In Progress or in QC, anyone's. Fetched as two separate
-// single-status queries (rather than one status=qc,in_progress call) and
-// concatenated QC-first, deliberately -- "QC at the top" is the boss's
-// ask regardless of how Settings -> Ticket statuses has sort_order
-// configured at the moment, and that ordering is admin-editable. See
-// TicketTable.vue's highlightStatus prop for the visual callout.
-const qcTickets = ref([]);
-const inProgressOnlyTickets = ref([]);
-const inProgressOverview = computed(() => [...qcTickets.value, ...inProgressOnlyTickets.value]);
-
-async function loadInProgressOverview() {
-  [qcTickets.value, inProgressOnlyTickets.value] = await Promise.all([
-    api.get('/tickets', { status: 'qc' }),
-    api.get('/tickets', { status: 'in_progress' }),
-  ]);
-}
-
-// "Assigned to me" defaults to just what's actually being worked (In
-// Progress + QC) -- everything else assigned to someone is either not
-// started yet or already past QC, neither of which needs to occupy their
-// personal list every day. mineShowAll flips it back to unfiltered.
-// routes/tickets.js's `status` filter accepts a comma-separated list
-// (ANY($n)) for exactly this.
+// "In-Progress Tickets" (replaces "Assigned to me") -- yours, not
+// shop-wide: defaults to just what you're actually working (In Progress +
+// QC) -- everything else assigned to you is either not started yet or
+// already past QC, neither of which needs to occupy this list every day.
+// mineShowAll flips it back to everything assigned to you regardless of
+// status. routes/tickets.js's `status` filter accepts a comma-separated
+// list (ANY($n)) for exactly this. QC is pulled visually to the top via
+// TicketTable's highlightStatus prop -- riding the existing technician-
+// scoped queue order (st.sort_order DESC, same convention every other
+// queue view in this app already uses) rather than forcing it independent
+// of Settings -> Ticket statuses, since unlike the shop-wide overview this
+// replaced, a paginated per-tech list can't cheaply concatenate two
+// separately-fetched, independently-paginated result sets.
 const mineShowAll = ref(false);
 
 async function loadMine() {
@@ -146,7 +144,6 @@ onMounted(async () => {
   await Promise.all([
     api.get('/tickets/summary').then((s) => { summary.value = s; }),
     loadPriorityAndTodos(),
-    loadInProgressOverview(),
     loadMine(),
     loadUnassigned(),
     // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
@@ -225,8 +222,14 @@ onMounted(async () => {
       >
         <h2>Priority &amp; To-Do's</h2>
         <p class="muted small" style="margin: 0 0 10px">
-          Shop-wide, not just yours — today's Daily To-Do's, plus anything at a priority level
-          flagged to stand out (Settings → Priority tiers).
+          <template v-if="auth.user.dashboard_priority_personal_only">
+            Just yours — today's Daily To-Do's, plus anything of yours at a priority level
+            flagged to stand out (Settings → Priority tiers).
+          </template>
+          <template v-else>
+            Shop-wide, not just yours — today's Daily To-Do's, plus anything at a priority level
+            flagged to stand out (Settings → Priority tiers).
+          </template>
         </p>
         <template v-if="dailyTodoTickets.length">
           <p class="muted small" style="margin: 0 0 10px"><strong>Daily To-Do's</strong></p>
@@ -264,17 +267,6 @@ onMounted(async () => {
         </template>
       </div>
 
-      <div class="card" style="margin-bottom: 24px">
-        <h2>In-Progress Tickets</h2>
-        <p class="muted small" style="margin: 0 0 10px">
-          Shop-wide — everything In Progress or in QC, QC pulled to the top and highlighted.
-        </p>
-        <TicketTable
-          :tickets="inProgressOverview" group-by-status highlight-status="qc"
-          empty-text="Nothing in progress or in QC right now."
-        />
-      </div>
-
       <!-- Settings -> Staff accounts' "Parts on dashboard" checkbox
            (employees.show_parts_on_dashboard, migration 058) -- view and
            status-change only, same PartsOrdersPanel.vue the "+ New" page's
@@ -291,13 +283,22 @@ onMounted(async () => {
 
       <div class="card" style="margin-bottom: 24px">
         <div class="row" style="margin-bottom: 12px">
-          <h2 style="margin: 0">Assigned to me</h2>
+          <h2 style="margin: 0">In-Progress Tickets</h2>
           <div class="spacer" />
           <button class="small" @click="mineShowAll = !mineShowAll">
             {{ mineShowAll ? 'Show in-progress & QC only' : 'Show all' }}
           </button>
         </div>
-        <TicketTable :tickets="myTickets" group-by-status empty-text="Nothing assigned to you right now." />
+        <p class="muted small" style="margin: 0 0 10px">
+          <template v-if="mineShowAll">Everything assigned to you.</template>
+          <template v-else>
+            Assigned to you, In Progress or in QC — QC pulled to the top and highlighted.
+          </template>
+        </p>
+        <TicketTable
+          :tickets="myTickets" group-by-status highlight-status="qc"
+          empty-text="Nothing assigned to you right now."
+        />
         <div v-if="mineTotal > MINE_PAGE_SIZE" class="row" style="align-items: center; margin-top: 10px">
           <button class="small" :disabled="minePage <= 1" @click="minePage -= 1">‹ Prev</button>
           <span class="muted small">Page {{ minePage }} of {{ minePageCount }} · {{ mineTotal }} ticket(s)</span>
