@@ -310,6 +310,22 @@ th { color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: 
 tbody tr:hover { background: var(--surface-2); }
 tbody tr.clickable { cursor: pointer; }
 
+/* --- highlighted table rows (TicketTable.vue's highlightStatus) -----------
+   DashboardView.vue's "In-Progress Tickets" card pulls QC to the top of a
+   groupByStatus list and needs it to actually stand out there, not just
+   read top-to-bottom as one more section -- a tinted row background plus
+   a left accent bar, colored to match that status's own pill (so this
+   stays correct if a shop ever retints a status in Settings). Same
+   10%-opacity convention as .alert's rgba backgrounds above; :hover comes
+   after so the row still darkens like every other row on mouseover. */
+tbody tr.row-highlight.slate  { background: rgba(107, 114, 128, 0.10); box-shadow: inset 3px 0 0 var(--slate); }
+tbody tr.row-highlight.blue   { background: rgba(59, 130, 246, 0.10); box-shadow: inset 3px 0 0 var(--blue); }
+tbody tr.row-highlight.violet { background: rgba(139, 92, 246, 0.10); box-shadow: inset 3px 0 0 var(--violet); }
+tbody tr.row-highlight.amber  { background: rgba(245, 158, 11, 0.10); box-shadow: inset 3px 0 0 var(--amber); }
+tbody tr.row-highlight.green  { background: rgba(16, 185, 129, 0.10); box-shadow: inset 3px 0 0 var(--green); }
+tbody tr.row-highlight.red    { background: rgba(239, 68, 68, 0.10); box-shadow: inset 3px 0 0 var(--red); }
+tbody tr.row-highlight:hover  { background: var(--surface-2); }
+
 /* --- pills ---------------------------------------------------------------- */
 .pill {
   display: inline-block; padding: 3px 9px; border-radius: 999px;

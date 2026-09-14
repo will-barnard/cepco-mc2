@@ -13,6 +13,13 @@ const props = defineProps({
   // same grouping DashboardView.vue's "Assigned to me"/"Unassigned" lists
   // and QueueView.vue's queues use.
   groupByStatus: { type: Boolean, default: false },
+  // DashboardView.vue's "In-Progress Tickets" card: one status's rows get
+  // visually called out (tinted background + accent bar, in that status's
+  // own pill color) rather than just sitting in a labeled section like
+  // every other groupByStatus consumer. Requires groupByStatus — a status
+  // is only ever its own contiguous section when the list is grouped.
+  // Default null leaves every existing usage unaffected.
+  highlightStatus: { type: String, default: null },
 });
 
 const router = useRouter();
@@ -56,6 +63,14 @@ function hoursOver(t) {
 function techNames(t) {
   return (t.technicians || []).map((x) => x.name).join(', ') || '—';
 }
+
+// Row class for the highlighted section (see highlightStatus above) --
+// reuses that status's own pill color (settings.colorFor) so the accent
+// always matches, rather than a second hardcoded color choice.
+function rowClass(sectionKey) {
+  if (!props.highlightStatus || sectionKey !== props.highlightStatus) return '';
+  return `row-highlight ${settings.colorFor(sectionKey)}`;
+}
 </script>
 
 <template>
@@ -82,7 +97,10 @@ function techNames(t) {
               <span class="muted small" style="margin-left: 6px">{{ section.tickets.length }}</span>
             </td>
           </tr>
-        <tr v-for="t in section.tickets" :key="t.id" class="clickable" @click="open(t.id)">
+        <tr
+          v-for="t in section.tickets" :key="t.id"
+          :class="['clickable', rowClass(section.key)]" @click="open(t.id)"
+        >
           <td>
             <strong>{{ t.title }}</strong>
             <div v-if="t.instrument_family" class="muted small">

@@ -93,10 +93,24 @@ router.get('/', asyncHandler(async (req, res) => {
   const clauses = [];
   const params = [];
   const push = (sql, value) => { params.push(value); clauses.push(sql.replace('?', `$${params.length}`)); };
+  // `status`/`priority` accept a single key ('qc') or a comma-separated
+  // list ('qc,in_progress') -- same ANY($n) shape as hide_status below,
+  // just an inclusion filter instead of an exclusion one. A single value
+  // still goes through ANY() with a one-element array, so this is a
+  // superset of the old exact-match behavior, not a breaking change for
+  // any existing caller. Added for DashboardView.vue's "In-Progress
+  // Tickets" card (qc + in_progress in one query) and "Assigned to me"'s
+  // show-all toggle (same two statuses, technician-scoped).
+  const pushAny = (column, raw) => {
+    const values = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+    if (!values.length) return;
+    params.push(values);
+    clauses.push(`${column} = ANY($${params.length})`);
+  };
 
   if (req.query.category) push('t.category_key = ?', req.query.category);
-  if (req.query.status) push('t.status_key = ?', req.query.status);
-  if (req.query.priority) push('t.priority_key = ?', req.query.priority);
+  if (req.query.status) pushAny('t.status_key', req.query.status);
+  if (req.query.priority) pushAny('t.priority_key', req.query.priority);
   if (req.query.customer_id) push('t.customer_id = ?', req.query.customer_id);
   if (req.query.instrument_family) push('i.family = ?', req.query.instrument_family);
 

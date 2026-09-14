@@ -10,8 +10,6 @@ const auth = useAuth();
 const settings = useSettings();
 
 const summary = ref(null);
-const myTasks = ref([]);
-const myPriorityTicketsRaw = ref([]);
 const myTickets = ref([]);
 const unassigned = ref([]);
 const departing = ref([]);
@@ -49,58 +47,72 @@ const unassignedTotal = ref(0);
 const minePageCount = computed(() => Math.max(1, Math.ceil(mineTotal.value / MINE_PAGE_SIZE)));
 const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal.value / UNASSIGNED_PAGE_SIZE)));
 
-// "My tasks" (NOTES.md §2.28) intentionally isn't paginated like the two
-// ticket lists below it — tasks are meant to be short-lived and few at a
-// time (a handful of open, assigned, unlocked tasks), not a long-running
-// backlog someone pages through.
-async function loadMyTasks() {
-  myTasks.value = await api.get('/tasks', {
-    technician_id: auth.user.id, unlocked_only: 'true', done: 'false',
+// "Priority & To-Do's" (replaces the old "My tasks"/"Priority tasks" pair,
+// per the boss's dashboard-layout note) -- a shop-wide overview, not a
+// personal one: the daily to-do's (category 'daily_todo', which already
+// auto-archives itself at end of day -- see recurringTickets.js -- so
+// "open" here already means "today's"), plus tickets sitting at whichever
+// priority tier(s) Settings -> Priority tiers has flagged "Highlight in
+// tasks" (stores.js's highlightTasksForPriority meta -- expedited_sos by
+// default, admin-addable). Both are ticket-level lists now, not
+// individual ticket_tasks rows -- the per-task checklist (and its
+// checkbox-to-mark-done) that used to live here is gone with "My tasks";
+// checking off a task still happens on the ticket page itself.
+const dailyTodoTickets = ref([]);
+const priorityTickets = ref([]);
+
+const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
+  .filter((r) => r.meta?.highlight_in_tasks)
+  .map((r) => r.key));
+
+async function loadPriorityAndTodos() {
+  const [dailyTodos, flagged] = await Promise.all([
+    api.get('/tickets', { category: 'daily_todo' }),
+    flaggedPriorityKeys.value.length
+      ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(',') })
+      : Promise.resolve([]),
+  ]);
+  // A finished job (status meta.terminal, e.g. 'done') is done, not
+  // outstanding -- exclude it even though nothing ever archived it.
+  dailyTodoTickets.value = dailyTodos.filter((t) => !settings.isTerminalStatus(t.status_key));
+  const seen = new Set(dailyTodoTickets.value.map((t) => t.id));
+  priorityTickets.value = flagged.filter((t) => {
+    if (seen.has(t.id) || settings.isTerminalStatus(t.status_key)) return false;
+    seen.add(t.id);
+    return true;
   });
 }
 
-// Settings -> Priority tiers' "Highlight in tasks" toggle (see stores.js's
-// highlightTasksForPriority) splits one flat list into two boxes rather
-// than just re-sorting it — a priority already sorts to the top via
-// sort_order, so a separate box is the actual ask here: visually pull it
-// out, not just rank it first among everything else.
-const priorityTasks = computed(
-  () => myTasks.value.filter((t) => settings.highlightTasksForPriority(t.priority_key)),
-);
-const regularTasks = computed(
-  () => myTasks.value.filter((t) => !settings.highlightTasksForPriority(t.priority_key)),
-);
+// "In-Progress Tickets" -- another shop-wide overview: every ticket
+// currently In Progress or in QC, anyone's. Fetched as two separate
+// single-status queries (rather than one status=qc,in_progress call) and
+// concatenated QC-first, deliberately -- "QC at the top" is the boss's
+// ask regardless of how Settings -> Ticket statuses has sort_order
+// configured at the moment, and that ordering is admin-editable. See
+// TicketTable.vue's highlightStatus prop for the visual callout.
+const qcTickets = ref([]);
+const inProgressOnlyTickets = ref([]);
+const inProgressOverview = computed(() => [...qcTickets.value, ...inProgressOnlyTickets.value]);
 
-// "Priority tickets" — a flagged priority tier is meant to make a ticket
-// impossible to miss even when nobody's added it any tasks yet (e.g. a
-// shipping ticket before this same change started auto-creating one — see
-// routes/tickets.js). priorityTasks above only ever surfaces *tasks*, so a
-// ticket with zero ticket_tasks rows never showed up there no matter how
-// urgent it was. This pulls in the raw tickets themselves — assigned to
-// me, sitting in a status that unlocks tasks (same gate as the tasks
-// list, so this only surfaces tickets actively being worked, not every
-// high-priority ticket regardless of progress), at a flagged priority
-// tier — and excludes any ticket already represented by a row in
-// priorityTasks above, so an urgent ticket that *does* have tasks doesn't
-// show up twice in the same card.
-async function loadMyPriorityTickets() {
-  myPriorityTicketsRaw.value = await api.get('/tickets', { technician_id: auth.user.id });
+async function loadInProgressOverview() {
+  [qcTickets.value, inProgressOnlyTickets.value] = await Promise.all([
+    api.get('/tickets', { status: 'qc' }),
+    api.get('/tickets', { status: 'in_progress' }),
+  ]);
 }
-const priorityTaskTicketIds = computed(() => new Set(priorityTasks.value.map((t) => t.ticket_id)));
-const priorityTickets = computed(
-  () => myPriorityTicketsRaw.value.filter((t) => settings.highlightTasksForPriority(t.priority_key)
-    && settings.unlocksTasks(t.status_key)
-    && !priorityTaskTicketIds.value.has(t.id)),
-);
 
-async function toggleMyTask(task) {
-  await api.patch(`/tasks/${task.id}`, { done: !task.done });
-  await loadMyTasks();
-}
+// "Assigned to me" defaults to just what's actually being worked (In
+// Progress + QC) -- everything else assigned to someone is either not
+// started yet or already past QC, neither of which needs to occupy their
+// personal list every day. mineShowAll flips it back to unfiltered.
+// routes/tickets.js's `status` filter accepts a comma-separated list
+// (ANY($n)) for exactly this.
+const mineShowAll = ref(false);
 
 async function loadMine() {
   const rows = await api.get('/tickets', {
     technician_id: auth.user.id,
+    ...(mineShowAll.value ? {} : { status: 'in_progress,qc' }),
     limit: MINE_PAGE_SIZE,
     offset: (minePage.value - 1) * MINE_PAGE_SIZE,
   });
@@ -123,12 +135,18 @@ async function loadUnassigned() {
 // from the server rather than holding a full unpaginated list in memory.
 watch(minePage, loadMine);
 watch(unassignedPage, loadUnassigned);
+// Toggling the filter changes what "page 1" even means, so reset there
+// rather than keeping whatever page the filtered list happened to be on.
+watch(mineShowAll, () => {
+  minePage.value = 1;
+  loadMine();
+});
 
 onMounted(async () => {
   await Promise.all([
     api.get('/tickets/summary').then((s) => { summary.value = s; }),
-    loadMyTasks(),
-    loadMyPriorityTickets(),
+    loadPriorityAndTodos(),
+    loadInProgressOverview(),
     loadMine(),
     loadUnassigned(),
     // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
@@ -201,62 +219,60 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="card" style="margin-bottom: 24px">
-        <h2>My tasks</h2>
-        <p class="muted small" style="margin: 0 0 10px">
-          Short-lived work items from your tickets, ranked by that ticket's priority.
-        </p>
-        <ul v-if="regularTasks.length" class="checklist">
-          <li v-for="t in regularTasks" :key="t.id">
-            <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
-            <div style="flex: 1; min-width: 0">
-              <!-- Ephemeral tasks (migration 054) have no ticket_id/ticket_title
-                   at all -- plain text and an "Ephemeral task" tag instead of a
-                   ticket link and priority for those. -->
-              <RouterLink v-if="t.ticket_id" :to="{ name: 'ticket', params: { id: t.ticket_id } }">
-                {{ t.title }}
-              </RouterLink>
-              <span v-else>{{ t.title }}</span>
-              <div class="muted small">
-                <template v-if="t.ticket_id">{{ t.ticket_title }} · {{ t.priority_label }}</template>
-                <template v-else>Ephemeral task</template>
-              </div>
-            </div>
-          </li>
-        </ul>
-        <div v-else class="empty">No open tasks right now.</div>
-      </div>
-
       <div
-        v-if="priorityTasks.length || priorityTickets.length" class="card"
+        v-if="dailyTodoTickets.length || priorityTickets.length" class="card"
         style="margin-bottom: 24px; border-color: var(--red)"
       >
-        <h2>Priority tasks</h2>
+        <h2>Priority &amp; To-Do's</h2>
         <p class="muted small" style="margin: 0 0 10px">
-          From tickets at a priority level flagged to stand out — see Settings → Priority tiers.
+          Shop-wide, not just yours — today's Daily To-Do's, plus anything at a priority level
+          flagged to stand out (Settings → Priority tiers).
         </p>
-        <ul v-if="priorityTasks.length" class="checklist">
-          <li v-for="t in priorityTasks" :key="t.id">
-            <input type="checkbox" :checked="t.done" @change="toggleMyTask(t)" />
-            <div style="flex: 1; min-width: 0">
-              <RouterLink :to="{ name: 'ticket', params: { id: t.ticket_id } }">{{ t.title }}</RouterLink>
-              <div class="muted small">{{ t.ticket_title }} · {{ t.priority_label }}</div>
-            </div>
-          </li>
-        </ul>
-        <template v-if="priorityTickets.length">
-          <p class="muted small" style="margin: 14px 0 10px">
-            Tickets at this priority with no tasks of their own yet.
-          </p>
+        <template v-if="dailyTodoTickets.length">
+          <p class="muted small" style="margin: 0 0 10px"><strong>Daily To-Do's</strong></p>
           <ul class="checklist">
-            <li v-for="t in priorityTickets" :key="t.id">
+            <li v-for="t in dailyTodoTickets" :key="t.id">
               <div style="flex: 1; min-width: 0">
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
-                <div class="muted small">{{ t.category_label }} · {{ t.priority_label }}</div>
+                <div class="muted small">
+                  <span :class="['pill', settings.colorFor(t.status_key)]">
+                    {{ t.status_label || t.status_label_snapshot }}
+                  </span>
+                  <template v-if="t.technicians?.length">
+                    · {{ t.technicians.map((x) => x.name).join(', ') }}
+                  </template>
+                </div>
               </div>
             </li>
           </ul>
         </template>
+        <template v-if="priorityTickets.length">
+          <p class="muted small" style="margin: 14px 0 10px"><strong>Priority</strong></p>
+          <ul class="checklist">
+            <li v-for="t in priorityTickets" :key="t.id">
+              <div style="flex: 1; min-width: 0">
+                <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
+                <div class="muted small">
+                  {{ t.category_label || t.category_label_snapshot }} · {{ t.priority_label || t.priority_label_snapshot }}
+                  <span :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 4px">
+                    {{ t.status_label || t.status_label_snapshot }}
+                  </span>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </template>
+      </div>
+
+      <div class="card" style="margin-bottom: 24px">
+        <h2>In-Progress Tickets</h2>
+        <p class="muted small" style="margin: 0 0 10px">
+          Shop-wide — everything In Progress or in QC, QC pulled to the top and highlighted.
+        </p>
+        <TicketTable
+          :tickets="inProgressOverview" group-by-status highlight-status="qc"
+          empty-text="Nothing in progress or in QC right now."
+        />
       </div>
 
       <!-- Settings -> Staff accounts' "Parts on dashboard" checkbox
@@ -274,7 +290,13 @@ onMounted(async () => {
       </div>
 
       <div class="card" style="margin-bottom: 24px">
-        <h2>Assigned to me</h2>
+        <div class="row" style="margin-bottom: 12px">
+          <h2 style="margin: 0">Assigned to me</h2>
+          <div class="spacer" />
+          <button class="small" @click="mineShowAll = !mineShowAll">
+            {{ mineShowAll ? 'Show in-progress & QC only' : 'Show all' }}
+          </button>
+        </div>
         <TicketTable :tickets="myTickets" group-by-status empty-text="Nothing assigned to you right now." />
         <div v-if="mineTotal > MINE_PAGE_SIZE" class="row" style="align-items: center; margin-top: 10px">
           <button class="small" :disabled="minePage <= 1" @click="minePage -= 1">‹ Prev</button>

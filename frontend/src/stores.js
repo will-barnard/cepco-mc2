@@ -104,6 +104,12 @@ export const useSettings = defineStore('settings', {
     // §2.28). Admin-configurable per status rather than a hardcoded key,
     // same reasoning as every other status-driven behavior here.
     unlocksTasks: (s) => (key) => !!(s.data.ticket_status || []).find((r) => r.key === key)?.meta?.unlocks_tasks,
+    // Dashboard's "Priority & To-Do's" card (NOTES.md) excludes tickets
+    // that already reached a terminal status (meta.terminal, e.g. 'done') --
+    // a finished job carrying an urgent priority or the daily_todo category
+    // is done, not outstanding, so it shouldn't linger there just because
+    // nothing ever archived it.
+    isTerminalStatus: (s) => (key) => !!(s.data.ticket_status || []).find((r) => r.key === key)?.meta?.terminal,
     // TicketSubTickets.vue's "Ship this instrument" quick-action — a
     // Settings -> Ticket categories toggle per category (meta.hide_ship_button),
     // e.g. a Shipping-category ticket has no business offering to spin off

@@ -3270,6 +3270,67 @@ Migration: `058_new_flow_consolidation.sql` (`employees.show_parts_on_dashboard`
 only — everything else reused existing tables/columns).
 
 
+### 2.79 Dashboard: "Priority & To-Do's" / "In-Progress Tickets" replace "My tasks" / "Priority tasks"; "Assigned to me" defaults to active work only
+
+Boss's dashboard-layout note: "My tasks" and "Priority tasks" (both
+personal, both task-level) are gone, replaced by two shop-wide,
+ticket-level overview cards — plus "Assigned to me" now opens filtered to
+what's actually being worked instead of everything.
+
+**Priority & To-Do's.** Two groups in one card, both computed client-side
+in `DashboardView.vue` from existing `GET /tickets` filters — no new
+endpoint:
+
+- **Daily To-Do's** — today's `category = 'daily_todo'` tickets (the
+  category already self-archives at end of day, so "not archived" already
+  means "today's" — see `recurringTickets.js`).
+- **Priority** — tickets at any priority tier Settings → Priority tiers
+  has flagged "Highlight in tasks" (`highlight_in_tasks` meta, migration
+  042 — `expedited_sos` by default, admin-addable; this is what "expedited
+  jobs" and "high priority status" in the boss's note both come down to,
+  today the same set). Fetched with the new comma-separated `priority`
+  filter (below) so more than one flagged tier is still a single request.
+
+Both exclude anything already at a terminal status (`meta.terminal`, e.g.
+'done' — new `isTerminalStatus` getter in `stores.js`, same shape as
+`unlocksTasks`) since neither auto-archives on completion the way Daily
+To-Do's does on its own schedule. Card only renders when there's actually
+something in it, same convention as the card it replaces.
+
+Gone along with it: the per-ticket-task checklist and its inline
+done-checkbox that used to live in "My tasks" — checking off a task is now
+only ever done from the ticket page. "My tasks" and "Priority tasks" were
+both scoped to the signed-in user; these replacements are shop-wide
+(anyone's tickets), matching how the boss described them.
+
+**In-Progress Tickets.** Every ticket In Progress or in QC, shop-wide,
+QC pulled to the top and visually called out — two separate
+single-status `GET /tickets` calls (`status=qc`, `status=in_progress`)
+concatenated QC-first, deliberately not one query relying on
+`sort_order`, since that's admin-editable (Settings → Ticket statuses)
+and "QC on top" shouldn't quietly stop being true if someone reorders
+statuses later. The highlight itself is a new opt-in
+`TicketTable.vue` prop, `highlight-status="qc"`: rows in that
+`groupByStatus` section get a tinted background + left accent bar in that
+status's own pill color (`styles.css`'s `.row-highlight.*`), so it stays
+correct even if a shop retints a status. Default `null` — every other
+`TicketTable` usage (Assigned to me, Unassigned, Queue) is unaffected.
+
+**`GET /tickets`'s `status`/`priority` filters now accept a
+comma-separated list** (`routes/tickets.js`'s new `pushAny`, `= ANY($n)`
+instead of `= $n`) — a single value still behaves exactly as before, so
+this is additive. Added for the two cards above and for:
+
+**"Assigned to me" now defaults to just In Progress + QC** (that new
+multi-value `status` filter, scoped to `technician_id`) — a "Show all"
+button flips `mineShowAll` back to unfiltered and resets to page 1. Same
+reasoning as the old "unlocks tasks" gate elsewhere: a ticket that hasn't
+started yet or already cleared QC doesn't need to occupy a tech's personal
+list every day, but nothing is hidden permanently — one click shows
+everything again.
+
+No migration — everything here reads existing columns/tables.
+
 ## 4. Suggested first moves after deploy
 
 
