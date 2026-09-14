@@ -3331,6 +3331,54 @@ everything again.
 
 No migration — everything here reads existing columns/tables.
 
+### 2.80 Fix: switching kiosk identity could leave the previous person's dashboard data on screen
+
+Will: sometimes, after signing into a different account or switching
+users, the app still showed tickets/tasks that belonged to someone else —
+the header correctly said who was now signed in, but the page underneath
+didn't match.
+
+Root cause: `UserSwitcher.vue`'s `doSwitch()` always calls
+`router.push({ name: 'dashboard' })` after a successful switch, to land
+the new person somewhere neutral rather than wherever the previous
+person's browsing had left the page (see that file's own header comment —
+the `RouterView` never unmounts across a lock/switch cycle by design).
+But if the tech switching *was already on the dashboard* when they
+switched, that's a navigation to the exact route already showing — Vue
+Router treats it as a no-op and never unmounts/remounts `DashboardView`.
+Its data (Assigned to me, Priority & To-Do's, In-Progress overview — all
+fetched in `onMounted` using `auth.user.id` at the time) just keeps
+sitting there under the new identity until something else forces a
+refetch. `auth.user.name` in the header updates immediately regardless
+(it's a plain reactive binding straight to the store), which is exactly
+why the symptom looked like "signed in as the right person, wrong data"
+rather than a login failure. Explains the "sometimes" — it only happened
+when the switch occurred *from* the dashboard specifically.
+
+Fix, in `App.vue`: the routed view is now keyed on the signed-in
+identity itself (`routedViewKey`, updated on `auth.user.id`) rather than
+just relying on the route. Any real identity change — a kiosk `switchTo`
+*or* a fresh `login` — now forces Vue to tear down and rebuild whatever's
+currently mounted, regardless of whether the route path happened to stay
+the same. That closes this off for every current *and future* view that
+reads `auth.user` at mount, not only the dashboard. Deliberately keyed on
+a *non-null* id only, so the momentary `auth.user = null` between
+`logout()` and the redirect to `/login` never tries to remount the
+outgoing page against no one — the real navigation to `/login` unmounts
+it safely on its own right after.
+
+Also hardened, for the non-kiosk case Will saw this in too: a shared shop
+browser can have its cookie identity changed by something this tab never
+saw — a different tab or window signing in as someone else (or signing
+out) while this one sits idle. `App.vue` now re-checks `GET /auth/me`
+whenever the tab regains focus/visibility (`revalidateSession`); combined
+with `routedViewKey` above, a stale tab now self-corrects to whatever
+identity the cookie actually carries instead of continuing to display or
+act as the old one, and gets sent to `/login` outright if that identity
+turns out to be signed out entirely.
+
+No migration, no API change — purely a frontend state-management fix.
+
 ## 4. Suggested first moves after deploy
 
 

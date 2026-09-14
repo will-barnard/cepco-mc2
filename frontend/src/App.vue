@@ -72,6 +72,32 @@ watch(() => route.fullPath, () => {
   closeMoreMenu();
 });
 
+// Bug fix (kiosk account-switch data leak): UserSwitcher.vue's doSwitch()
+// always does router.push({ name: 'dashboard' }) after a switch, but if the
+// tech switching was already sitting on the dashboard, that's a no-op
+// navigation -- same route, same path -- so Vue never unmounts/remounts
+// DashboardView, and its already-fetched data (Assigned to me, Priority &
+// To-Do's, etc., all fetched with the *previous* auth.user.id) just keeps
+// sitting there under the new identity until something else forces a
+// refetch. The account name in the header updates immediately (it's a
+// plain reactive binding), so the symptom looks exactly like "says I'm
+// signed in as the right person, but shows someone else's tickets."
+//
+// Fix: key the routed view on the signed-in identity itself, not just the
+// route. Any real identity change (switchTo *or* a fresh login) then forces
+// Vue to tear down and rebuild whatever's currently mounted, regardless of
+// whether the route path happened to stay the same -- closing this off for
+// every current and future view that reads auth.user at mount, not just
+// this one. Deliberately only updated on a *non-null* id (skips the
+// momentary auth.user = null between logout() and the redirect to
+// /login) so a sign-out never tries to remount the outgoing page against a
+// null user -- the real route change to /login unmounts it safely on its
+// own right after.
+const routedViewKey = ref(null);
+watch(() => auth.user?.id ?? null, (id) => {
+  if (id != null) routedViewKey.value = id;
+});
+
 // Reference data is only fetchable once signed in, and must be refetched after
 // a re-login (different account, possibly different permissions).
 watch(() => auth.signedIn, (signedIn) => {
@@ -125,6 +151,26 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   ACTIVITY_EVENTS.forEach((evt) => window.removeEventListener(evt, onActivity));
+});
+
+async function revalidateSession() {
+  if (!auth.ready || !auth.signedIn) return;
+  await auth.load();
+  // The cookie now belongs to nobody (someone signed out elsewhere) --
+  // send this tab to the login screen rather than leaving it rendering a
+  // protected page against a null auth.user.
+  if (!auth.signedIn) router.push({ name: 'login' });
+}
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') revalidateSession();
+}
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('focus', revalidateSession);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('focus', revalidateSession);
 });
 
 async function signOut() {
@@ -186,7 +232,7 @@ async function signOut() {
       </div>
     </header>
 
-    <RouterView v-if="auth.ready" />
+    <RouterView v-if="auth.ready" :key="routedViewKey" />
     <div v-else class="empty">Loading…</div>
 
     <UserSwitcher />
