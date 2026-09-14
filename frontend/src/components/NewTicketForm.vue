@@ -34,9 +34,9 @@ const busy = ref(false);
 // stranding them on a form that looks like nothing happened.
 const createdTicketId = ref(null);
 
-// Custom Shop (bottom-of-form disclosure) -- an optional supplies order,
+// Vendor Orders (bottom-of-form disclosure) -- an optional supplies order,
 // named after this ticket, created right after it via the same
-// parts_orders/parts_order_tickets link TicketCustomShop.vue's ticket-page
+// parts_orders/parts_order_tickets link TicketVendorOrders.vue's ticket-page
 // box reads (GET /parts?ticket_id=). Vendor is deliberately the only
 // "category" here (see NOTES.md) -- parts_orders already had vendor_id/
 // vendor_other, so nothing new was needed for it. '__other__' is the same
@@ -44,12 +44,12 @@ const createdTicketId = ref(null);
 // vendor_other (free text) at submit time.
 const OTHER_VENDOR = '__other__';
 const vendors = ref([]);
-const customShopOpen = ref(false);
-const customShop = ref({
+const vendorOrdersOpen = ref(false);
+const vendorOrders = ref({
   vendor_id: '', vendor_other: '', quantity: '', notes: '',
 });
-function resetCustomShop() {
-  customShop.value = { vendor_id: '', vendor_other: '', quantity: '', notes: '' };
+function resetVendorOrders() {
+  vendorOrders.value = { vendor_id: '', vendor_other: '', quantity: '', notes: '' };
 }
 
 // Family -> default technician ids (Settings -> Default instrument
@@ -395,7 +395,7 @@ async function submit() {
     const ticket = await api.post('/tickets', payload);
     createdTicketId.value = ticket.id;
 
-    // Custom Shop (bottom-of-form disclosure): only fires once the
+    // Vendor Orders (bottom-of-form disclosure): only fires once the
     // section was actually opened *and* a vendor picked -- opening it and
     // leaving it blank creates nothing, same "only submit if there's
     // actually something there" gating the primary instrument's own
@@ -403,20 +403,20 @@ async function submit() {
     // real id for parts_order_tickets, and its real title -- not the
     // client-side autoTitlePreview -- for a naming-enforced category
     // whose composed title this form can only ever approximate).
-    let customShopError = '';
-    const usingOtherVendor = customShop.value.vendor_id === OTHER_VENDOR;
-    if (customShopOpen.value && (customShop.value.vendor_id || customShop.value.vendor_other.trim())) {
+    let vendorOrdersError = '';
+    const usingOtherVendor = vendorOrders.value.vendor_id === OTHER_VENDOR;
+    if (vendorOrdersOpen.value && (vendorOrders.value.vendor_id || vendorOrders.value.vendor_other.trim())) {
       try {
         await api.post('/parts', {
-          vendor_id: usingOtherVendor ? null : (customShop.value.vendor_id || null),
-          vendor_other: usingOtherVendor ? customShop.value.vendor_other.trim() : null,
+          vendor_id: usingOtherVendor ? null : (vendorOrders.value.vendor_id || null),
+          vendor_other: usingOtherVendor ? vendorOrders.value.vendor_other.trim() : null,
           item: ticket.title,
-          quantity: customShop.value.quantity || null,
-          notes: customShop.value.notes || null,
+          quantity: vendorOrders.value.quantity || null,
+          notes: vendorOrders.value.notes || null,
           ticket_ids: [ticket.id],
         });
       } catch (err) {
-        customShopError = err.message;
+        vendorOrdersError = err.message;
       }
     }
 
@@ -479,7 +479,7 @@ async function submit() {
       }
     }
 
-    if (siblingFailures.length || customShopError) {
+    if (siblingFailures.length || vendorOrdersError) {
       // The primary (and any siblings that DID succeed) are real,
       // already-created tickets — staying put with a link beats
       // navigating away and losing track of a partial failure, or
@@ -488,7 +488,7 @@ async function submit() {
       if (siblingFailures.length) {
         parts.push(`${siblingFailures.length} additional instrument(s) failed: ${siblingFailures.join('; ')}`);
       }
-      if (customShopError) parts.push(`its Custom Shop order failed: ${customShopError}`);
+      if (vendorOrdersError) parts.push(`its Vendor Orders order failed: ${vendorOrdersError}`);
       error.value = `Ticket #${ticket.id} was created, but ${parts.join('; and ')}. `
         + `You can add what's missing from the ticket page.`;
       return;
@@ -794,43 +794,43 @@ async function submit() {
         </div>
       </div>
 
-      <!-- Custom Shop: collapsed by default, at the bottom of the form --
+      <!-- Vendor Orders: collapsed by default, at the bottom of the form --
            creates one supplies order named after this ticket once it
            exists (see submit()). Nothing here is required; opening it and
            picking nothing creates no order at all. -->
       <div class="field">
         <button
           type="button" class="disclosure-toggle"
-          :class="{ open: customShopOpen }" :aria-expanded="customShopOpen ? 'true' : 'false'"
-          @click="customShopOpen = !customShopOpen"
+          :class="{ open: vendorOrdersOpen }" :aria-expanded="vendorOrdersOpen ? 'true' : 'false'"
+          @click="vendorOrdersOpen = !vendorOrdersOpen"
         >
-          <span class="disclosure-caret">▸</span> Custom Shop
+          <span class="disclosure-caret">▸</span> Vendor Orders
         </button>
-        <div v-if="customShopOpen" class="card tight" style="margin-top: 10px">
+        <div v-if="vendorOrdersOpen" class="card tight" style="margin-top: 10px">
           <p class="muted small" style="margin-top: 0">
             Order supplies for this job, named after the ticket itself. Shows up here and on the
-            ticket's own Custom Shop box once it's created, and in Parts / Supplies either way.
+            ticket's own Vendor Orders box once it's created, and in Parts / Supplies either way.
           </p>
           <div class="field-row" style="align-items: end">
             <div class="field" style="margin-bottom: 0">
               <label>Vendor</label>
-              <select v-model="customShop.vendor_id">
+              <select v-model="vendorOrders.vendor_id">
                 <option value="">— none —</option>
                 <option v-for="v in vendors" :key="v.id" :value="v.id">{{ v.name }}</option>
                 <option :value="OTHER_VENDOR">Other…</option>
               </select>
             </div>
-            <div v-if="customShop.vendor_id === OTHER_VENDOR" class="field" style="margin-bottom: 0">
+            <div v-if="vendorOrders.vendor_id === OTHER_VENDOR" class="field" style="margin-bottom: 0">
               <label>Vendor name</label>
-              <input v-model="customShop.vendor_other" placeholder="New supplier's name" />
+              <input v-model="vendorOrders.vendor_other" placeholder="New supplier's name" />
             </div>
             <div class="field" style="margin-bottom: 0">
               <label>Quantity</label>
-              <input v-model="customShop.quantity" />
+              <input v-model="vendorOrders.quantity" />
             </div>
             <div class="field" style="flex: 2; min-width: 200px; margin-bottom: 0">
               <label>Notes</label>
-              <input v-model="customShop.notes" />
+              <input v-model="vendorOrders.notes" />
             </div>
           </div>
         </div>

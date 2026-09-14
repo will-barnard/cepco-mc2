@@ -13,7 +13,7 @@
  *     product decision -- creating one only ever happens from the tab
  *     above.
  *
- * A ticket-linked order (Custom Shop, TicketCustomShop.vue) is just a
+ * A ticket-linked order (Vendor Orders, TicketVendorOrders.vue) is just a
  * normal row here too -- parts_order_tickets was already many-to-many
  * (migration 001), so nothing about this component needed to change for
  * that; a ticket tag just shows up in the table alongside vendor/status.

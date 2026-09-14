@@ -41,7 +41,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // list doesn't accumulate — same "hidden unless asked for, nothing truly
   // lost" archived convention routes/tickets.js already uses. That default
   // only applies when nothing said otherwise, though: a ticket's own
-  // Custom Shop box (TicketCustomShop.vue, ?ticket_id=) wants its full
+  // Vendor Orders box (TicketVendorOrders.vue, ?ticket_id=) wants its full
   // history — delivered orders included — since it's a small, bounded
   // list tied to one job rather than an unbounded operational board, so it
   // deliberately omits `archived` from its request to get both.

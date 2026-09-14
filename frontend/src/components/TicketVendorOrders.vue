@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Custom Shop -- supplies orders named after this ticket, e.g. "Ordered
+ * Vendor Orders -- supplies orders named after this ticket, e.g. "Ordered
  * from Stewart-MacDonald for #482 — Dolly Jones - Rhodes Stage 73". Same
  * parts_orders/parts_order_tickets link (migration 001) the general
  * Parts/Supplies view (PartsOrdersPanel.vue, the "+ New" page's
@@ -17,8 +17,8 @@
  *
  * Same "only renders once there's something to show" shape as
  * TicketSubTickets.vue: empty and no form open means no card at all,
- * rather than an empty "No Custom Shop orders yet" card on every ticket.
- * One can also start open already -- NewTicketForm.vue's own Custom Shop
+ * rather than an empty "No orders yet" card on every ticket.
+ * One can also start open already -- NewTicketForm.vue's own Vendor Orders
  * disclosure creates the first order (if any) at ticket-creation time, so
  * this card shows up already populated the first time the ticket loads,
  * same as it would for one added later via openForm() below.
@@ -71,7 +71,7 @@ async function createOrder() {
       vendor_id: usingOther ? null : (form.value.vendor_id || null),
       vendor_other: usingOther ? form.value.vendor_other.trim() : null,
       // Named after the ticket, always -- not user-editable here, same
-      // "named after the ticket" rule NewTicketForm.vue's own Custom Shop
+      // "named after the ticket" rule NewTicketForm.vue's own Vendor Orders
       // section follows for the first order.
       item: props.ticket.title,
       quantity: form.value.quantity || null,
@@ -103,7 +103,7 @@ defineExpose({ openForm });
 <template>
   <div v-if="!loading && (orders.length || showForm || error)" class="card">
     <div class="row" style="margin-bottom: 12px">
-      <h2 style="margin: 0">Custom Shop</h2>
+      <h2 style="margin: 0">Vendor Orders</h2>
       <div class="spacer" />
       <button class="small" @click="showForm ? (showForm = false) : openForm()">
         {{ showForm ? 'Cancel' : '+ Add order' }}
@@ -141,7 +141,7 @@ defineExpose({ openForm });
       </div>
     </div>
 
-    <div v-if="!orders.length" class="empty">No Custom Shop orders yet.</div>
+    <div v-if="!orders.length" class="empty">No orders yet.</div>
     <div v-else class="table-wrap">
       <table>
         <thead>

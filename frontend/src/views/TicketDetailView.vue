@@ -11,7 +11,7 @@ import TicketEstimate from '../components/TicketEstimate.vue';
 import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
-import TicketCustomShop from '../components/TicketCustomShop.vue';
+import TicketVendorOrders from '../components/TicketVendorOrders.vue';
 import TicketTasks from '../components/TicketTasks.vue';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
@@ -35,10 +35,10 @@ const ticketTasksRef = ref(null);
 const subTicketsRef = ref(null);
 const estimateRef = ref(null);
 // Same "page header button opens the card's own form" wiring as the two
-// above -- TicketCustomShop.vue's card only renders once it has an order,
+// above -- TicketVendorOrders.vue's card only renders once it has an order,
 // an open form, or an error, so this is what puts something in it for a
-// ticket that didn't get a Custom Shop order at creation time.
-const customShopRef = ref(null);
+// ticket that didn't get a Vendor Orders order at creation time.
+const vendorOrdersRef = ref(null);
 const loading = ref(true);
 const error = ref('');
 const statusNote = ref('');
@@ -401,7 +401,7 @@ const showProgressUpdate = computed(() => (
         <button v-if="!isShipping && auth.isSenior" class="small" @click="estimateRef?.openForm()">
           + Add estimate
         </button>
-        <button class="small" @click="customShopRef?.openForm()">+ Add Custom Shop</button>
+        <button class="small" @click="vendorOrdersRef?.openForm()">+ Vendor Orders</button>
         <button
           v-if="showProgressUpdate && !progressUpdate" class="small"
           :disabled="generatingUpdate" @click="generateUpdate"
@@ -678,7 +678,7 @@ const showProgressUpdate = computed(() => (
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load(true)" />
         <TicketEstimate v-if="!isShipping" ref="estimateRef" :ticket="ticket" @changed="load(true)" />
-        <TicketCustomShop ref="customShopRef" :ticket="ticket" />
+        <TicketVendorOrders ref="vendorOrdersRef" :ticket="ticket" />
         <!-- TicketHours.vue (ticket-level manual hours entry) is hidden for now —
              hours are captured per-task instead, right where a task is marked done
              (see TicketTasks.vue's inline hours field, and routes/tasks.js's PATCH

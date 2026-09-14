@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterView, RouterLink, useRouter, useRoute } from 'vue-router';
 import { useAuth, useSettings, useRefData, useKiosk } from './stores';
 import UserSwitcher from './components/UserSwitcher.vue';
@@ -24,19 +24,53 @@ function closeMobileMenu() {
   mobileMenuOpen.value = false;
 }
 
+// "More" nav dropdown: the less-frequently-used links (Fleet, Inventory,
+// Parts/Supplies, Hours, Ceppys) tucked behind a single nav item so the
+// main row stays short. Same open/close + click-outside/Escape convention
+// as the mobile menu just above and QueueView's hide-statuses dropdown.
+const moreMenuOpen = ref(false);
+const moreMenuEl = ref(null);
+
+function toggleMoreMenu() {
+  moreMenuOpen.value = !moreMenuOpen.value;
+}
+function closeMoreMenu() {
+  moreMenuOpen.value = false;
+}
+
+// Highlights the "More" toggle itself when the current page is one of the
+// links tucked inside it — those pages otherwise have nothing in the
+// always-visible row showing they're active. Parts/Supplies lives at
+// /new?tab=parts (shared with New Ticket/New Task), so it only counts when
+// that tab is the one actually selected.
+const MORE_PATHS = ['/fleet', '/inventory', '/hours', '/ceppys'];
+const moreActive = computed(() => {
+  if (MORE_PATHS.includes(route.path)) return true;
+  return route.path === '/new' && route.query.tab === 'parts';
+});
+
 function onDocumentClick(event) {
   if (mobileMenuOpen.value && headerEl.value && !headerEl.value.contains(event.target)) {
     closeMobileMenu();
   }
+  if (moreMenuOpen.value && moreMenuEl.value && !moreMenuEl.value.contains(event.target)) {
+    closeMoreMenu();
+  }
 }
 
 function onKeydown(event) {
-  if (event.key === 'Escape') closeMobileMenu();
+  if (event.key === 'Escape') {
+    closeMobileMenu();
+    closeMoreMenu();
+  }
 }
 
 // Covers browser back/forward and any programmatic navigation (e.g.
 // signOut()'s router.push below), on top of the nav's own click-to-close.
-watch(() => route.fullPath, closeMobileMenu);
+watch(() => route.fullPath, () => {
+  closeMobileMenu();
+  closeMoreMenu();
+});
 
 // Reference data is only fetchable once signed in, and must be refetched after
 // a re-login (different account, possibly different permissions).
@@ -124,11 +158,24 @@ async function signOut() {
         <RouterLink to="/estimates">Estimates</RouterLink>
         <RouterLink to="/progress-updates">Progress Updates</RouterLink>
         <RouterLink to="/customers">Customers</RouterLink>
-        <RouterLink to="/fleet">Fleet</RouterLink>
-        <RouterLink to="/inventory">Inventory</RouterLink>
-        <RouterLink to="/new?tab=parts">Parts / Supplies</RouterLink>
-        <RouterLink to="/hours">Hours</RouterLink>
-        <RouterLink to="/ceppys">Ceppys</RouterLink>
+
+        <div class="nav-more" ref="moreMenuEl">
+          <button
+            type="button" :class="['nav-more-toggle', { active: moreActive }]"
+            :aria-expanded="moreMenuOpen ? 'true' : 'false'"
+            @click.stop="toggleMoreMenu"
+          >
+            More <span class="nav-more-caret">{{ moreMenuOpen ? '▴' : '▾' }}</span>
+          </button>
+          <div v-if="moreMenuOpen" class="nav-more-menu">
+            <RouterLink to="/fleet">Fleet</RouterLink>
+            <RouterLink to="/inventory">Inventory</RouterLink>
+            <RouterLink to="/new?tab=parts">Parts / Supplies</RouterLink>
+            <RouterLink to="/hours">Hours</RouterLink>
+            <RouterLink to="/ceppys">Ceppys</RouterLink>
+          </div>
+        </div>
+
         <RouterLink v-if="auth.isAdmin" to="/settings">Settings</RouterLink>
       </nav>
 

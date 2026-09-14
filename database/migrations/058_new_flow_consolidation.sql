@@ -4,7 +4,7 @@
 -- widget. Only one schema change is actually needed -- parts_orders
 -- already supports a ticket link (parts_order_tickets, migration 001) and
 -- a vendor (vendor_id/vendor_other), which turned out to be exactly the
--- "category" the Custom Shop ticket box needed, so nothing new there.
+-- "category" the Vendor Orders ticket box needed, so nothing new there.
 --
 -- employees.show_parts_on_dashboard -- Settings -> Staff accounts, an
 -- admin-set per-employee flag (same shape as excluded_from_chore_rotation,
