@@ -3299,13 +3299,16 @@ Both exclude anything already at a terminal status (`meta.terminal`, e.g.
 To-Do's does on its own schedule. Card only renders when there's actually
 something in it, same convention as the card it replaces.
 
-Gone along with it: the per-ticket-task checklist and its inline
-done-checkbox that used to live in "My tasks" — checking off a task is now
-only ever done from the ticket page. "My tasks" and "Priority tasks" were
-both scoped to the signed-in user, and this replacement stays that way —
-an earlier pass here briefly made it shop-wide by default before Will
-corrected that: it was never meant to show anyone else's work, so there's
-no admin toggle or shop-wide mode, just always yours.
+"My tasks" and "Priority tasks" were both scoped to the signed-in
+user, and this replacement stays that way — an earlier pass here briefly
+made it shop-wide by default before Will corrected that: it was never
+meant to show anyone else's work, so there's no admin toggle or shop-wide
+mode, just always yours.
+
+This section originally also said the per-ticket-task checklist and its
+inline done-checkbox were gone for good, replaced by a plain ticket-level
+line per qualifying ticket. That didn't hold up in practice — see §2.82,
+which brings the task-level checklist back within this same card.
 
 **In-Progress Tickets** is "Assigned to me," renamed and refocused: still
 `technician_id`-scoped to the signed-in tech (not shop-wide — an earlier
@@ -3424,6 +3427,60 @@ never affected -- `nav` drops back to `overflow-x: visible` under the
 `.nav-more-menu` override goes back to plain `position: static`.
 
 No migration, no API change.
+
+### 2.82 "To-Dos" fixes: a load-order race hiding Priority, and the task checklist restored
+
+Two follow-ups to §2.79 from the same conversation with Will, both about
+the same card.
+
+**Bug: flagged-priority tickets could silently never load.** `DashboardView.vue`'s
+`loadPriorityAndTodos()` reads `flaggedPriorityKeys` (which tiers Settings
+-> Priority tiers has flagged "Highlight in tasks") to decide whether to
+even fire the priority-tickets request. That list comes from
+`settings.data.priority_tier`, populated by `App.vue`'s `settings.load(true)`
+-- fired off (not awaited) the moment `auth.signedIn` goes true. The
+router's own nav guard only awaits `auth.load()`, not settings, so on a
+fresh page load `DashboardView`'s `onMounted` could win that race: it'd
+read an empty `priority_tier` list, treat that as "nothing's flagged,"
+and skip the priority-tickets request outright for that mount's entire
+lifetime -- not an empty result, no request at all. Confirmed live:
+tickets flagged Expedited/SOS or High Priority and assigned to Will
+weren't showing on first load, but appeared after navigating away and
+back (a fresh mount, by which point settings had already finished
+loading elsewhere). Fixed by having `loadPriorityAndTodos()`
+`await settings.load()` first -- a no-op once already loaded (`stores.js`),
+same pattern `CeppysView.vue` already uses for the same reason.
+
+**The task-level checklist is back, with its done-checkbox.** §2.79's
+move to ticket-level rows (one line per qualifying ticket, no per-task
+detail) turned out not to match how work actually gets broken down here:
+Will flagged a ticket Daily To-Do + High Priority, assigned its checklist
+tasks to himself, and none of them showed up -- only a ticket-level line
+would have, and only once the ticket itself had a ticket-level assignee
+matching the filter. What people actually want on this card is the same
+thing "My tasks" always showed: individual open `ticket_tasks` rows
+assigned to them, checkable right there.
+
+So `loadPriorityAndTodos()` now also fetches `GET /tasks` (the same
+`technician_id` + `unlocked_only=true` + `done=false` shape "My tasks"
+used) alongside the two ticket queries, and splits the results into
+`dailyTodoTasks`/`priorityTasks` by each task's own ticket's category/
+priority -- `routes/tasks.js`'s `TASK_SELECT` now also joins
+`ticket_category` for `category_key`/`category_label`, which it didn't
+carry before (it already had `priority_key` for exactly this kind of
+grouping). `toggleTodoTask()` is the same `PATCH /tasks/:id` `{ done }`
+call the ticket detail page's own checkboxes use.
+
+The ticket-level lines from §2.79 didn't go away -- they're the fallback:
+a qualifying ticket only gets its own line when it isn't already
+represented by one of your tasks above (nothing's been broken into tasks
+yet, or its open tasks all belong to someone else), same
+`dailyTodoTaskTicketIds`/`priorityTaskTicketIds` dedupe shape the two
+groups already used against each other in §2.79. A Daily To-Do ticket
+that's *also* flagged-priority still only shows once, under Daily To-Do's
+-- unchanged from §2.79.
+
+No migration.
 
 ## 4. Suggested first moves after deploy
 

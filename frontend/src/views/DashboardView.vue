@@ -49,18 +49,27 @@ const minePageCount = computed(() => Math.max(1, Math.ceil(mineTotal.value / MIN
 const unassignedPageCount = computed(() => Math.max(1, Math.ceil(unassignedTotal.value / UNASSIGNED_PAGE_SIZE)));
 
 // "To-Dos" (replaces the old "My tasks"/"Priority tasks" pair, per the
-// boss's dashboard-layout note) -- yours, not shop-wide: the daily to-do's
-// (category 'daily_todo', which already auto-archives itself at end of
-// day -- see recurringTickets.js -- so "open" here already means
+// boss's dashboard-layout note) -- yours, not shop-wide: today's Daily
+// To-Do's (category 'daily_todo', which already auto-archives itself at
+// end of day -- see recurringTickets.js -- so "open" here already means
 // "today's") assigned to you, plus your own tickets sitting at whichever
 // priority tier(s) Settings -> Priority tiers has flagged "Highlight in
-// tasks" (stores.js's highlightTasksForPriority meta -- expedited_sos by
-// default, admin-addable). Both are ticket-level lists now, not
-// individual ticket_tasks rows -- the per-task checklist (and its
-// checkbox-to-mark-done) that used to live here is gone with "My tasks";
-// checking off a task still happens on the ticket page itself.
+// tasks" (stores.js's highlightTasksForPriority meta -- expedited_sos and
+// high_priority by default, admin-addable).
+//
+// Two levels, same as the old "My tasks"/"Priority tasks" this replaced:
+// the individual open checklist items (ticket_tasks rows) assigned to you
+// on a qualifying ticket, WITH their inline done-checkbox restored (Will
+// -- "I made the ticket a daily to do and high priority and I'm not
+// seeing the tasks", after an earlier pass here dropped task-level rows
+// down to just a ticket-level line); and, falling back to the ticket
+// itself, any qualifying ticket that doesn't already have one of your
+// tasks representing it above -- e.g. nothing's been broken into tasks
+// yet, or the only open tasks on it are someone else's.
 const dailyTodoTickets = ref([]);
 const priorityTickets = ref([]);
+const dailyTodoTasks = ref([]);
+const priorityTasks = ref([]);
 
 const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
   .filter((r) => r.meta?.highlight_in_tasks)
@@ -75,21 +84,52 @@ async function loadPriorityAndTodos() {
   // stay missing until the next time this component happens to remount.
   await settings.load();
   const mine = { technician_id: auth.user.id };
-  const [dailyTodos, flagged] = await Promise.all([
+  const [dailyTodos, flagged, myTasks] = await Promise.all([
     api.get('/tickets', { category: 'daily_todo', ...mine }),
     flaggedPriorityKeys.value.length
       ? api.get('/tickets', { priority: flaggedPriorityKeys.value.join(','), ...mine })
       : Promise.resolve([]),
+    // Same GET /tasks the old "My tasks" used (technician_id + unlocked_only
+    // + done=false -- open, assigned to you, and the ticket's current
+    // status actually surfaces tasks per Settings -> Ticket statuses), just
+    // filtered into these two groups below instead of shown as one flat list.
+    api.get('/tasks', { technician_id: auth.user.id, unlocked_only: 'true', done: 'false' }),
   ]);
+  const flaggedKeys = new Set(flaggedPriorityKeys.value);
+
+  // Daily To-Do's tasks take this group first; a task that's both (its
+  // ticket is a Daily To-Do at a flagged priority) shows once, here --
+  // same dedupe convention the ticket-level lists below already use.
+  dailyTodoTasks.value = myTasks.filter((t) => t.category_key === 'daily_todo');
+  const dailyTodoTaskTicketIds = new Set(dailyTodoTasks.value.map((t) => t.ticket_id));
+  priorityTasks.value = myTasks.filter(
+    (t) => t.category_key !== 'daily_todo' && flaggedKeys.has(t.priority_key),
+  );
+  const priorityTaskTicketIds = new Set(priorityTasks.value.map((t) => t.ticket_id));
+
   // A finished job (status meta.terminal, e.g. 'done') is done, not
-  // outstanding -- exclude it even though nothing ever archived it.
-  dailyTodoTickets.value = dailyTodos.filter((t) => !settings.isTerminalStatus(t.status_key));
+  // outstanding -- exclude it even though nothing ever archived it. A
+  // ticket already represented by one of your tasks above doesn't also
+  // need its own fallback line here.
+  dailyTodoTickets.value = dailyTodos.filter(
+    (t) => !settings.isTerminalStatus(t.status_key) && !dailyTodoTaskTicketIds.has(t.id),
+  );
   const seen = new Set(dailyTodoTickets.value.map((t) => t.id));
   priorityTickets.value = flagged.filter((t) => {
-    if (seen.has(t.id) || settings.isTerminalStatus(t.status_key)) return false;
+    if (seen.has(t.id) || priorityTaskTicketIds.has(t.id) || settings.isTerminalStatus(t.status_key)) {
+      return false;
+    }
     seen.add(t.id);
     return true;
   });
+}
+
+// Same PATCH the ticket detail page's own task checkboxes use -- checking
+// one off from the dashboard is exactly the same action, just from a
+// different screen.
+async function toggleTodoTask(task) {
+  await api.patch(`/tasks/${task.id}`, { done: !task.done });
+  await loadPriorityAndTodos();
 }
 
 // "In-Progress Tickets" (replaces "Assigned to me") -- yours, not
@@ -217,7 +257,9 @@ onMounted(async () => {
       </div>
 
       <div
-        v-if="dailyTodoTickets.length || priorityTickets.length" class="card"
+        v-if="dailyTodoTickets.length || priorityTickets.length
+          || dailyTodoTasks.length || priorityTasks.length"
+        class="card"
         style="margin-bottom: 24px; border-color: var(--red)"
       >
         <h2>To-Dos</h2>
@@ -225,9 +267,22 @@ onMounted(async () => {
           Yours — today's Daily To-Do's, plus anything of yours at a priority level flagged to
           stand out (Settings → Priority tiers).
         </p>
-        <template v-if="dailyTodoTickets.length">
+        <template v-if="dailyTodoTasks.length || dailyTodoTickets.length">
           <p class="muted small" style="margin: 0 0 10px"><strong>Daily To-Do's</strong></p>
           <ul class="checklist">
+            <li v-for="task in dailyTodoTasks" :key="`task-${task.id}`">
+              <input type="checkbox" :checked="task.done" @change="toggleTodoTask(task)" />
+              <div style="flex: 1; min-width: 0">
+                <RouterLink :to="{ name: 'ticket', params: { id: task.ticket_id } }">
+                  {{ task.title }}
+                </RouterLink>
+                <div class="muted small">{{ task.ticket_title }}</div>
+              </div>
+            </li>
+            <!-- A qualifying ticket with none of your tasks representing it
+                 yet (nothing broken out into tasks, or its open tasks are
+                 someone else's) -- same fallback the old "Priority tasks"
+                 card used, just extended to Daily To-Do's too. -->
             <li v-for="t in dailyTodoTickets" :key="t.id">
               <div style="flex: 1; min-width: 0">
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
@@ -243,9 +298,18 @@ onMounted(async () => {
             </li>
           </ul>
         </template>
-        <template v-if="priorityTickets.length">
+        <template v-if="priorityTasks.length || priorityTickets.length">
           <p class="muted small" style="margin: 14px 0 10px"><strong>Priority</strong></p>
           <ul class="checklist">
+            <li v-for="task in priorityTasks" :key="`task-${task.id}`">
+              <input type="checkbox" :checked="task.done" @change="toggleTodoTask(task)" />
+              <div style="flex: 1; min-width: 0">
+                <RouterLink :to="{ name: 'ticket', params: { id: task.ticket_id } }">
+                  {{ task.title }}
+                </RouterLink>
+                <div class="muted small">{{ task.ticket_title }} · {{ task.priority_label }}</div>
+              </div>
+            </li>
             <li v-for="t in priorityTickets" :key="t.id">
               <div style="flex: 1; min-width: 0">
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>

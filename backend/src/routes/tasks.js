@@ -54,6 +54,7 @@ router.use(requireAuth);
 const TASK_SELECT = `
   SELECT tk.*,
          t.title AS ticket_title,
+         t.category_key, cat.label AS category_label,
          t.status_key, st.label AS status_label,
          t.priority_key, pr.label AS priority_label, pr.sort_order AS priority_sort_order,
          t.archived AS ticket_archived,
@@ -62,6 +63,11 @@ const TASK_SELECT = `
          hl.hours AS logged_hours
     FROM ticket_tasks tk
     LEFT JOIN tickets t ON t.id = tk.ticket_id
+    -- Dashboard's "To-Dos" card (DashboardView.vue) needs this to tell a
+    -- Daily To-Do's task apart from a flagged-priority task when grouping
+    -- someone's open tasks -- same LEFT JOIN shape as status/priority
+    -- just above, added for the same reason.
+    LEFT JOIN settings cat ON cat.category = 'ticket_category' AND cat.key = t.category_key
     LEFT JOIN settings st ON st.category = 'ticket_status' AND st.key = t.status_key
     LEFT JOIN settings pr ON pr.category = 'priority_tier' AND pr.key = t.priority_key
     LEFT JOIN employees e  ON e.id = tk.technician_id
