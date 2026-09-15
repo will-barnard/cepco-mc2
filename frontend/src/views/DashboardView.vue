@@ -67,6 +67,13 @@ const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
   .map((r) => r.key));
 
 async function loadPriorityAndTodos() {
+  // settings.load() is a no-op once loaded (stores.js), but on a fresh
+  // page load this view's onMounted can win the race against App.vue's
+  // own (unawaited) settings.load(true) -- without this, flaggedPriorityKeys
+  // reads an empty priority_tier list, the flagged-priority fetch below
+  // gets skipped for this mount's entire lifetime, and priority tickets
+  // stay missing until the next time this component happens to remount.
+  await settings.load();
   const mine = { technician_id: auth.user.id };
   const [dailyTodos, flagged] = await Promise.all([
     api.get('/tickets', { category: 'daily_todo', ...mine }),
