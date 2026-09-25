@@ -11,7 +11,9 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
-import { renderNamingTemplate, templateUsesToken } from '../ticketNaming';
+import {
+  renderNamingTemplate, templateUsesToken, renderPrefill, prefillPrefix, instrumentShortName,
+} from '../ticketNaming';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
@@ -301,29 +303,36 @@ function modelLeaf(model) {
   const segments = String(model).split('/').map((s) => s.trim()).filter(Boolean);
   return segments.length ? segments[segments.length - 1] : '';
 }
-// Settings -> Ticket naming's per-category template, rendered against
-// whatever's picked so far — the exact same renderer/template
-// routes/tickets.js's composeTicketTitle uses server-side (stores.js's
-// namingTemplateFor reads the category row this all comes from), so what
-// shows here is what the ticket will actually be titled.
+// Settings -> Ticket naming's template/mode for whatever's picked -- the
+// sub-category's own when it has one (migration 062: Orders & Shipping ->
+// Shipping / Shopify / uShip), otherwise the category's. Same rule as
+// routes/tickets.js's namingFor.
+const naming = computed(() => settings.namingFor(form.value.category_key, form.value.subcategory_key));
+const categoryLabel = computed(() => settings.categories.find((c) => c.key === form.value.category_key)?.label || '');
+
+// The picked instrument (on file, or being typed in), for both the title
+// preview and the name box's brand + model pre-fill below.
+const currentInstrument = computed(() => (usingExistingInstrument.value
+  ? instruments.value.find((i) => i.id === form.value.instrument_id)
+  : newInstrument.value));
+
+// The template rendered against whatever's picked so far — the exact same
+// renderer/template routes/tickets.js's composeTicketTitle uses
+// server-side, so what shows here is what the ticket will be titled.
 const autoTitlePreview = computed(() => {
   const customerName = newCustomer.value.enabled
     ? newCustomer.value.name.trim()
     : (selectedCustomer.value?.name || '');
 
-  const inst = usingExistingInstrument.value
-    ? instruments.value.find((i) => i.id === form.value.instrument_id)
-    : newInstrument.value;
+  const inst = currentInstrument.value;
   const nickname = inst?.nickname?.trim() || '';
   const year = inst?.year ? String(inst.year).trim() : '';
   const familyLabel = inst?.family ? refData.familyLabel(inst.family) : '';
   const leaf = modelLeaf(inst?.model);
 
-  const template = settings.namingTemplateFor(form.value.category_key);
-  const categoryLabel = settings.categories.find((c) => c.key === form.value.category_key)?.label || '';
-  return renderNamingTemplate(template, {
+  return renderNamingTemplate(naming.value.template, {
     customerName, nickname, year, familyLabel, modelLeaf: leaf,
-    categoryLabel, ticketName: form.value.ticket_name.trim(),
+    categoryLabel: categoryLabel.value, ticketName: form.value.ticket_name.trim(),
   });
 });
 
@@ -331,15 +340,49 @@ const autoTitlePreview = computed(() => {
 // is currently picked — locks the Title field below to this preview
 // instead of letting anyone type over it (backend enforces the same rule
 // independently — see routes/tickets.js's namingEnforced).
-const namingEnforced = computed(() => settings.namingEnforced(form.value.category_key));
+const namingEnforced = computed(() => naming.value.mode === 'standardize');
+const namingPrefill = computed(() => naming.value.mode === 'prefill');
 // True once the current category is Standardize *and* its own template
 // actually references {ticket_name} -- that's the only situation where
 // typing anything still matters (see the Name field below): otherwise
 // the whole title is auto-derived from customer/instrument with nothing
 // left for a person to contribute.
 const usesTicketName = computed(() => (
-  namingEnforced.value && templateUsesToken(settings.namingTemplateFor(form.value.category_key), 'ticket_name')
+  namingEnforced.value && templateUsesToken(naming.value.template, 'ticket_name')
 ));
+
+// Pre-fill mode (migration 062 -- Daily To-Do's, Housekeeping, SideQuests):
+// the Title box starts out containing "To-Do: " and the person types the
+// rest. Re-filled whenever the category changes, but only while the box
+// still holds exactly what was last pre-filled (or nothing) -- anything
+// typed is never overwritten. Switching to a non-prefill category clears
+// an untouched prefix the same way.
+let lastPrefill = '';
+watch(() => [naming.value.mode, naming.value.template], () => {
+  const untouched = !form.value.title.trim() || form.value.title === lastPrefill;
+  const next = namingPrefill.value ? renderPrefill(naming.value.template, { categoryLabel: categoryLabel.value }) : '';
+  if (untouched) form.value.title = next;
+  lastPrefill = next;
+}, { immediate: true });
+
+// Standardize templates flagged naming_name_from_instrument (Shipping:
+// "What's being shipped") start the name box as the picked instrument's
+// brand + model -- again only while it still holds that auto value, so
+// typing "Parts box" instead sticks.
+let lastAutoName = '';
+function autoNameFor(inst) {
+  return inst?.family ? instrumentShortName(refData.familyLabel(inst.family), inst.model) : '';
+}
+watch(
+  () => [usesTicketName.value && naming.value.nameFromInstrument, autoNameFor(currentInstrument.value)],
+  ([enabled, name]) => {
+    const untouched = !form.value.ticket_name.trim() || form.value.ticket_name === lastAutoName;
+    const next = enabled ? name : '';
+    if (untouched) form.value.ticket_name = next;
+    lastAutoName = next;
+  },
+  { immediate: true },
+);
 
 // Auto-fill on every *change* of instrument type — not on every keystroke
 // elsewhere in the form, and not a one-time default, so switching types
@@ -384,6 +427,18 @@ async function submit() {
   // error if it truly comes up empty).
   if (!namingEnforced.value && !form.value.title.trim() && !autoTitlePreview.value) {
     error.value = 'Give this ticket a title, or pick a customer/instrument to generate one.';
+    return;
+  }
+  // Pre-fill: "To-Do: " on its own isn't a name (backend checks the same).
+  if (namingPrefill.value) {
+    const prefix = prefillPrefix(naming.value.template, { categoryLabel: categoryLabel.value });
+    if (prefix && form.value.title.trim().replace(/[\s:|,–—-]+$/, '') === prefix) {
+      error.value = `Add a name after "${prefix}:".`;
+      return;
+    }
+  }
+  if (usesTicketName.value && !form.value.ticket_name.trim()) {
+    error.value = `${naming.value.nameLabel} is required.`;
     return;
   }
   busy.value = true;
@@ -496,10 +551,19 @@ async function submit() {
             });
             instrumentId = createdInst.id;
           }
+          // A Pre-fill title ("To-Do: Clean the paint station") is typed,
+          // not generated, so each sibling carries it; a generated title
+          // is left for the backend to compose per instrument. Likewise a
+          // name box that was only ever the auto brand + model (Shipping)
+          // is re-derived from each sibling's own instrument.
+          const sibInst = sib.mode === 'existing'
+            ? instruments.value.find((x) => x.id === sib.instrument_id) : sib;
+          const sibTicketName = lastAutoName && payload.ticket_name === lastAutoName
+            ? (autoNameFor(sibInst) || payload.ticket_name) : payload.ticket_name;
           // eslint-disable-next-line no-await-in-loop -- see above
           await api.post('/tickets', {
-            title: null,
-            ticket_name: payload.ticket_name,
+            title: namingPrefill.value ? payload.title : null,
+            ticket_name: sibTicketName,
             category_key: payload.category_key,
             subcategory_key: payload.subcategory_key,
             subcategory_other_text: payload.subcategory_other_text,
@@ -550,44 +614,6 @@ async function submit() {
   <div style="max-width: 780px">
     <form class="card" @submit.prevent="submit">
       <div class="field">
-        <label>Title{{ namingEnforced || autoTitlePreview ? '' : ' *' }}</label>
-        <input
-          v-if="namingEnforced"
-          :value="autoTitlePreview" disabled
-          :title="usesTicketName
-            ? 'This category uses a standardized name (Settings → Ticket naming) — type the Name below to fill in its {ticket_name} part.'
-            : 'This category uses a standardized name (Settings → Ticket naming) — nothing to type here.'"
-        />
-        <input
-          v-else
-          v-model="form.title"
-          :required="!autoTitlePreview"
-          :placeholder="autoTitlePreview || 'e.g. Steve Dawson — Wurlitzer 200A full resto'"
-        />
-        <!-- N1: only shown once there's actually something to preview — a
-             blank title plus no customer/instrument is still a hard error
-             (submit() above), same as before this packet. Not shown at all
-             once naming_enforced -- the disabled field above already shows
-             exactly what the ticket will be titled, live. -->
-        <p v-if="!namingEnforced && autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
-          Left blank, this ticket will be titled "{{ autoTitlePreview }}".
-        </p>
-      </div>
-
-      <!-- Naming panel (migration 057): the free-text slot this category's
-           standardized template folds in via {ticket_name} -- e.g.
-           "Housekeeping: Mop the floors". Only appears once usesTicketName
-           says the template actually does something with it; every other
-           Standardize category has nothing here to type. -->
-      <div v-if="usesTicketName" class="field">
-        <label>Name</label>
-        <input v-model="form.ticket_name" placeholder="e.g. Mop the floors" />
-        <p class="muted small" style="margin: 4px 0 0">
-          Filled into the standardized title above as you type.
-        </p>
-      </div>
-
-      <div class="field">
         <label>Category *</label>
         <div class="row">
           <button
@@ -615,6 +641,44 @@ async function submit() {
       <div v-if="selectedSubcategory?.meta?.allow_free_text" class="field">
         <label>{{ selectedSubcategory.label }} — what is it? *</label>
         <input v-model="form.subcategory_other_text" placeholder="e.g. estate sale walkthrough" />
+      </div>
+
+      <div class="field">
+        <label>Title{{ namingEnforced || autoTitlePreview ? '' : ' *' }}</label>
+        <input
+          v-if="namingEnforced"
+          :value="autoTitlePreview" disabled
+          :title="usesTicketName
+            ? `This category uses a standardized name (Settings → Ticket naming) — fill in ${naming.nameLabel} below.`
+            : 'This category uses a standardized name (Settings → Ticket naming) — nothing to type here.'"
+        />
+        <input
+          v-else
+          v-model="form.title"
+          :required="!autoTitlePreview"
+          :placeholder="autoTitlePreview || 'e.g. Steve Dawson — Wurlitzer 200A full resto'"
+        />
+        <!-- N1: only shown once there's actually something to preview — a
+             blank title plus no customer/instrument is still a hard error
+             (submit() above), same as before this packet. Not shown at all
+             once naming_enforced -- the disabled field above already shows
+             exactly what the ticket will be titled, live. -->
+        <p v-if="!namingEnforced && !namingPrefill && autoTitlePreview && !form.title.trim()" class="muted small" style="margin: 4px 0 0">
+          Left blank, this ticket will be titled "{{ autoTitlePreview }}".
+        </p>
+      </div>
+
+      <!-- Naming panel (migration 057): the free-text slot this category's
+           standardized template folds in via {ticket_name} -- e.g.
+           "Housekeeping: Mop the floors". Only appears once usesTicketName
+           says the template actually does something with it; every other
+           Standardize category has nothing here to type. -->
+      <div v-if="usesTicketName" class="field">
+        <label>{{ naming.nameLabel }} *</label>
+        <input v-model="form.ticket_name" :placeholder="naming.nameFromInstrument ? 'Picked up from the instrument below, or type it' : ''" />
+        <p class="muted small" style="margin: 4px 0 0">
+          Filled into the standardized title above as you type.
+        </p>
       </div>
 
       <div class="field-row">

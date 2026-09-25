@@ -5,7 +5,10 @@ const { query, withTransaction } = require('../db');
 const { asyncHandler } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { verifyWebhookHmac } = require('../shopify');
-const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
+const {
+  resolveNewTicketFields, insertTicketRow, renderNamingTemplate, namingFor,
+  activeSubcategoryKey, SHOPIFY_SUBCATEGORY_KEY,
+} = require('./tickets');
 const { insertNote } = require('../services/ticketNotes');
 
 const router = express.Router();
@@ -135,19 +138,30 @@ async function handleOrderCreate(order) {
   // Assignment (Settings -> that category's "Default assignee") is resolved
   // inside resolveNewTicketFields itself, same as every other ticket-
   // creation path — see routes/tickets.js.
+  // Filed under Orders & Shipping -> Shopify when that sub-category exists
+  // (migration 062), which is also what names it: "Shopify: #1001 - Joe".
   const resolved = await resolveNewTicketFields({
     category_key: categoryKey,
+    subcategory_key: await activeSubcategoryKey(categoryKey, SHOPIFY_SUBCATEGORY_KEY),
     priority_key: await settings.defaultKeyPreferring('priority_tier', PREFERRED_ORDER_PRIORITY_KEY),
   });
+  const naming = namingFor(resolved.category, resolved.subcategory);
 
   try {
     await withTransaction(async (client) => {
       const customer = await findOrCreateCustomer(client, order);
-      const title = `Shopify order ${order.name || `#${shopifyOrderId}`} — ${customer.name}`;
+      const orderNumber = order.name || `#${shopifyOrderId}`;
+      // Rendered directly rather than via composeTicketTitle: that reads
+      // the customer through the pool, and a customer created a line above
+      // in this still-open transaction isn't visible there yet.
+      const title = (naming.template && renderNamingTemplate(naming.template, {
+        customerName: customer.name, ticketName: orderNumber, categoryLabel: resolved.category.label,
+      })) || `Shopify order ${orderNumber} — ${customer.name}`;
       await insertTicketRow(
         client,
         {
           title,
+          ticket_name: orderNumber,
           notes: orderNotes(order),
           customer_id: customer.id,
           shopify_order_id: shopifyOrderId,

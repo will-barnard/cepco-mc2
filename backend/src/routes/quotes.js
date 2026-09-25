@@ -22,7 +22,9 @@ const config = require('../config');
 const { sendEmail } = require('../mailer');
 const { buildQuoteEmail } = require('../templates/quoteEmail');
 const { buildEstimateAcceptedNotice } = require('../templates/estimateAcceptedNotice');
-const { resolveNewTicketFields, insertTicketRow, composeTicketTitle } = require('./tickets');
+const {
+  resolveNewTicketFields, insertTicketRow, composeTicketTitle, namingFor,
+} = require('./tickets');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -553,7 +555,9 @@ async function createTicketsForEstimate(estimate, createdById) {
       // eslint-disable-next-line no-await-in-loop
       let title = await composeTicketTitle(
         locked.customer_id, first.instrument_id,
-        resolved.category.meta && resolved.category.meta.naming_template,
+        // Sub-category-aware since migration 062 (a sub-category can carry
+        // its own template).
+        namingFor(resolved.category, resolved.subcategory).template,
         // No per-line free-typed text on this path (an estimate has
         // nothing resembling {ticket_name} to offer) -- {category} still
         // resolves, in case a template references it.

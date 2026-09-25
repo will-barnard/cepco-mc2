@@ -29,6 +29,24 @@ router.use(requireAuth);
 // real "Orders & Shipping" category now.
 const PREFERRED_SHIPPING_PRIORITY_KEY = 'low_priority';
 const PREFERRED_SHIPPING_CATEGORY_KEY = 'orders_shipping';
+// Migration 062's Orders & Shipping sub-categories, used by the two
+// automatic creation paths (this file's "Ship this instrument", and the
+// Shopify webhook).
+const SHIPPING_SUBCATEGORY_KEY = 'order_shipping';
+const SHOPIFY_SUBCATEGORY_KEY = 'order_shopify';
+
+/** `key` if it's an active sub-category of `categoryKey`, else null -- so
+ * an automatic path degrades to "no sub-category" rather than failing if
+ * an admin retires or re-parents it. */
+async function activeSubcategoryKey(categoryKey, key) {
+  const { rows } = await query(
+    `SELECT key FROM settings
+      WHERE category = 'ticket_category' AND key = $1 AND retired = FALSE
+        AND meta->>'parent_key' = $2`,
+    [key, categoryKey],
+  );
+  return rows[0] ? rows[0].key : null;
+}
 
 const TICKET_SELECT = `
   SELECT t.*,
@@ -728,11 +746,45 @@ function renderNamingTemplate(template, ctx) {
   // {category}: {ticket_name} is exactly the shape this feature exists
   // for, and a blank {ticket_name} used to leave a dangling "Category:"
   // behind (migration 057).
+  // A blank token right after a colon can leave "Shipping: - Joe Biden"
+  // (migration 062's `Shipping: {ticket_name}[ - {customer}]` with nothing
+  // typed yet) -- collapse a colon followed straight by another separator.
   return out.replace(/\s+/g, ' ')
+    .replace(/:\s*[-\u2013\u2014,|]\s*/g, ': ')
     .trim()
     .replace(/^[-\u2013\u2014,:|]\s*/, '')
     .replace(/\s*[-\u2013\u2014,:|]$/, '')
     .trim();
+}
+
+// Migration 062: three Title-box behaviors per category (or sub-category),
+// replacing the old on/off naming_enforced -- see that migration's header.
+// A row that predates naming_mode falls back to its naming_enforced flag.
+const NAMING_MODES = ['suggest', 'prefill', 'standardize'];
+
+function namingModeOf(meta) {
+  if (meta && NAMING_MODES.includes(meta.naming_mode)) return meta.naming_mode;
+  return meta && meta.naming_enforced ? 'standardize' : 'suggest';
+}
+
+/**
+ * Which template/mode names a ticket: its sub-category's, when that
+ * sub-category has a template of its own (Orders & Shipping's Shipping /
+ * Shopify / uShip -- migration 062), otherwise its top-level category's.
+ * `subcategory` may be null.
+ */
+function namingFor(category, subcategory) {
+  const source = subcategory && subcategory.meta && subcategory.meta.naming_template ? subcategory : category;
+  const meta = (source && source.meta) || {};
+  return {
+    template: meta.naming_template || null,
+    mode: namingModeOf(meta),
+    nameLabel: meta.naming_name_label || 'Name',
+  };
+}
+
+function templateUsesToken(template, token) {
+  return new RegExp(`\\{${token}\\}`).test(String(template || DEFAULT_NAMING_TEMPLATE));
 }
 
 // `model` on `instruments` is still a plain string (the InstrumentModelPicker/
@@ -834,7 +886,14 @@ router.post('/', asyncHandler(async (req, res) => {
   // a hand-typed title, even from a raw API call that skips the (locked,
   // read-only) field NewTicketForm.vue shows for it — the generated name
   // is the only name that category's tickets ever get.
-  const namingEnforced = !!(category.meta && category.meta.naming_enforced);
+  // Migration 062: a sub-category can carry its own template/mode (Orders
+  // & Shipping -> Shipping / Shopify / uShip), so it's resolved here, ahead
+  // of resolveNewTicketFields (which resolves it again -- same checks).
+  const subcategoryRow = await resolveSubcategory(
+    category.key, b.subcategory_key || null, b.subcategory_other_text || null,
+  );
+  const naming = namingFor(category, subcategoryRow);
+  const namingEnforced = naming.mode === 'standardize';
   // Naming panel (migration 057): a free-typed slot a category's template
   // can fold in via {ticket_name} (e.g. `{category}: {ticket_name}` ->
   // "Housekeeping: Mop the floors") -- captured before namingEnforced
@@ -842,14 +901,27 @@ router.post('/', asyncHandler(async (req, res) => {
   // independent: ticket_name is stored on every ticket that supplies it,
   // whether or not this category's template actually references it.
   const ticketName = (b.ticket_name && String(b.ticket_name).trim()) || '';
+  // A Standardize template built around {ticket_name} ("Shipping: {what's
+  // being shipped}") says nothing without it.
+  if (namingEnforced && !ticketName && templateUsesToken(naming.template, 'ticket_name')) {
+    throw badRequest(`${naming.nameLabel} is required`);
+  }
   let title = namingEnforced ? '' : (b.title && String(b.title).trim());
   if (!title) {
     title = await composeTicketTitle(
-      b.customer_id || null, b.instrument_id || null, category.meta && category.meta.naming_template,
+      b.customer_id || null, b.instrument_id || null, naming.template,
       { categoryLabel: category.label, ticketName },
     );
   }
   if (!title) throw badRequest('title is required');
+  // Prefill ("To-Do: " already in the box): submitting the prefix alone,
+  // or a blank box (which renders back to that same prefix), isn't a name.
+  if (naming.mode === 'prefill') {
+    const prefix = renderNamingTemplate(naming.template, { categoryLabel: category.label });
+    if (prefix && title.replace(/[\s:|,\u2013\u2014-]+$/, '') === prefix) {
+      throw badRequest(`Add a name after "${prefix}:"`);
+    }
+  }
 
   const fields = {
     ...b, title, is_shipping: isShipping, ticket_name: ticketName || null,
@@ -969,20 +1041,44 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   // this request" (COALESCE keeps the existing value); '' is a real
   // clear, same convention titleOverride already uses.
   const ticketNameOverride = b.ticket_name === undefined ? null : String(b.ticket_name).trim();
+  const categoryChanged = Boolean(resolved.category && resolved.category.key !== existing.category_key);
   const namingRelevantChange = b.customer_id !== undefined || b.instrument_id !== undefined
-    || ticketNameOverride !== null
-    || (resolved.category && resolved.category.key !== existing.category_key);
+    || ticketNameOverride !== null || categoryChanged || subcategoryChanged;
   if (namingRelevantChange || titleOverride) {
     const namingCategory = resolved.category || await settings.resolve('ticket_category', effectiveCategoryKey);
-    if (namingCategory.meta && namingCategory.meta.naming_enforced) {
-      const effectiveCustomerId = b.customer_id !== undefined ? (b.customer_id || null) : existing.customer_id;
-      const effectiveInstrumentId = b.instrument_id !== undefined
-        ? (b.instrument_id || null) : existing.instrument_id;
-      const effectiveTicketName = ticketNameOverride !== null ? ticketNameOverride : (existing.ticket_name || '');
-      titleOverride = await composeTicketTitle(
-        effectiveCustomerId, effectiveInstrumentId, namingCategory.meta.naming_template,
-        { categoryLabel: namingCategory.label, ticketName: effectiveTicketName },
-      );
+    // Migration 062: the sub-category's own template wins when it has one.
+    let effectiveSubcategory = null;
+    if (subcategoryChanged) effectiveSubcategory = resolved.subcategory || null;
+    else if (existing.subcategory_key) {
+      effectiveSubcategory = await settings.resolve('ticket_category', existing.subcategory_key);
+    }
+    const naming = namingFor(namingCategory, effectiveSubcategory);
+    if (naming.mode === 'standardize') {
+      // "New tickets only" (shop's call when the naming scheme changed in
+      // migration 062): a ticket whose current title isn't what its
+      // template generates -- typed by hand before the category was
+      // standardized, or generated under an older template -- keeps that
+      // title when only its customer/instrument/name changes. It's still
+      // regenerated on an explicit title edit or a (sub-)category move,
+      // where the new category's naming rule clearly applies.
+      let regenerate = Boolean(titleOverride) || categoryChanged || subcategoryChanged;
+      if (!regenerate) {
+        const currentGenerated = await composeTicketTitle(
+          existing.customer_id, existing.instrument_id, naming.template,
+          { categoryLabel: namingCategory.label, ticketName: existing.ticket_name || '' },
+        );
+        regenerate = currentGenerated === existing.title;
+      }
+      if (regenerate) {
+        const effectiveCustomerId = b.customer_id !== undefined ? (b.customer_id || null) : existing.customer_id;
+        const effectiveInstrumentId = b.instrument_id !== undefined
+          ? (b.instrument_id || null) : existing.instrument_id;
+        const effectiveTicketName = ticketNameOverride !== null ? ticketNameOverride : (existing.ticket_name || '');
+        titleOverride = await composeTicketTitle(
+          effectiveCustomerId, effectiveInstrumentId, naming.template,
+          { categoryLabel: namingCategory.label, ticketName: effectiveTicketName },
+        ) || titleOverride;
+      }
     }
   }
 
@@ -1297,14 +1393,25 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
   // pack-and-send ticket now, not its category — see PREFERRED_SHIPPING_
   // CATEGORY_KEY's comment above and migration 028/029's headers for why
   // the old dedicated 'shipping' category couldn't just keep doing this.
+  const categoryKey = await settings.defaultKeyPreferring('ticket_category', PREFERRED_SHIPPING_CATEGORY_KEY);
+  // Filed under the "Shipping" sub-category when it exists (migration 062)
+  // so it's named like any other shipping ticket:
+  // "Shipping: Rhodes Mark I - Joe Biden".
+  const subcategoryKey = await activeSubcategoryKey(categoryKey, SHIPPING_SUBCATEGORY_KEY);
   const resolved = await resolveNewTicketFields({
-    category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_SHIPPING_CATEGORY_KEY),
+    category_key: categoryKey,
+    subcategory_key: subcategoryKey,
     priority_key: await settings.defaultKeyPreferring('priority_tier', PREFERRED_SHIPPING_PRIORITY_KEY),
     is_shipping: true,
   });
 
-  const title = `Ship — ${source.instrument_family}`
-    + `${source.instrument_model ? ` ${source.instrument_model}` : ''}`;
+  const whatShips = [FAMILY_LABELS[source.instrument_family] || source.instrument_family,
+    modelLeaf(source.instrument_model)].filter(Boolean).join(' ');
+  const naming = namingFor(resolved.category, resolved.subcategory);
+  const title = (naming.mode === 'standardize' && await composeTicketTitle(
+    source.customer_id, source.instrument_id, naming.template,
+    { categoryLabel: resolved.category.label, ticketName: whatShips },
+  )) || `Ship — ${whatShips}`;
   const notes = `Ship this instrument${source.customer_name ? ` to ${source.customer_name}` : ''}. `
     + `Created from ticket #${source.id} — "${source.title}".`;
 
@@ -1313,6 +1420,7 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
       client,
       {
         title,
+        ticket_name: whatShips || null,
         notes,
         instrument_id: source.instrument_id,
         customer_id: source.customer_id,
@@ -1345,3 +1453,7 @@ module.exports.insertTicketRow = insertTicketRow;
 // N10: quotes.js's createTicketsForEstimate reuses this exact function
 // so an estimate-originated ticket's title matches every other path.
 module.exports.composeTicketTitle = composeTicketTitle;
+module.exports.renderNamingTemplate = renderNamingTemplate;
+module.exports.namingFor = namingFor;
+module.exports.activeSubcategoryKey = activeSubcategoryKey;
+module.exports.SHOPIFY_SUBCATEGORY_KEY = SHOPIFY_SUBCATEGORY_KEY;

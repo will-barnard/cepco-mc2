@@ -17,11 +17,11 @@
 
 export const NAMING_TOKEN_HELP = [
   { token: '{category}', description: "the ticket's category name" },
-  { token: '{ticket_name}', description: 'free text typed for this ticket (see "Standardize" below)' },
+  { token: '{ticket_name}', description: 'a short name typed for this ticket (Standardize mode) — e.g. what\'s being shipped, or a Shopify order #' },
   { token: '{customer}', description: "the ticket's customer name" },
   { token: '{nickname}', description: "the instrument's nickname, if it has one" },
   { token: '{year}', description: "the instrument's year, if known" },
-  { token: '{family}', description: 'the instrument family (Piano, Rhodes, …)' },
+  { token: '{family}', description: 'the instrument brand (Rhodes, Wurlitzer, …)' },
   { token: '{model}', description: 'the specific model picked (last segment of the model path)' },
 ];
 
@@ -52,7 +52,10 @@ export function renderNamingTemplate(template, ctx) {
   // {category}: {ticket_name} is exactly the shape this feature exists
   // for, and a blank {ticket_name} used to leave a dangling "Category:"
   // behind (migration 057).
+  // Migration 062: "Shipping: - Joe Biden" (a blank token right after a
+  // colon) collapses to "Shipping: Joe Biden" -- same as the backend.
   return out.replace(/\s+/g, ' ')
+    .replace(/:\s*[-–—,|]\s*/g, ': ')
     .trim()
     .replace(/^[-–—,:|]\s*/, '')
     .replace(/\s*[-–—,:|]$/, '')
@@ -84,3 +87,60 @@ export const NAMING_SAMPLE_CONTEXT = {
   modelLeaf: 'Stage 73',
   ticketName: 'Mop the floors',
 };
+
+// Per-row sample name for {ticket_name} in the Settings preview -- "Mop
+// the floors" reads oddly under "What's being shipped" or "Order #".
+export function sampleTicketName(nameLabel) {
+  if (/order/i.test(nameLabel || '')) return '#1001';
+  if (/ship/i.test(nameLabel || '')) return 'Rhodes Stage 73';
+  return NAMING_SAMPLE_CONTEXT.ticketName;
+}
+
+// Migration 062: how the New Ticket form's Title box uses a template.
+export const NAMING_MODES = [
+  {
+    value: 'suggest',
+    label: 'Suggest',
+    description: 'Type any title; left blank, the template is used.',
+  },
+  {
+    value: 'prefill',
+    label: 'Pre-fill',
+    description: 'The Title box starts with the template (e.g. "To-Do: ") and you type the rest. The prefix can be deleted.',
+  },
+  {
+    value: 'standardize',
+    label: 'Standardize',
+    description: 'The template is the title, locked. {ticket_name} is the one thing typed.',
+  },
+];
+
+/** A row's mode, falling back to the pre-062 naming_enforced flag. */
+export function namingModeOf(meta) {
+  if (NAMING_MODES.some((m) => m.value === meta?.naming_mode)) return meta.naming_mode;
+  return meta?.naming_enforced ? 'standardize' : 'suggest';
+}
+
+/**
+ * The text a Pre-fill category's Title box starts with: the rendered
+ * template, keeping the trailing separator the normal renderer strips
+ * ("To-Do:" -> "To-Do: "), so the cursor lands where the name goes.
+ */
+export function renderPrefill(template, ctx) {
+  const rendered = renderNamingTemplate(template, ctx);
+  if (!rendered) return '';
+  const trailing = /([:\-–—|,])\s*$/.exec(String(template || '').trim());
+  return trailing && !rendered.endsWith(trailing[1]) ? `${rendered}${trailing[1]} ` : `${rendered} `;
+}
+
+/** The bare prefix a Pre-fill title must add something to ("To-Do"). */
+export function prefillPrefix(template, ctx) {
+  return renderNamingTemplate(template, ctx);
+}
+
+/** "Rhodes Mark I" -- the brand + model a Standardize template's name box
+ * can be pre-filled with (meta.naming_name_from_instrument). */
+export function instrumentShortName(familyLabel, model) {
+  const segments = String(model || '').split('/').map((x) => x.trim()).filter(Boolean);
+  return [familyLabel, segments[segments.length - 1]].filter(Boolean).join(' ');
+}

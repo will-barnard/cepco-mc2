@@ -24,38 +24,59 @@
  * a free-naming category's existing titles were typed by hand and aren't
  * this page's business to overwrite.
  *
- * Each category's own template/enforced flag lives in the same
- * ticket_category settings row every other per-category toggle already
- * does (meta.naming_template / meta.naming_enforced) — see migration 056
- * for the default every existing category was seeded with. Subcategories
- * (meta.parent_key set — SideQuests' Hunt/R&D/etc.) don't get their own
- * row here: a ticket's title always comes from its top-level category's
- * template, never its subcategory's.
+ * Each category's own template/mode lives in the same ticket_category
+ * settings row every other per-category toggle already does
+ * (meta.naming_template / meta.naming_mode) — see migration 056 for the
+ * default every existing category was seeded with.
+ *
+ * Migration 062 added:
+ *   - three modes instead of the Standardize on/off (Suggest / Pre-fill /
+ *     Standardize -- ticketNaming.js's NAMING_MODES); naming_enforced is
+ *     still written alongside, true exactly for Standardize.
+ *   - sub-categories listed under their parent, each able to carry its
+ *     own template (Orders & Shipping -> Shipping / Shopify / uShip). A
+ *     sub-category with no template of its own uses its parent's.
+ *   - per-row label for the {ticket_name} box ("What's being shipped",
+ *     "Order #"), and whether to pre-fill it from the instrument.
  */
 import { reactive, computed, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings } from '../stores';
-import { DEFAULT_NAMING_TEMPLATE, NAMING_TOKEN_HELP, NAMING_SAMPLE_CONTEXT, renderNamingTemplate } from '../ticketNaming';
+import {
+  DEFAULT_NAMING_TEMPLATE, NAMING_TOKEN_HELP, NAMING_SAMPLE_CONTEXT, NAMING_MODES,
+  renderNamingTemplate, renderPrefill, namingModeOf, templateUsesToken, sampleTicketName,
+} from '../ticketNaming';
 
 const settings = useSettings();
 const loading = ref(true);
 const error = ref('');
 
-const categories = computed(() => settings.active('ticket_category').filter((r) => !r.meta?.parent_key));
+// Top-level categories, each followed by its own sub-categories.
+const rows = computed(() => {
+  const active = settings.active('ticket_category');
+  const out = [];
+  for (const parent of active.filter((r) => !r.meta?.parent_key)) {
+    out.push({ row: parent, parent: null });
+    for (const child of active.filter((r) => r.meta?.parent_key === parent.key)) {
+      out.push({ row: child, parent });
+    }
+  }
+  return out;
+});
 
-// Local editable copy of each row's template, keyed by settings row id --
-// kept separate from the store so the preview below updates as someone
-// types, without saving (and re-rendering every other admin's screen)
-// on every keystroke. Only actually PATCHes on blur/enter, same as every
-// other inline-editable field in Settings (see ProceduresView.vue's
-// updateField for the same :value/@change convention).
+// Local editable copy of each row's template (and name label), keyed by
+// settings row id -- kept separate from the store so the preview updates
+// as someone types, without saving on every keystroke. Only PATCHes on
+// change (blur/enter), same as every other inline-editable Settings field.
 const drafts = reactive({});
+const labelDrafts = reactive({});
 
 async function refresh() {
   await settings.load(true);
-  for (const row of categories.value) {
+  for (const { row } of rows.value) {
     if (!(row.id in drafts)) drafts[row.id] = row.meta.naming_template || '';
+    if (!(row.id in labelDrafts)) labelDrafts[row.id] = row.meta.naming_name_label || '';
   }
 }
 
@@ -64,42 +85,81 @@ onMounted(async () => {
   loading.value = false;
 });
 
-function previewFor(row) {
-  const template = drafts[row.id];
-  // categoryLabel comes from the row itself rather than a made-up sample
-  // -- {category} always resolves to a ticket's real category, so showing
-  // the real label here previews exactly what {category} will render.
-  return renderNamingTemplate(template, { ...NAMING_SAMPLE_CONTEXT, categoryLabel: row.label });
+// A sub-category with no template of its own is named by its parent's.
+function inheritsFromParent(entry) {
+  return Boolean(entry.parent) && !drafts[entry.row.id];
 }
 
-async function saveTemplate(row, value) {
+function effectiveMeta(entry) {
+  return inheritsFromParent(entry) ? entry.parent.meta : entry.row.meta;
+}
+
+function modeOf(entry) {
+  return namingModeOf(effectiveMeta(entry));
+}
+
+function templateOf(entry) {
+  return inheritsFromParent(entry) ? (drafts[entry.parent.id] || '') : drafts[entry.row.id];
+}
+
+function usesName(entry) {
+  return modeOf(entry) === 'standardize' && templateUsesToken(templateOf(entry), 'ticket_name');
+}
+
+function previewFor(entry) {
+  const template = templateOf(entry);
+  // categoryLabel is the real top-level label -- {category} always
+  // resolves to a ticket's real category, never its sub-category.
+  const categoryLabel = (entry.parent || entry.row).label;
+  const nameLabel = inheritsFromParent(entry) ? labelDrafts[entry.parent.id] : labelDrafts[entry.row.id];
+  const ctx = { ...NAMING_SAMPLE_CONTEXT, categoryLabel, ticketName: sampleTicketName(nameLabel) };
+  if (modeOf(entry) === 'prefill') {
+    const start = renderPrefill(template, { categoryLabel });
+    return start ? `${start}…  (the rest is typed)` : '';
+  }
+  return renderNamingTemplate(template, ctx);
+}
+
+async function patchMeta(row, changes) {
   error.value = '';
-  drafts[row.id] = value;
   try {
-    await api.patch(`/settings/${row.id}`, {
-      meta: { ...row.meta, naming_template: value.trim() || null },
-    });
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, ...changes } });
     await refresh();
   } catch (err) {
     error.value = err.message;
   }
 }
 
-function resetTemplate(row) {
-  saveTemplate(row, '');
+function saveTemplate(entry, value) {
+  drafts[entry.row.id] = value;
+  const changes = { naming_template: value.trim() || null };
+  // A sub-category getting its first template of its own starts from the
+  // parent's mode, rather than silently dropping back to Suggest.
+  if (entry.parent && value.trim() && !entry.row.meta.naming_mode) {
+    const mode = namingModeOf(entry.parent.meta);
+    Object.assign(changes, { naming_mode: mode, naming_enforced: mode === 'standardize' });
+  }
+  patchMeta(entry.row, changes);
 }
 
-async function toggleEnforced(row) {
-  error.value = '';
-  try {
-    await api.patch(`/settings/${row.id}`, {
-      meta: { ...row.meta, naming_enforced: !row.meta.naming_enforced },
-    });
-    await refresh();
-  } catch (err) {
-    error.value = err.message;
-  }
+function resetTemplate(entry) {
+  saveTemplate(entry, '');
 }
+
+function setMode(entry, mode) {
+  patchMeta(entry.row, { naming_mode: mode, naming_enforced: mode === 'standardize' });
+}
+
+function saveNameLabel(entry, value) {
+  labelDrafts[entry.row.id] = value;
+  patchMeta(entry.row, { naming_name_label: value.trim() || null });
+}
+
+function toggleNameFromInstrument(entry) {
+  patchMeta(entry.row, { naming_name_from_instrument: !entry.row.meta.naming_name_from_instrument });
+}
+
+const modeHelp = (mode) => NAMING_MODES.find((m) => m.value === mode)?.description || '';
 </script>
 
 <template>
@@ -141,46 +201,80 @@ async function toggleEnforced(row) {
         <code>{{ DEFAULT_NAMING_TEMPLATE }}</code>
       </p>
       <p class="muted small" style="margin: 8px 0 0">
-        <code>{ticket_name}</code> only does anything once "Standardize" is on below -- turn it on,
-        then work <code>{ticket_name}</code> into the template (e.g.
-        <code>{category}: {ticket_name}</code> → "Housekeeping: Mop the floors") to let someone
-        type a short name for the ticket instead of it coming entirely from the customer/instrument.
-        The New Ticket form only shows that free-text field once the template actually uses it.
+        <strong>Title box</strong> decides how the New Ticket form uses the template:
+        <em>Suggest</em> — type anything, blank uses the template;
+        <em>Pre-fill</em> — the box starts with the template (e.g. <code>To-Do:</code> → "To-Do: ")
+        and the rest is typed; <em>Standardize</em> — the template is the title, locked.
+        In Standardize, <code>{ticket_name}</code> adds one typed box to the form (e.g.
+        <code>Shipping: {ticket_name}[ - {customer}]</code>, with the box labelled
+        "What's being shipped").
+        A sub-category with no template of its own uses its parent's.
       </p>
     </div>
 
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else class="stack">
-      <div v-for="row in categories" :key="row.id" class="card">
+      <div
+        v-for="entry in rows" :key="entry.row.id" class="card"
+        :class="{ 'naming-child': entry.parent }"
+      >
         <div class="row" style="margin-bottom: 8px">
-          <h2 style="margin: 0">{{ row.label }}</h2>
+          <h2 style="margin: 0">
+            <span v-if="entry.parent" class="muted">{{ entry.parent.label }} › </span>{{ entry.row.label }}
+          </h2>
           <div class="spacer" />
-          <label
-            class="checkbox"
-            title="Nobody can type a whole title for this category -- the template above is all of it, unless the template itself includes {ticket_name}"
+          <label class="small muted" style="margin: 0">Title box</label>
+          <select
+            :value="modeOf(entry)" style="width: auto" :disabled="inheritsFromParent(entry)"
+            :title="inheritsFromParent(entry) ? `Uses ${entry.parent.label}'s format — give it a template of its own to change this` : modeHelp(modeOf(entry))"
+            @change="setMode(entry, $event.target.value)"
           >
-            <input type="checkbox" :checked="!!row.meta.naming_enforced" @change="toggleEnforced(row)" />
-            Standardize (generated name)
-          </label>
+            <option v-for="m in NAMING_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
+          </select>
         </div>
+        <p class="muted small" style="margin: 0 0 8px">{{ modeHelp(modeOf(entry)) }}</p>
 
         <label>Template</label>
         <div class="row">
           <input
-            :value="drafts[row.id]" style="flex: 1" :placeholder="DEFAULT_NAMING_TEMPLATE"
-            @input="drafts[row.id] = $event.target.value"
-            @change="saveTemplate(row, $event.target.value)"
+            :value="drafts[entry.row.id]" style="flex: 1"
+            :placeholder="entry.parent ? `(uses ${entry.parent.label}'s: ${drafts[entry.parent.id] || DEFAULT_NAMING_TEMPLATE})` : DEFAULT_NAMING_TEMPLATE"
+            @input="drafts[entry.row.id] = $event.target.value"
+            @change="saveTemplate(entry, $event.target.value)"
           />
           <button
-            v-if="drafts[row.id]" type="button" class="small" title="Clear back to the default template"
-            @click="resetTemplate(row)"
+            v-if="drafts[entry.row.id]" type="button" class="small"
+            :title="entry.parent ? `Clear back to ${entry.parent.label}'s format` : 'Clear back to the default template'"
+            @click="resetTemplate(entry)"
           >Reset</button>
         </div>
 
+        <div v-if="usesName(entry) && !inheritsFromParent(entry)" class="field-row" style="margin-top: 10px; align-items: end">
+          <div class="field" style="margin: 0">
+            <label>Label for the {ticket_name} box</label>
+            <input
+              :value="labelDrafts[entry.row.id]" placeholder="Name"
+              @input="labelDrafts[entry.row.id] = $event.target.value"
+              @change="saveNameLabel(entry, $event.target.value)"
+            />
+          </div>
+          <label class="checkbox" style="margin: 0 0 8px">
+            <input
+              type="checkbox" :checked="!!entry.row.meta.naming_name_from_instrument"
+              @change="toggleNameFromInstrument(entry)"
+            />
+            <span class="small">Pre-fill it with the instrument's brand + model</span>
+          </label>
+        </div>
+
         <p class="muted small" style="margin: 6px 0 0">
-          Preview (sample instrument): <strong>{{ previewFor(row) || '(nothing — try adding a token)' }}</strong>
+          Preview (sample instrument): <strong>{{ previewFor(entry) || '(nothing — try adding a token)' }}</strong>
         </p>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.naming-child { margin-left: 24px; }
+</style>

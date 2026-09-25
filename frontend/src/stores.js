@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import api from './api';
-import { DEFAULT_NAMING_TEMPLATE } from './ticketNaming';
+import { DEFAULT_NAMING_TEMPLATE, namingModeOf } from './ticketNaming';
 
 export const useAuth = defineStore('auth', {
   state: () => ({ user: null, ready: false }),
@@ -156,25 +156,30 @@ export const useSettings = defineStore('settings', {
     // migration 056 seeded every existing row) falls back to the same
     // DEFAULT_NAMING_TEMPLATE the backend renders from, so a brand-new
     // category previews and behaves identically until someone edits it.
-    namingTemplateFor: (s) => (categoryKey) => (
-      (s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_template
-      || DEFAULT_NAMING_TEMPLATE
-    ),
-    // true once an admin has locked this category to its generated name
-    // (Settings -> Ticket naming) -- NewTicketForm.vue disables its title
-    // input rather than letting anyone type over it.
-    namingEnforced: (s) => (categoryKey) => (
-      !!(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_enforced
-    ),
-    // true once a category's own template actually references
-    // {ticket_name} (Settings -> Ticket naming) -- NewTicketForm.vue only
-    // shows its free-text "Name" input when a category is *both*
-    // Standardize (namingEnforced above) *and* its template would
-    // actually do something with what gets typed into it.
-    namingTemplateUsesTicketName: (s) => (categoryKey) => {
-      const template = (s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.naming_template
-        || DEFAULT_NAMING_TEMPLATE;
-      return /\{ticket_name\}/.test(template);
+    // Migration 062: the template/mode that names a ticket -- its
+    // sub-category's when that sub-category has a template of its own
+    // (Orders & Shipping -> Shipping / Shopify / uShip), otherwise its
+    // top-level category's. Mirrors routes/tickets.js's namingFor.
+    namingFor: (s) => (categoryKey, subcategoryKey = '') => {
+      const rows = s.data.ticket_category || [];
+      const sub = subcategoryKey ? rows.find((r) => r.key === subcategoryKey) : null;
+      const source = sub?.meta?.naming_template ? sub : rows.find((r) => r.key === categoryKey);
+      const meta = source?.meta || {};
+      return {
+        template: meta.naming_template || DEFAULT_NAMING_TEMPLATE,
+        mode: namingModeOf(meta),
+        nameLabel: meta.naming_name_label || 'Name',
+        nameFromInstrument: !!meta.naming_name_from_instrument,
+      };
+    },
+    // Older single-argument getters, kept for any caller that doesn't
+    // care about sub-categories.
+    namingTemplateFor() { return (categoryKey, subcategoryKey) => this.namingFor(categoryKey, subcategoryKey).template; },
+    namingEnforced() {
+      return (categoryKey, subcategoryKey) => this.namingFor(categoryKey, subcategoryKey).mode === 'standardize';
+    },
+    namingTemplateUsesTicketName() {
+      return (categoryKey, subcategoryKey) => /\{ticket_name\}/.test(this.namingFor(categoryKey, subcategoryKey).template);
     },
     // DashboardView.vue's "My tasks" — a priority tier flagged this way
     // (Settings -> Priority tiers' "Highlight in tasks" column) gets its
