@@ -13,6 +13,7 @@ import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
 import TicketVendorOrders from '../components/TicketVendorOrders.vue';
 import TicketTasks from '../components/TicketTasks.vue';
+import TicketLinks from '../components/TicketLinks.vue';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -644,6 +645,8 @@ const showProgressUpdate = computed(() => (
               </span>
             </div>
           </div>
+
+          <TicketLinks :ticket="ticket" @changed="load(true)" />
 
           <div class="field">
             <label>Notes &amp; parts</label>

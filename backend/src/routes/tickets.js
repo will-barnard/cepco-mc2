@@ -295,6 +295,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   const [
     estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows, siblingRows,
+    linkRows,
   ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
@@ -380,6 +381,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
             WHERE c.source_ticket_id = $1 AND c.archived = FALSE
             ORDER BY c.created_at`, [req.params.id]),
     siblingsQuery,
+    query('SELECT * FROM ticket_links WHERE ticket_id = $1 ORDER BY position, id', [req.params.id]),
   ]);
 
   res.json({
@@ -393,6 +395,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     invoices: invoiceRows.rows,
     child_tickets: childRows.rows,
     sibling_tickets: siblingRows.rows,
+    links: linkRows.rows,
   });
 }));
 

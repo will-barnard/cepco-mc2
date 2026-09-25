@@ -46,6 +46,7 @@ app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/shopify', require('./routes/shopifyWebhooks'));
 app.use('/api/tickets', require('./routes/tickets'));
+app.use('/api/ticket-links', require('./routes/ticketLinks'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/estimates', require('./routes/estimates'));
 app.use('/api/quotes', require('./routes/quotes'));
