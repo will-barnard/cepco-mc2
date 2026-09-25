@@ -15,6 +15,13 @@ import { renderNamingTemplate, templateUsesToken } from '../ticketNaming';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
+import AddressFields from '../components/AddressFields.vue';
+import { CUSTOMER_SOURCES, blankAddress } from '../customerSources';
+
+// Shop-local "today" (the shop is in Chicago) as YYYY-MM-DD -- same
+// helper DashboardView/RentalCalendarView use, so a ticket opened late in
+// the evening doesn't default to tomorrow's UTC date.
+const shopToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
 
 const router = useRouter();
 const settings = useSettings();
@@ -77,10 +84,18 @@ const form = ref({
   customer_id: '',
   instrument_id: '',
   technician_ids: [],
+  // Published as the ticket's first note (ticket_notes, migration 061) --
+  // see routes/tickets.js's insertTicketRow. Not a live-edited field
+  // anymore once the ticket exists.
   notes: '',
-  drop_off_date: '',
+  // "Date of Order/Queue" -- still the drop_off_date column underneath
+  // (the Queue page sorts by it); defaults to today since most tickets
+  // are opened the day the job comes in.
+  drop_off_date: shopToday,
   due_date: '',
   multi_instrument: false,
+  // QC is assumed for every repair now (shop feedback, Sep 2026) -- no
+  // checkbox to opt out. Only a shipping ticket turns it off, below.
   qc_required: true,
   // Every Orders & Shipping ticket is a shipping/logistics job now — no
   // checkbox to ask (see NOTES.md) — so this is only ever meaningful once
@@ -115,13 +130,14 @@ function pickCategory(key) {
   form.value.subcategory_other_text = '';
   if (key === 'orders_shipping') {
     // qc_required is meaningless once is_shipping hides the whole QC/
-    // Invoicing story (its checkbox is hidden below too) — keep the
-    // stored value honest rather than leaving a stale `true` sitting
-    // unused. Safe to set unconditionally here since the checkbox is
-    // unreachable while this category is picked, so nothing overwrites it
-    // afterward.
+    // Invoicing story — keep the stored value honest rather than leaving
+    // a stale `true` sitting unused.
     form.value.qc_required = false;
   } else {
+    // ...and back on for everything else: there's no checkbox anymore
+    // (QC is assumed for every repair), so switching away from Orders &
+    // Shipping is the only thing that could have turned it off.
+    form.value.qc_required = true;
     // The contact-info field only ever shows under Orders & Shipping
     // (below) — clear it on the way out so switching categories and back
     // doesn't leave a stale destination the user never actually confirmed
@@ -186,13 +202,27 @@ function pickSubcategory(key) {
   form.value.subcategory_other_text = '';
 }
 
-// Creating an instrument inline: retyping a customer's piano into a separate
-// screen first is friction nobody will tolerate at intake.
-const newInstrument = ref({ enabled: false, family: 'rhodes', model: '', year: '', serial_no: '', nickname: '' });
+// The instrument is entered right here as Brand + Model (shop feedback,
+// Sep 2026) -- no "add a new instrument instead" checkbox, and no
+// "— none —" dropdown to get past first. "Brand" is the UI name for an
+// instrument family (instruments.FAMILIES); blank means no instrument
+// (Housekeeping, Daily To-Do's, etc). A returning customer's instruments
+// on file are still offered as a shortcut above it -- picking one (via
+// form.instrument_id) replaces these fields rather than creating a
+// duplicate instrument record.
+const newInstrument = ref({ family: '', model: '', year: '', serial_no: '', nickname: '' });
+const usingExistingInstrument = computed(() => Boolean(form.value.instrument_id));
 
-// Creating a customer inline, same reasoning as the instrument above: a walk-in
-// customer shouldn't need a trip to the Customers page before we can open their ticket.
-const newCustomer = ref({ enabled: false, name: '', email: '', phone: '', source: 'direct' });
+// Creating a customer inline: a walk-in customer shouldn't need a trip to
+// the Customers page before we can open their ticket. Address is
+// structured (migration 060) because this is what lands on the Xero
+// contact the customer gets pushed to.
+function blankNewCustomer() {
+  return {
+    enabled: false, name: '', email: '', phone: '', source: 'direct', address: blankAddress(),
+  };
+}
+const newCustomer = ref(blankNewCustomer());
 
 // N9: multi-instrument jobs. Boss's call was sibling tickets — one full
 // ticket per instrument, linked as a family — over a join table, reusing
@@ -204,8 +234,10 @@ const newCustomer = ref({ enabled: false, name: '', email: '', phone: '', source
 const siblingInstruments = ref([]);
 function blankSibling() {
   return {
-    mode: 'existing', instrument_id: '',
-    family: 'rhodes', model: '', year: '', serial_no: '', nickname: '',
+    // Same default as the primary instrument: type it in, unless there's
+    // something on file to pick.
+    mode: instruments.value.length ? 'existing' : 'new', instrument_id: '',
+    family: '', model: '', year: '', serial_no: '', nickname: '',
   };
 }
 function addSibling() {
@@ -232,12 +264,22 @@ function onCustomerChange(row) {
   selectedCustomer.value = row;
   loadCustomerInstruments();
 }
+// "Add a new customer instead" disables the search box, but whoever was
+// picked there before would otherwise still be submitted -- and their
+// instruments would still be offered as "on file" for someone new.
+watch(() => newCustomer.value.enabled, (on) => {
+  if (!on) return;
+  form.value.customer_id = '';
+  selectedCustomer.value = null;
+  instruments.value = [];
+  form.value.instrument_id = '';
+});
 
 // Whichever instrument type is currently selected, however it got picked —
-// an existing instrument from the customer's list, or the family chosen
-// while adding a new one inline. '' means "nothing selected yet."
+// an existing instrument from the customer's list, or the brand typed in
+// above. '' means "nothing selected yet."
 const selectedFamily = computed(() => {
-  if (newInstrument.value.enabled) return newInstrument.value.family || '';
+  if (!usingExistingInstrument.value) return newInstrument.value.family || '';
   const inst = instruments.value.find((i) => i.id === form.value.instrument_id);
   return inst ? inst.family : '';
 });
@@ -269,9 +311,9 @@ const autoTitlePreview = computed(() => {
     ? newCustomer.value.name.trim()
     : (selectedCustomer.value?.name || '');
 
-  const inst = newInstrument.value.enabled
-    ? newInstrument.value
-    : instruments.value.find((i) => i.id === form.value.instrument_id);
+  const inst = usingExistingInstrument.value
+    ? instruments.value.find((i) => i.id === form.value.instrument_id)
+    : newInstrument.value;
   const nickname = inst?.nickname?.trim() || '';
   const year = inst?.year ? String(inst.year).trim() : '';
   const familyLabel = inst?.family ? refData.familyLabel(inst.family) : '';
@@ -366,17 +408,18 @@ async function submit() {
     if (newCustomer.value.enabled && newCustomer.value.name.trim()) {
       const created = await api.post('/customers', {
         name: newCustomer.value.name.trim(),
-        email: newCustomer.value.email || null,
-        phone: newCustomer.value.phone || null,
+        email: newCustomer.value.email.trim() || null,
+        phone: newCustomer.value.phone.trim() || null,
         source: newCustomer.value.source || null,
+        ...newCustomer.value.address,
       });
       payload.customer_id = created.id;
     }
 
-    if (newInstrument.value.enabled && newInstrument.value.model) {
+    if (!usingExistingInstrument.value && newInstrument.value.family) {
       const created = await api.post('/instruments', {
         family: newInstrument.value.family,
-        model: newInstrument.value.model,
+        model: newInstrument.value.model || null,
         year: newInstrument.value.year || null,
         serial_no: newInstrument.value.serial_no || null,
         nickname: newInstrument.value.nickname.trim() || null,
@@ -436,7 +479,7 @@ async function submit() {
             if (!sib.instrument_id) continue;
             instrumentId = sib.instrument_id;
           } else {
-            if (!sib.model.trim()) continue;
+            if (!sib.family) continue;
             // eslint-disable-next-line no-await-in-loop -- siblings are
             // created one at a time, deliberately: each is an independent
             // POST /tickets call (there's no multi-row transactional
@@ -445,7 +488,7 @@ async function submit() {
             // untangling which one broke.
             const createdInst = await api.post('/instruments', {
               family: sib.family,
-              model: sib.model,
+              model: sib.model || null,
               year: sib.year || null,
               serial_no: sib.serial_no || null,
               nickname: sib.nickname.trim() || null,
@@ -593,24 +636,13 @@ async function submit() {
         </div>
       </div>
 
-      <div class="field-row">
-        <div class="field">
-          <label>Customer</label>
-          <CustomerSearchSelect
-            v-model="form.customer_id" :disabled="newCustomer.enabled"
-            placeholder="Search customers (leave blank for internal / fleet)…"
-            @change="onCustomerChange"
-          />
-        </div>
-        <div class="field">
-          <label>Instrument</label>
-          <select v-model="form.instrument_id" :disabled="newInstrument.enabled">
-            <option value="">— none —</option>
-            <option v-for="i in instruments" :key="i.id" :value="i.id">
-              {{ i.family }} · <template v-if="i.nickname">"{{ i.nickname }}" </template>{{ i.model }}
-            </option>
-          </select>
-        </div>
+      <div class="field">
+        <label>Customer</label>
+        <CustomerSearchSelect
+          v-model="form.customer_id" :disabled="newCustomer.enabled"
+          placeholder="Search customers (leave blank for internal / fleet)…"
+          @change="onCustomerChange"
+        />
       </div>
 
       <div class="field">
@@ -627,55 +659,66 @@ async function submit() {
             <input v-model="newCustomer.name" required placeholder="Steve Dawson" />
           </div>
           <div class="field">
-            <label>Email</label>
-            <input v-model="newCustomer.email" type="email" />
-          </div>
-          <div class="field">
-            <label>Phone</label>
-            <input v-model="newCustomer.phone" />
-          </div>
-          <div class="field">
             <label>Source</label>
             <select v-model="newCustomer.source">
-              <option value="direct">Direct</option>
-              <option value="email">Email</option>
-              <option value="shopify">Shopify</option>
+              <option v-for="src in CUSTOMER_SOURCES" :key="src.value" :value="src.value">{{ src.label }}</option>
             </select>
           </div>
         </div>
-      </div>
-
-      <div class="field">
-        <label class="checkbox">
-          <input v-model="newInstrument.enabled" type="checkbox" />
-          <span>Add a new instrument instead</span>
-        </label>
-      </div>
-
-      <div v-if="newInstrument.enabled" class="card tight" style="margin-bottom: 14px">
         <div class="field-row">
           <div class="field">
-            <label>Family</label>
-            <select v-model="newInstrument.family">
-              <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
-            </select>
+            <label>Email</label>
+            <input v-model="newCustomer.email" type="email" autocomplete="email" />
           </div>
           <div class="field">
-            <label>Model</label>
-            <InstrumentModelPicker :family="newInstrument.family" v-model="newInstrument.model" />
+            <label>Phone</label>
+            <input v-model="newCustomer.phone" type="tel" autocomplete="tel" />
           </div>
-          <div class="field">
-            <label>Year</label>
-            <input v-model="newInstrument.year" placeholder="1972" />
-          </div>
-          <div class="field">
-            <label>Serial</label>
-            <input v-model="newInstrument.serial_no" />
-          </div>
-          <div class="field">
-            <label>Nickname</label>
-            <input v-model="newInstrument.nickname" placeholder="e.g. Old Betsy" />
-          </div>
+        </div>
+        <AddressFields v-model="newCustomer.address" />
+        <p class="muted small" style="margin: 0">
+          Sent to Xero as this contact's billing address when the customer is created.
+        </p>
+      </div>
+
+      <!-- Instrument: Brand + Model right on the form (shop feedback) —
+           a returning customer's instruments on file are a shortcut
+           above it, not a gate in front of it. -->
+      <div v-if="instruments.length" class="field">
+        <label>Instrument on file</label>
+        <select v-model="form.instrument_id">
+          <option value="">— new instrument (enter below) —</option>
+          <option v-for="i in instruments" :key="i.id" :value="i.id">
+            {{ refData.familyLabel(i.family) }} · <template v-if="i.nickname">"{{ i.nickname }}" </template>{{ i.model }}
+          </option>
+        </select>
+      </div>
+
+      <div v-if="!usingExistingInstrument" class="field-row">
+        <div class="field">
+          <label>Brand</label>
+          <select v-model="newInstrument.family">
+            <option value="">— no instrument —</option>
+            <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <InstrumentModelPicker :family="newInstrument.family" v-model="newInstrument.model" />
+        </div>
+      </div>
+      <div v-if="!usingExistingInstrument && newInstrument.family" class="field-row">
+        <div class="field">
+          <label>Year</label>
+          <input v-model="newInstrument.year" placeholder="1972" />
+        </div>
+        <div class="field">
+          <label>Serial</label>
+          <input v-model="newInstrument.serial_no" />
+        </div>
+        <div class="field">
+          <label>Nickname</label>
+          <input v-model="newInstrument.nickname" placeholder="e.g. Old Betsy" />
         </div>
       </div>
 
@@ -692,7 +735,7 @@ async function submit() {
 
       <div class="field-row">
         <div class="field">
-          <label>Drop-off date</label>
+          <label>Date of Order/Queue</label>
           <input v-model="form.drop_off_date" type="date" />
         </div>
         <div class="field">
@@ -704,16 +747,16 @@ async function submit() {
       <div class="field">
         <label>Notes &amp; parts</label>
         <textarea v-model="form.notes" placeholder="Grommets, hammer tips, tune & voice…" />
+        <p class="muted small" style="margin: 4px 0 0">
+          Posted as the ticket's first note<template v-if="form.customer_id || newCustomer.enabled">
+            (and to the customer's Xero history)</template>. More notes can be added from the ticket.
+        </p>
       </div>
 
       <div class="field row">
         <label class="checkbox" style="margin: 0">
           <input v-model="form.multi_instrument" type="checkbox" />
           <span>Multi-instrument job</span>
-        </label>
-        <label v-if="!isShippingCategory" class="checkbox" style="margin: 0">
-          <input v-model="form.qc_required" type="checkbox" />
-          <span>QC required before invoicing</span>
         </label>
       </div>
 
@@ -753,8 +796,8 @@ async function submit() {
           <div class="field" style="flex: none; margin: 0">
             <label>&nbsp;</label>
             <select v-model="sib.mode" style="width: auto">
-              <option value="existing">Existing instrument</option>
-              <option value="new">Add new</option>
+              <option v-if="instruments.length" value="existing">On file</option>
+              <option value="new">New</option>
             </select>
           </div>
           <template v-if="sib.mode === 'existing'">
@@ -766,15 +809,16 @@ async function submit() {
                   v-for="inst in instruments.filter((x) => x.id !== form.instrument_id)"
                   :key="inst.id" :value="inst.id"
                 >
-                  {{ inst.family }} · <template v-if="inst.nickname">"{{ inst.nickname }}" </template>{{ inst.model }}
+                  {{ refData.familyLabel(inst.family) }} · <template v-if="inst.nickname">"{{ inst.nickname }}" </template>{{ inst.model }}
                 </option>
               </select>
             </div>
           </template>
           <template v-else>
             <div class="field" style="margin: 0">
-              <label>Family</label>
+              <label>Brand</label>
               <select v-model="sib.family">
+                <option value="">— pick a brand —</option>
                 <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
               </select>
             </div>

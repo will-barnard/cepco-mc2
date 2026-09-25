@@ -153,6 +153,27 @@ async function updateContact(contactId, payload) {
   return contacts[0];
 }
 
+/**
+ * A contact's History & Notes -- both Xero's own audit entries ("Created",
+ * "Edited") and notes someone typed into the contact's History & Notes
+ * panel ("Note"). Same accounting.contacts scope as everything else here.
+ */
+async function getContactHistory(contactId) {
+  const { HistoryRecords: records = [] } = await apiRequest(`/Contacts/${contactId}/History`);
+  return records;
+}
+
+/** Adds one note to a contact's History & Notes -- what ticket notes are
+ * posted as (services/ticketNotes.js). Xero shows the API app's name as
+ * the "User" on these, hence the author being written into the text. */
+async function addContactNote(contactId, details) {
+  const { HistoryRecords: records = [] } = await apiRequest(`/Contacts/${contactId}/History`, {
+    method: 'PUT',
+    body: { HistoryRecords: [{ Details: details }] },
+  });
+  return records[0];
+}
+
 module.exports = {
-  listContacts, createContact, updateContact,
+  listContacts, createContact, updateContact, getContactHistory, addContactNote,
 };

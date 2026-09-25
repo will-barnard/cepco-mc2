@@ -29,6 +29,8 @@ import { useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
+import AddressFields from '../components/AddressFields.vue';
+import { CUSTOMER_SOURCES, blankAddress, addressFrom } from '../customerSources';
 
 const router = useRouter();
 const settings = useSettings();
@@ -70,7 +72,7 @@ const customerId = ref('');
 // they've even said what instrument they're bringing in. Just enough here
 // (name, source) to get moving into the instrument wizard.
 const newCustomer = ref({ enabled: false, name: '', source: 'direct' });
-const contact = ref({ email: '', phone: '', address: '' });
+const contact = ref({ email: '', phone: '', address: blankAddress() });
 
 // CustomerSearchSelect (a type-ahead replacing the old "every customer in
 // one <select>" picker — search-and-select is a lot less friction once a
@@ -102,18 +104,25 @@ async function loadCustomerInstruments() {
 // customers array, just without needing that array kept around.
 function onCustomerChange(row) {
   selectedCustomer.value = row;
-  contact.value = { email: row?.email || '', phone: row?.phone || '', address: row?.address || '' };
+  contact.value = { email: row?.email || '', phone: row?.phone || '', address: addressFrom(row) };
   loadCustomerInstruments();
 }
 watch(() => newCustomer.value.enabled, (enabled) => {
   if (enabled) {
-    contact.value = { email: '', phone: '', address: '' };
+    contact.value = { email: '', phone: '', address: blankAddress() };
     customerId.value = '';
     selectedCustomer.value = null;
     customerInstruments.value = [];
     blocks.value = [];
   }
 });
+
+// Structured address (migration 060) vs. what's on file -- decides whether
+// the final screen's "confirm contact info" writes back to the customer.
+function addressChanged(draft, row) {
+  const onFile = addressFrom(row);
+  return Object.keys(onFile).some((k) => (draft[k] || '').trim() !== onFile[k].trim());
+}
 
 // --- instrument blocks --------------------------------------------------------
 function blankBlock() {
@@ -489,7 +498,7 @@ async function submit(sendAfterCreate) {
           name: newCustomer.value.name.trim(),
           email: contact.value.email.trim() || null,
           phone: contact.value.phone.trim() || null,
-          address: contact.value.address.trim() || null,
+          ...contact.value.address,
           source: newCustomer.value.source || null,
         });
         resolvedCustomerId = created.id;
@@ -497,13 +506,13 @@ async function submit(sendAfterCreate) {
       } else if (!createdCustomerId.value && selectedCustomer.value
         && (contact.value.email.trim() !== (selectedCustomer.value.email || '')
           || contact.value.phone.trim() !== (selectedCustomer.value.phone || '')
-          || contact.value.address.trim() !== (selectedCustomer.value.address || ''))) {
+          || addressChanged(contact.value.address, selectedCustomer.value))) {
         // Final/Approval screen doubles as "confirm this is still how to
         // reach them" — only writes back when something actually changed.
         await api.patch(`/customers/${resolvedCustomerId}`, {
           email: contact.value.email.trim() || null,
           phone: contact.value.phone.trim() || null,
-          address: contact.value.address.trim() || null,
+          ...contact.value.address,
         });
       }
 
@@ -584,9 +593,7 @@ async function submit(sendAfterCreate) {
           <div class="field">
             <label>Source</label>
             <select v-model="newCustomer.source">
-              <option value="direct">Direct</option>
-              <option value="email">Email</option>
-              <option value="shopify">Shopify</option>
+              <option v-for="src in CUSTOMER_SOURCES" :key="src.value" :value="src.value">{{ src.label }}</option>
             </select>
           </div>
         </div>
@@ -807,10 +814,7 @@ async function submit(sendAfterCreate) {
             <input v-model="contact.phone" placeholder="(555) 555-0100" />
           </div>
         </div>
-        <div class="field">
-          <label>Address</label>
-          <input v-model="contact.address" placeholder="123 Main St, Springfield" />
-        </div>
+        <AddressFields v-model="contact.address" />
         <p v-if="!contact.email.trim()" class="muted small" style="margin: 0">
           Add an email to send this estimate straight to the customer — you can still save it without one.
         </p>

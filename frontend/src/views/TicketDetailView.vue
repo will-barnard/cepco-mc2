@@ -14,6 +14,7 @@ import TicketSubTickets from '../components/TicketSubTickets.vue';
 import TicketVendorOrders from '../components/TicketVendorOrders.vue';
 import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
+import TicketNotes from '../components/TicketNotes.vue';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -43,8 +44,6 @@ const vendorOrdersRef = ref(null);
 const loading = ref(true);
 const error = ref('');
 const statusNote = ref('');
-const notesDraft = ref('');
-const savingNotes = ref(false);
 // "Status notes" (Settings -> Ticket categories -> "Status notes" toggle) —
 // two free-text fields distinct from the status-CHANGE note above
 // (statusNote, attached to the audit log entry when the status dropdown
@@ -221,10 +220,9 @@ async function load(silent = false) {
   try {
     ticket.value = await api.get(`/tickets/${props.id}`);
     // Only resync the drafts on a real load -- a silent background refresh
-    // shouldn't clobber text someone is still mid-typing in Notes / status
+    // shouldn't clobber text someone is still mid-typing in the status
     // notes with whatever the server happened to have at that moment.
     if (!silent) {
-      notesDraft.value = ticket.value.notes || '';
       serviceDoneDraft.value = ticket.value.service_done_notes || '';
       serviceNeededDraft.value = ticket.value.service_needed_notes || '';
     }
@@ -255,12 +253,6 @@ async function patch(payload) {
 async function changeStatus(event) {
   await patch({ status_key: event.target.value, status_note: statusNote.value || null });
   statusNote.value = '';
-}
-
-async function saveNotes() {
-  savingNotes.value = true;
-  await patch({ notes: notesDraft.value });
-  savingNotes.value = false;
 }
 
 async function saveStatusNotes() {
@@ -574,7 +566,7 @@ const showProgressUpdate = computed(() => (
                   <div v-else class="card tight" style="margin-top: 6px">
                     <div class="field-row">
                       <div class="field">
-                        <label>Family</label>
+                        <label>Brand</label>
                         <select v-model="newInstrumentDraft.family">
                           <option v-for="f in refData.families" :key="f" :value="f">
                             {{ refData.familyLabel(f) }}
@@ -648,13 +640,10 @@ const showProgressUpdate = computed(() => (
 
           <TicketLinks :ticket="ticket" @changed="load(true)" />
 
-          <div class="field">
-            <label>Notes &amp; parts</label>
-            <textarea v-model="notesDraft" />
-            <button class="small" :disabled="savingNotes" @click="saveNotes">
-              {{ savingNotes ? 'Saving…' : 'Save notes' }}
-            </button>
-          </div>
+          <!-- Published notes (migration 061) — replaced the live-edited
+               textarea; also posted to / read from the customer's Xero
+               history. -->
+          <TicketNotes :ticket="ticket" @changed="load(true)" />
 
           <div v-if="settings.statusNotesAllowed(ticket.category_key)" class="field">
             <label>Status notes</label>

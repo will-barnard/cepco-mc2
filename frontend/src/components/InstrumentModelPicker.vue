@@ -112,7 +112,7 @@ watch([() => props.modelValue, nodes], () => {
 
 <template>
   <div class="model-picker">
-    <div v-if="!family" class="muted small">Pick a family first.</div>
+    <div v-if="!family" class="muted small">Pick a brand first.</div>
     <template v-else>
       <select
         v-for="(options, depth) in levels" :key="depth"

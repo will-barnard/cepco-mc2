@@ -4,19 +4,56 @@ const express = require('express');
 const { query } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
-const { pushCustomerToXero, createCustomerInXero } = require('../services/xeroSync');
+const {
+  pushCustomerToXero, createCustomerInXero, ADDRESS_FIELDS,
+} = require('../services/xeroSync');
+const { contactHistory } = require('../services/ticketNotes');
 const config = require('../config');
 
 const router = express.Router();
 router.use(requireAuth);
 
+// Mirrors customers_source_check (migrations 047/060). 'xero' is set by
+// the sync itself when it pulls in a Xero-only contact, but is accepted
+// here too so editing such a customer doesn't fail on save.
+const SOURCES = ['direct', 'email', 'shopify', 'reverb', 'ebay', 'instagram', 'facebook', 'xero'];
+
+function cleanSource(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const source = String(raw).trim().toLowerCase();
+  if (!SOURCES.includes(source)) throw badRequest(`source must be one of: ${SOURCES.join(', ')}`);
+  return source;
+}
+
+/** The structured address columns (migration 060) from a request body,
+ * or null when the body doesn't mention any of them -- a caller that only
+ * knows the old single `address` field (EstimateNewView's contact step)
+ * leaves the structured ones alone, and the DB trigger takes it from
+ * there. */
+function addressFromBody(b) {
+  if (!ADDRESS_FIELDS.some((k) => b[k] !== undefined)) return null;
+  return Object.fromEntries(ADDRESS_FIELDS.map((k) => {
+    const v = b[k] === undefined || b[k] === null ? '' : String(b[k]).trim();
+    return [k, v || null];
+  }));
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const params = [];
   let where = '';
+  const clauses = [];
   if (req.query.q) {
     params.push(`%${req.query.q}%`);
-    where = 'WHERE c.name ILIKE $1 OR c.email ILIKE $1';
+    clauses.push(`(c.name ILIKE $${params.length} OR c.email ILIKE $${params.length}
+                   OR c.phone ILIKE $${params.length})`);
   }
+  // Customers page "Source" filter -- e.g. everyone who came in through
+  // Reverb, to know which inbox a past conversation is sitting in.
+  if (req.query.source) {
+    params.push(cleanSource(req.query.source));
+    clauses.push(`c.source = $${params.length}`);
+  }
+  if (clauses.length) where = `WHERE ${clauses.join(' AND ')}`;
   const { rows } = await query(
     `SELECT c.*,
             (SELECT count(*)::int FROM tickets t WHERE t.customer_id = c.id AND t.archived = FALSE)
@@ -67,11 +104,17 @@ router.post('/', asyncHandler(async (req, res) => {
     }
   }
 
+  // Structured fields when the caller sent them; otherwise the legacy
+  // single `address` string, which the DB trigger files under line 1.
+  const address = addressFromBody(b);
   const { rows } = await query(
-    `INSERT INTO customers (name, email, phone, address, source, notes)
-     VALUES ($1,$2,$3,$4,COALESCE($5,'direct'),$6) RETURNING *`,
-    [String(b.name).trim(), email || null, b.phone || null, b.address || null,
-      b.source || null, b.notes || null],
+    `INSERT INTO customers (name, email, phone, address, source, notes,
+                            address_line1, address_line2, city, region, postal_code, country)
+     VALUES ($1,$2,$3,$4,COALESCE($5,'direct'),$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+    [String(b.name).trim(), email || null, b.phone ? String(b.phone).trim() : null,
+      address ? null : (b.address || null),
+      cleanSource(b.source), b.notes || null,
+      ...ADDRESS_FIELDS.map((k) => (address ? address[k] : null))],
   );
   let customer = rows[0];
 
@@ -95,14 +138,26 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
+  // Unlike the COALESCE'd fields, a structured address is replaced as a
+  // whole whenever any part of it is sent -- clearing "Apt 2" has to be
+  // possible, and COALESCE can't express "set this back to empty".
+  const address = addressFromBody(b);
   const { rows } = await query(
     `UPDATE customers SET
        name = COALESCE($2, name), email = COALESCE($3, email),
-       phone = COALESCE($4, phone), address = COALESCE($5, address),
-       source = COALESCE($6, source), notes = COALESCE($7, notes)
+       phone = COALESCE($4, phone),
+       address = CASE WHEN $8::boolean THEN address ELSE COALESCE($5, address) END,
+       source = COALESCE($6, source), notes = COALESCE($7, notes),
+       address_line1 = CASE WHEN $8::boolean THEN $9  ELSE address_line1 END,
+       address_line2 = CASE WHEN $8::boolean THEN $10 ELSE address_line2 END,
+       city          = CASE WHEN $8::boolean THEN $11 ELSE city END,
+       region        = CASE WHEN $8::boolean THEN $12 ELSE region END,
+       postal_code   = CASE WHEN $8::boolean THEN $13 ELSE postal_code END,
+       country       = CASE WHEN $8::boolean THEN $14 ELSE country END
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.name || null, b.email || null, b.phone || null,
-      b.address || null, b.source || null, b.notes === undefined ? null : b.notes],
+      b.address || null, cleanSource(b.source), b.notes === undefined ? null : b.notes,
+      Boolean(address), ...ADDRESS_FIELDS.map((k) => (address ? address[k] : null))],
   );
   if (!rows[0]) throw notFound('Customer not found');
   let customer = rows[0];
@@ -125,6 +180,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   }
 
   res.json({ ...customer, xero_push_error: xeroPushError });
+}));
+
+// Xero's own History & Notes for this customer's linked contact -- read
+// live, never stored here (see services/ticketNotes.js's contactHistory).
+// 200 with `linked: false` rather than a 404 for an unlinked customer, so
+// the ticket page can simply not show the section.
+router.get('/:id/xero-history', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT id, xero_contact_id FROM customers WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw notFound('Customer not found');
+  if (!rows[0].xero_contact_id || !config.xero.clientId) {
+    res.json({ linked: false, records: [] });
+    return;
+  }
+  try {
+    res.json({ linked: true, records: await contactHistory(rows[0].xero_contact_id) });
+  } catch (err) {
+    // Xero being unreachable shouldn't break the page this is embedded in.
+    res.json({ linked: true, records: [], error: err.message });
+  }
 }));
 
 module.exports = router;

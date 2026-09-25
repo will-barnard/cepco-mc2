@@ -37,19 +37,25 @@
  *      resolved silently — an admin glancing at a sync result should be
  *      able to see when that happened and to whom.
  *
- * Known limitation, deliberate: Xero's Addresses/Phones are structured
- * (line1/city/region/postal, typed phone numbers); customers.address and
- * .phone are single free-text fields. Pulling from Xero flattens the
- * structured fields into one string; pushing to Xero sends the whole
- * free-text address as AddressLine1 and the whole phone as a single
- * PhoneNumber. Good enough to have the data present and usable on both
- * sides; not a substitute for entering a new address directly in Xero
- * when its structure actually matters there (e.g. printed on an invoice).
+ * Addresses are structured on both sides (migration 060): customers'
+ * address_line1/address_line2/city/region/postal_code/country map onto
+ * one Xero address. Which Xero address: POBOX, which Xero's contact screen
+ * labels "Billing address" and is what prints on an invoice -- the whole
+ * reason the structure matters. A pull falls back to STREET ("Delivery
+ * address") when POBOX is empty, since that's where the old version of
+ * this sync pushed to. A push only ever writes POBOX, so a separate
+ * delivery address kept in Xero is left alone. customers.address is now
+ * just the flattened display form, kept in step by a DB trigger.
+ *
+ * Phones are still flattened: Xero's typed phone numbers vs. one
+ * free-text customers.phone. A pull joins country/area/number into one
+ * string; a push sends the whole thing as a single DEFAULT PhoneNumber.
  */
 
 const { query } = require('../db');
 const xero = require('../xero');
 const settings = require('./settings');
+const { pushPendingNotes } = require('./ticketNotes');
 
 // --- field mapping -----------------------------------------------------
 
@@ -70,12 +76,47 @@ function addressFromXero(xc) {
   return joined || null;
 }
 
+// The structured customer address columns (migration 060), in the order
+// every INSERT/UPDATE below lists them.
+const ADDRESS_FIELDS = ['address_line1', 'address_line2', 'city', 'region', 'postal_code', 'country'];
+
+const hasAddress = (row) => ADDRESS_FIELDS.some((k) => row && row[k]);
+
+function xeroAddressHasContent(a) {
+  return Boolean(a) && [a.AddressLine1, a.AddressLine2, a.AddressLine3, a.AddressLine4,
+    a.City, a.Region, a.PostalCode, a.Country].some(Boolean);
+}
+
+/** Billing (POBOX) first, then delivery (STREET) -- see the header. */
+function pickXeroAddress(xc) {
+  const addrs = (xc.Addresses || []).filter(xeroAddressHasContent);
+  return addrs.find((a) => a.AddressType === 'POBOX')
+    || addrs.find((a) => a.AddressType === 'STREET')
+    || addrs[0]
+    || null;
+}
+
+/** Xero's address as customers' structured columns. Xero has four
+ * address lines to our two; lines 2-4 fold into address_line2. */
+function structuredAddressFromXero(xc) {
+  const a = pickXeroAddress(xc);
+  if (!a) return Object.fromEntries(ADDRESS_FIELDS.map((k) => [k, null]));
+  return {
+    address_line1: a.AddressLine1 || null,
+    address_line2: [a.AddressLine2, a.AddressLine3, a.AddressLine4].filter(Boolean).join(', ') || null,
+    city: a.City || null,
+    region: a.Region || null,
+    postal_code: a.PostalCode || null,
+    country: a.Country || null,
+  };
+}
+
 function mcFieldsFromXero(xc) {
   return {
     name: xc.Name || '(unnamed Xero contact)',
     email: xc.EmailAddress || null,
     phone: phoneFromXero(xc),
-    address: addressFromXero(xc),
+    ...structuredAddressFromXero(xc),
   };
 }
 
@@ -83,10 +124,44 @@ function xeroPayloadFromMc(customer) {
   const payload = { Name: customer.name };
   if (customer.email) payload.EmailAddress = customer.email;
   if (customer.phone) payload.Phones = [{ PhoneType: 'DEFAULT', PhoneNumber: String(customer.phone).slice(0, 50) }];
-  if (customer.address) {
-    payload.Addresses = [{ AddressType: 'STREET', AddressLine1: String(customer.address).slice(0, 500) }];
+  if (hasAddress(customer)) {
+    // Xero's own field limits: 500 chars per address line, 255 for
+    // city/region/country, 50 for postal code.
+    const cut = (v, n) => (v ? String(v).slice(0, n) : '');
+    payload.Addresses = [{
+      AddressType: 'POBOX',
+      AddressLine1: cut(customer.address_line1, 500),
+      AddressLine2: cut(customer.address_line2, 500),
+      City: cut(customer.city, 255),
+      Region: cut(customer.region, 255),
+      PostalCode: cut(customer.postal_code, 50),
+      Country: cut(customer.country, 50),
+    }];
   }
   return payload;
+}
+
+/**
+ * One-time upgrade for a customer whose address was pulled from Xero
+ * *before* migration 060: back then the pull flattened Xero's structured
+ * address into one string (addressFromXero, above -- that exact format),
+ * which the migration then moved into address_line1 whole. Pushing that
+ * back to Xero as-is would write "12 Elm St, Austin, TX, 78701" into
+ * Xero's AddressLine1 and blank out its City/Region/PostalCode.
+ *
+ * Only fires when line 1 is the *only* address field set and it matches
+ * Xero's own address in that old flattened format exactly -- i.e. it
+ * provably came from Xero and nobody has edited it since. Anything else
+ * (an address typed into MC2, or edited since) is left for the normal
+ * pull/push rules. Returns the structured replacement, or null.
+ */
+function legacyAddressUpgrade(mc, xc) {
+  if (!mc.address_line1) return null;
+  if (ADDRESS_FIELDS.slice(1).some((k) => mc[k])) return null;
+  const legacy = addressFromXero(xc);
+  if (!legacy || legacy.trim() !== mc.address_line1.trim()) return null;
+  const structured = structuredAddressFromXero(xc);
+  return hasAddress(structured) ? structured : null;
 }
 
 // --- matching ------------------------------------------------------------
@@ -150,6 +225,7 @@ async function runXeroSync() {
   const handledMcIds = new Set();
   const stats = {
     mc2_created: 0, mc2_updated: 0, xero_created: 0, xero_updated: 0, linked: 0, unchanged: 0,
+    addresses_upgraded: 0,
   };
   const conflicts = [];
 
@@ -190,9 +266,10 @@ async function runXeroSync() {
       // No match anywhere — a contact that exists only in Xero.
       const fields = mcFieldsFromXero(xc);
       const { rows } = await query( // eslint-disable-line no-await-in-loop
-        `INSERT INTO customers (name, email, phone, address, source, xero_contact_id, xero_synced_at)
-         VALUES ($1, $2, $3, $4, 'xero', $5, now()) RETURNING id`,
-        [fields.name, fields.email, fields.phone, fields.address, xc.ContactID],
+        `INSERT INTO customers (name, email, phone, address_line1, address_line2, city, region,
+                                postal_code, country, source, xero_contact_id, xero_synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'xero', $10, now()) RETURNING id`,
+        [fields.name, fields.email, fields.phone, ...ADDRESS_FIELDS.map((k) => fields[k]), xc.ContactID],
       );
       handledMcIds.add(rows[0].id);
       stats.mc2_created += 1;
@@ -201,6 +278,26 @@ async function runXeroSync() {
 
     handledMcIds.add(mc.id);
     if (isNewLink) stats.linked += 1;
+
+    // See legacyAddressUpgrade's header. Written with xero_synced_at =
+    // now() in the same statement (same trick as stampLink below), so the
+    // upgrade itself never reads as "changed in MC2" on the next run; and
+    // `mc` is updated in memory so a push later in this same iteration
+    // sends the structured version, not the old flattened one.
+    const upgraded = mc.xero_contact_id ? legacyAddressUpgrade(mc, xc) : null;
+    if (upgraded) {
+      const { rows: upRows } = await query( // eslint-disable-line no-await-in-loop
+        `UPDATE customers SET address_line1 = $1, address_line2 = $2, city = $3, region = $4,
+                              postal_code = $5, country = $6, xero_synced_at = now()
+          WHERE id = $7 RETURNING *`,
+        [...ADDRESS_FIELDS.map((k) => upgraded[k]), mc.id],
+      );
+      // Only the address changed, so keep the pre-upgrade sync baseline
+      // for the change-detection below -- otherwise a real MC2 edit made
+      // before this run would be masked by the fresh xero_synced_at.
+      mc = { ...upRows[0], xero_synced_at: mc.xero_synced_at, updated_at: mc.updated_at };
+      stats.addresses_upgraded += 1;
+    }
 
     const lastSync = mc.xero_synced_at ? new Date(mc.xero_synced_at) : null;
     const xeroChanged = !lastSync || new Date(xc.UpdatedDateUTC) > lastSync;
@@ -249,19 +346,25 @@ async function runXeroSync() {
       // place). Every later pull (a real "Xero changed since last sync")
       // still overwrites outright, same as always — this merge is only
       // for the first reconciliation of a pair.
+      // The address merges as one unit, not field by field -- MC2's city
+      // glued onto Xero's street would be an address nobody entered.
+      const addressSource = isNewLink && hasAddress(mc) ? mc : fields;
       const toWrite = isNewLink
         ? {
           name: mc.name || fields.name,
           email: mc.email || fields.email,
           phone: mc.phone || fields.phone,
-          address: mc.address || fields.address,
+          ...Object.fromEntries(ADDRESS_FIELDS.map((k) => [k, addressSource[k] || null])),
         }
         : fields;
       await query( // eslint-disable-line no-await-in-loop
-        `UPDATE customers SET name = $1, email = $2, phone = $3, address = $4,
-                                xero_contact_id = $5, xero_synced_at = now()
-          WHERE id = $6`,
-        [toWrite.name, toWrite.email, toWrite.phone, toWrite.address, xc.ContactID, mc.id],
+        `UPDATE customers SET name = $1, email = $2, phone = $3,
+                              address_line1 = $4, address_line2 = $5, city = $6, region = $7,
+                              postal_code = $8, country = $9,
+                              xero_contact_id = $10, xero_synced_at = now()
+          WHERE id = $11`,
+        [toWrite.name, toWrite.email, toWrite.phone, ...ADDRESS_FIELDS.map((k) => toWrite[k]),
+          xc.ContactID, mc.id],
       );
       stats.mc2_updated += 1;
     } else if (action === 'push') {
@@ -296,7 +399,19 @@ async function runXeroSync() {
     });
   }
 
-  return { ...stats, conflicts };
+  // Ticket notes still waiting on Xero (services/ticketNotes.js) -- run
+  // last, so a customer this very run just linked or created in Xero gets
+  // their queued notes posted now rather than on tomorrow's run. A notes
+  // failure is reported, not thrown: the contact sync above already
+  // succeeded and shouldn't read as failed because of it.
+  let notes;
+  try {
+    notes = await pushPendingNotes();
+  } catch (err) {
+    notes = { error: err.message };
+  }
+
+  return { ...stats, conflicts, notes };
 }
 
 /**
@@ -340,7 +455,9 @@ async function runXeroSync() {
 async function fillMissingFieldsFromXero() {
   const [xeroContacts, mcResult] = await Promise.all([
     xero.listContacts(),
-    query('SELECT id, xero_contact_id, name, email, phone, address FROM customers WHERE xero_contact_id IS NOT NULL'),
+    query(`SELECT id, xero_contact_id, name, email, phone, address_line1, address_line2, city, region,
+                  postal_code, country
+             FROM customers WHERE xero_contact_id IS NOT NULL`),
   ]);
   const byContactId = new Map(xeroContacts.map((xc) => [xc.ContactID, xc]));
 
@@ -359,16 +476,25 @@ async function fillMissingFieldsFromXero() {
     const name = (!mc.name || mc.name === '(unnamed Xero contact)') && xc.Name ? xc.Name : null;
     const email = mc.email ? null : (xc.EmailAddress || null);
     const phone = mc.phone ? null : phoneFromXero(xc);
-    const address = mc.address ? null : addressFromXero(xc);
+    // Whole address or nothing, same as runXeroSync's first-link merge.
+    const xeroAddress = structuredAddressFromXero(xc);
+    const address = !hasAddress(mc) && hasAddress(xeroAddress) ? xeroAddress : null;
     if (!name && !email && !phone && !address) continue; // eslint-disable-line no-continue -- nothing missing, or Xero has nothing to fill it with
 
     await query( // eslint-disable-line no-await-in-loop
       `UPDATE customers SET
-         name = COALESCE($1, name), email = COALESCE(email, $2),
-         phone = COALESCE(phone, $3), address = COALESCE(address, $4)
-       WHERE id = $5`,
-      [name, email, phone, address, mc.id],
+         name = COALESCE($1, name), email = COALESCE(email, $2), phone = COALESCE(phone, $3)
+       WHERE id = $4`,
+      [name, email, phone, mc.id],
     );
+    if (address) {
+      await query( // eslint-disable-line no-await-in-loop
+        `UPDATE customers SET address_line1 = $1, address_line2 = $2, city = $3, region = $4,
+                              postal_code = $5, country = $6
+          WHERE id = $7`,
+        [...ADDRESS_FIELDS.map((k) => address[k]), mc.id],
+      );
+    }
     if (name) nameFilled += 1;
     if (email) emailFilled += 1;
     if (phone) phoneFilled += 1;
@@ -422,9 +548,11 @@ async function createCustomerInXero(customer) {
 }
 
 module.exports = {
+  ADDRESS_FIELDS,
   runXeroSync,
   phoneFromXero,
   addressFromXero,
+  structuredAddressFromXero,
   fillMissingFieldsFromXero,
   pushCustomerToXero,
   createCustomerInXero,

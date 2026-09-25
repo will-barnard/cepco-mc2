@@ -6,6 +6,7 @@ const { asyncHandler } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { verifyWebhookHmac } = require('../shopify');
 const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
+const { insertNote } = require('../services/ticketNotes');
 
 const router = express.Router();
 
@@ -48,15 +49,19 @@ function customerNameFromOrder(order) {
   return order.email || `Shopify order ${order.name || order.id}`;
 }
 
+// Shopify's order address is already structured, so it maps straight onto
+// customers' address columns (migration 060) -- and from there onto the
+// Xero contact's billing address when the customer gets pushed.
 function addressFromOrder(order) {
-  const a = order.shipping_address || order.billing_address;
-  if (!a) return null;
+  const a = order.shipping_address || order.billing_address || {};
   return [
-    a.address1,
-    a.address2,
-    [a.city, a.province, a.zip].filter(Boolean).join(', '),
-    a.country,
-  ].filter(Boolean).join('\n') || null;
+    a.address1 || null,
+    a.address2 || null,
+    a.city || null,
+    a.province_code || a.province || null,
+    a.zip || null,
+    a.country_code || a.country || null,
+  ];
 }
 
 // Match an existing customer by email first (the reliable key Shopify
@@ -74,13 +79,14 @@ async function findOrCreateCustomer(client, order) {
     if (rows[0]) return rows[0];
   }
   const { rows } = await client.query(
-    `INSERT INTO customers (name, email, phone, address, source)
-     VALUES ($1,$2,$3,$4,'shopify') RETURNING *`,
+    `INSERT INTO customers (name, email, phone, source, address_line1, address_line2, city,
+                            region, postal_code, country)
+     VALUES ($1,$2,$3,'shopify',$4,$5,$6,$7,$8,$9) RETURNING *`,
     [
       customerNameFromOrder(order),
       email || null,
       order.phone || (order.customer && order.customer.phone) || null,
-      addressFromOrder(order),
+      ...addressFromOrder(order),
     ],
   );
   return rows[0];
@@ -165,18 +171,18 @@ async function handleOrderCancelled(order) {
   if (!order || !order.id) return;
   const shopifyOrderId = String(order.id);
   const { rows } = await query(
-    'SELECT id, notes, archived FROM tickets WHERE shopify_order_id = $1',
+    'SELECT id, archived FROM tickets WHERE shopify_order_id = $1',
     [shopifyOrderId],
   );
   const ticket = rows[0];
   if (!ticket || ticket.archived) return;
 
-  const note = 'Order cancelled in Shopify.';
-  const newNotes = ticket.notes ? `${ticket.notes}\n\n${note}` : note;
-  await query(
-    'UPDATE tickets SET notes = $1, archived = TRUE, updated_at = now() WHERE id = $2',
-    [newNotes, ticket.id],
-  );
+  // A published note (migration 061) rather than appending to the old
+  // tickets.notes text. No author, so it isn't posted to Xero.
+  await withTransaction(async (client) => {
+    await insertNote(client, { ticketId: ticket.id, body: 'Order cancelled in Shopify.', createdBy: null });
+    await client.query('UPDATE tickets SET archived = TRUE, updated_at = now() WHERE id = $1', [ticket.id]);
+  });
 }
 
 router.post('/webhooks', asyncHandler(async (req, res) => {

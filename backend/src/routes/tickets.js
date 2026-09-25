@@ -7,6 +7,7 @@ const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
 const { FAMILIES, FAMILY_LABELS } = require('./instruments');
+const { insertNote, pushPendingNotes } = require('../services/ticketNotes');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -149,8 +150,12 @@ router.get('/', asyncHandler(async (req, res) => {
   if (req.query.fleet === 'true') clauses.push('i.is_fleet = TRUE');
   if (req.query.q) {
     params.push(`%${req.query.q}%`);
+    // Published notes (migration 061) are searched alongside the old
+    // tickets.notes column, which still holds pre-migration text.
     clauses.push(`(t.title ILIKE $${params.length} OR t.notes ILIKE $${params.length}
-                   OR c.name ILIKE $${params.length} OR i.model ILIKE $${params.length})`);
+                   OR c.name ILIKE $${params.length} OR i.model ILIKE $${params.length}
+                   OR EXISTS (SELECT 1 FROM ticket_notes tn
+                               WHERE tn.ticket_id = t.id AND tn.body ILIKE $${params.length}))`);
   }
 
   // Archived tickets are hidden unless asked for.
@@ -295,7 +300,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   const [
     estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows, siblingRows,
-    linkRows,
+    linkRows, noteRows,
   ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
@@ -382,6 +387,10 @@ router.get('/:id', asyncHandler(async (req, res) => {
             ORDER BY c.created_at`, [req.params.id]),
     siblingsQuery,
     query('SELECT * FROM ticket_links WHERE ticket_id = $1 ORDER BY position, id', [req.params.id]),
+    // Published notes (migration 061), oldest first -- read like a thread.
+    query(`SELECT n.*, emp.name AS created_by_name
+             FROM ticket_notes n LEFT JOIN employees emp ON emp.id = n.created_by
+            WHERE n.ticket_id = $1 ORDER BY n.created_at, n.id`, [req.params.id]),
   ]);
 
   res.json({
@@ -396,6 +405,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     child_tickets: childRows.rows,
     sibling_tickets: siblingRows.rows,
     links: linkRows.rows,
+    notes_log: noteRows.rows,
   });
 }));
 
@@ -564,7 +574,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
       b.instrument_id || null,
       b.customer_id || null,
       b.shop_contact_id || null,
-      b.notes || null,
+      // tickets.notes is no longer written (migration 061) -- b.notes
+      // becomes this ticket's first published note instead, just below.
+      null,
       b.drop_off_date || null,
       b.due_date || null,
       b.multi_instrument === true,
@@ -588,6 +600,12 @@ async function insertTicketRow(client, b, resolved, createdById) {
     ],
   );
   const created = rows[0];
+
+  // Every creation path's `notes` lands here, in the same transaction as
+  // the ticket. A note with an author is queued for the customer's Xero
+  // history; POST / below pushes it once this transaction commits, and
+  // every other path's is picked up by the next Xero sync.
+  await insertNote(client, { ticketId: created.id, body: b.notes, createdBy: createdById });
 
   await client.query(
     `INSERT INTO status_change_log (ticket_id, old_status, new_status, old_label, new_label, changed_by, note)
@@ -858,6 +876,13 @@ router.post('/', asyncHandler(async (req, res) => {
     return created;
   });
 
+  // After commit: post the intake note to Xero. Not awaited -- ticket
+  // creation shouldn't wait on Xero, and the outcome is recorded on the
+  // note row (shown on the ticket page) either way.
+  pushPendingNotes({ ticketId: ticket.id }).catch((err) => {
+    console.error(`[ticket-notes] Xero push for ticket #${ticket.id} failed: ${err.message}`);
+  });
+
   res.status(201).json(ticket);
 }));
 
@@ -1013,6 +1038,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          instrument_id    = CASE WHEN $16::boolean THEN $17 ELSE instrument_id END,
          customer_id      = CASE WHEN $18::boolean THEN $19 ELSE customer_id END,
          shop_contact_id  = CASE WHEN $20::boolean THEN $21 ELSE shop_contact_id END,
+         -- Legacy: no screen sends notes on PATCH anymore -- notes are
+         -- published through routes/ticketNotes.js (migration 061). Left
+         -- accepted so an old client doesn't 400.
          notes            = COALESCE($22, notes),
          drop_off_date    = COALESCE($23, drop_off_date),
          due_date         = COALESCE($24, due_date),

@@ -41,6 +41,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
+import PrioritySelect from '../components/PrioritySelect.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -277,6 +278,16 @@ async function persistOrder(statusKey) {
   }
 }
 
+// Inline priority change (PrioritySelect) -- re-fetch quietly afterwards:
+// the unfiltered "All instruments" view sorts by priority, so the row may
+// need to move; a queue-ordered view just picks up the new label.
+function onPriorityChanged() {
+  load(true);
+}
+function onPriorityError(message) {
+  error.value = `Couldn't change priority: ${message}`;
+}
+
 /** "Sam Tech, Jamie Tech" — who's on each ticket isn't otherwise implied by
  * which queue (category or instrument type) you're looking at. */
 function techNames(t) {
@@ -301,7 +312,7 @@ function dropOffDate(t) {
         <p class="muted small" style="margin: 0">
           Drag a ticket to move it within an instrument type's queue or a category's queue —
           grouped by status, and only reorderable within a status section, with no other filters
-          narrowing the list. The new order saves as soon as you drop it.
+          narrowing the list. The new order saves as soon as you drop it. Change a ticket's priority right from its row.
         </p>
       </div>
       <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
@@ -397,7 +408,7 @@ function dropOffDate(t) {
           <select v-model="filters.sort">
             <option value="">Priority / queue order</option>
             <option value="status">Status progression</option>
-            <option value="date">Drop-off date</option>
+            <option value="date">Date of Order/Queue</option>
           </select>
         </div>
         <div ref="hideMenuEl" class="hide-status-field">
@@ -435,7 +446,10 @@ function dropOffDate(t) {
     <!-- Not a clean single queue right now (see canReorder) — same plain,
          optionally status-grouped table the old Tickets page rendered. -->
     <div v-else-if="!canReorder" class="card tight" :style="refreshing ? 'opacity: 0.6' : ''">
-      <TicketTable :tickets="tickets" :group-by-status="isQueueOrdered" />
+      <TicketTable
+        :tickets="tickets" :group-by-status="isQueueOrdered" editable-priority
+        @priority-changed="onPriorityChanged" @error="onPriorityError"
+      />
     </div>
 
     <div v-else-if="!tickets.length" class="empty">No tickets in this queue.</div>
@@ -475,7 +489,8 @@ function dropOffDate(t) {
                 </span>
               </div>
             </div>
-            <span class="muted small nowrap" title="Drop-off date">
+            <PrioritySelect :ticket="row.ticket" @changed="onPriorityChanged" @error="onPriorityError" />
+            <span class="muted small nowrap" title="Date of Order/Queue">
               {{ dropOffDate(row.ticket) }}
             </span>
             <span class="muted small nowrap" style="min-width: 140px; text-align: right">

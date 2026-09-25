@@ -3,6 +3,11 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings } from '../stores';
+import AddressFields from '../components/AddressFields.vue';
+import XeroHistory from '../components/XeroHistory.vue';
+import {
+  CUSTOMER_SOURCES, XERO_SOURCE, sourceLabel, blankAddress, addressFrom,
+} from '../customerSources';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -11,20 +16,31 @@ const route = useRoute();
 const customers = ref([]);
 const selected = ref(null);
 const search = ref('');
+const sourceFilter = ref('');
 const showNew = ref(false);
 const error = ref('');
-const form = ref({ name: '', email: '', phone: '', address: '', source: 'direct', notes: '' });
+// Address is the structured object AddressFields edits (migration 060),
+// spread flat into the request body on save.
+function blankCustomerForm() {
+  return {
+    name: '', email: '', phone: '', address: blankAddress(), source: 'direct', notes: '',
+  };
+}
+const form = ref(blankCustomerForm());
 
 const editingCustomer = ref(false);
-const editForm = ref({
-  name: '', email: '', phone: '', address: '', source: 'direct', notes: '',
-});
+const editForm = ref(blankCustomerForm());
+
+function customerBody(f) {
+  const { address, ...rest } = f;
+  return { ...rest, ...address };
+}
 const savingCustomer = ref(false);
 const customerNotice = ref('');
 const customerNoticeWarning = ref(false);
 
 async function load() {
-  customers.value = await api.get('/customers', { q: search.value });
+  customers.value = await api.get('/customers', { q: search.value, source: sourceFilter.value });
 }
 
 async function select(id) {
@@ -36,8 +52,8 @@ async function select(id) {
 async function create() {
   error.value = '';
   try {
-    const created = await api.post('/customers', form.value);
-    form.value = { name: '', email: '', phone: '', address: '', source: 'direct', notes: '' };
+    const created = await api.post('/customers', customerBody(form.value));
+    form.value = blankCustomerForm();
     showNew.value = false;
     await load();
     await select(created.id);
@@ -47,6 +63,7 @@ async function create() {
 }
 
 let debounce;
+watch(sourceFilter, () => load());
 watch(search, () => {
   clearTimeout(debounce);
   debounce = setTimeout(load, 250);
@@ -172,7 +189,7 @@ function startEditCustomer() {
     name: selected.value.name || '',
     email: selected.value.email || '',
     phone: selected.value.phone || '',
-    address: selected.value.address || '',
+    address: addressFrom(selected.value),
     source: selected.value.source || 'direct',
     notes: selected.value.notes || '',
   };
@@ -189,7 +206,7 @@ async function saveCustomerEdit() {
   customerNotice.value = '';
   savingCustomer.value = true;
   try {
-    const updated = await api.patch(`/customers/${selected.value.id}`, editForm.value);
+    const updated = await api.patch(`/customers/${selected.value.id}`, customerBody(editForm.value));
     editingCustomer.value = false;
     await select(updated.id); // re-fetch full detail (instruments/tickets included)
     await load(); // list row's name/email may have changed
@@ -276,6 +293,13 @@ const when = (ts) => new Date(ts).toLocaleString();
           MC2: +{{ xeroSyncResult.mc2_created }} created, {{ xeroSyncResult.mc2_updated }} updated ·
           Xero: +{{ xeroSyncResult.xero_created }} created, {{ xeroSyncResult.xero_updated }} updated
           <span v-if="xeroSyncResult.conflicts.length"> · {{ xeroSyncResult.conflicts.length }} conflict(s)</span>
+          <span v-if="xeroSyncResult.notes?.pushed"> · {{ xeroSyncResult.notes.pushed }} ticket note(s) posted</span>
+          <span v-if="xeroSyncResult.notes?.failed" style="color: var(--amber)">
+            · {{ xeroSyncResult.notes.failed }} note(s) failed
+          </span>
+          <span v-if="xeroSyncResult.addresses_upgraded">
+            · {{ xeroSyncResult.addresses_upgraded }} address(es) split into street/city/state/ZIP
+          </span>
         </span>
       </div>
       <ul v-if="xeroSyncResult?.conflicts.length" class="timeline" style="margin-top: 10px">
@@ -314,16 +338,11 @@ const when = (ts) => new Date(ts).toLocaleString();
         <div class="field">
           <label>Source</label>
           <select v-model="form.source">
-            <option value="direct">Direct</option>
-            <option value="email">Email</option>
-            <option value="shopify">Shopify</option>
+            <option v-for="src in CUSTOMER_SOURCES" :key="src.value" :value="src.value">{{ src.label }}</option>
           </select>
         </div>
       </div>
-      <div class="field">
-        <label>Address</label>
-        <input v-model="form.address" />
-      </div>
+      <AddressFields v-model="form.address" />
       <div class="field">
         <label>Notes</label>
         <textarea v-model="form.notes" style="min-height: 60px" />
@@ -333,7 +352,15 @@ const when = (ts) => new Date(ts).toLocaleString();
 
     <div class="grid cols-2">
       <div class="card tight">
-        <input v-model="search" type="search" placeholder="Search customers" style="margin-bottom: 12px" />
+        <div class="row" style="margin-bottom: 12px; flex-wrap: nowrap">
+          <input v-model="search" type="search" placeholder="Search name, email, phone" />
+          <select v-model="sourceFilter" style="width: auto" title="Filter by source">
+            <option value="">All sources</option>
+            <option v-for="src in [...CUSTOMER_SOURCES, XERO_SOURCE]" :key="src.value" :value="src.value">
+              {{ src.label }}
+            </option>
+          </select>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -367,7 +394,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         </div>
         <template v-if="!editingCustomer">
           <p class="muted small" style="margin-top: 8px">
-            {{ [selected.email, selected.phone, selected.source].filter(Boolean).join(' · ') }}
+            {{ [selected.email, selected.phone, sourceLabel(selected.source)].filter(Boolean).join(' · ') }}
           </p>
           <p v-if="selected.address" class="muted small">{{ selected.address }}</p>
           <p v-if="selected.notes">{{ selected.notes }}</p>
@@ -390,17 +417,14 @@ const when = (ts) => new Date(ts).toLocaleString();
             <div class="field">
               <label>Source</label>
               <select v-model="editForm.source">
-                <option value="direct">Direct</option>
-                <option value="email">Email</option>
-                <option value="shopify">Shopify</option>
-                <option value="xero">Xero</option>
+                <option v-for="src in CUSTOMER_SOURCES" :key="src.value" :value="src.value">{{ src.label }}</option>
+                <option v-if="editForm.source === XERO_SOURCE.value" :value="XERO_SOURCE.value">
+                  {{ XERO_SOURCE.label }}
+                </option>
               </select>
             </div>
           </div>
-          <div class="field">
-            <label>Address</label>
-            <input v-model="editForm.address" />
-          </div>
+          <AddressFields v-model="editForm.address" />
           <div class="field">
             <label>Notes</label>
             <textarea v-model="editForm.notes" style="min-height: 60px" />
@@ -433,6 +457,8 @@ const when = (ts) => new Date(ts).toLocaleString();
             <div class="muted small">{{ i.family }}<span v-if="i.year"> · {{ i.year }}</span></div>
           </li>
         </ul>
+
+        <XeroHistory v-if="selected.xero_contact_id" :customer-id="selected.id" style="margin-top: 20px" />
 
         <h3 style="margin-top: 20px">Tickets</h3>
         <div v-if="!selected.tickets.length" class="muted small">No tickets.</div>

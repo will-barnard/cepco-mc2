@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSettings } from '../stores';
+import PrioritySelect from './PrioritySelect.vue';
 
 const props = defineProps({
   tickets: { type: Array, required: true },
@@ -20,7 +21,12 @@ const props = defineProps({
   // is only ever its own contiguous section when the list is grouped.
   // Default null leaves every existing usage unaffected.
   highlightStatus: { type: String, default: null },
+  // Opt-in (QueueView): the Priority column becomes an inline picker
+  // instead of plain text, so a ticket's priority can be changed without
+  // opening it. Emits `priority-changed` / `error` for the parent to act on.
+  editablePriority: { type: Boolean, default: false },
 });
+const emit = defineEmits(['priority-changed', 'error']);
 
 const router = useRouter();
 const settings = useSettings();
@@ -117,7 +123,13 @@ function rowClass(sectionKey) {
               {{ t.status_label || t.status_label_snapshot }}
             </span>
           </td>
-          <td class="small">{{ t.priority_label || t.priority_label_snapshot }}</td>
+          <td class="small">
+            <PrioritySelect
+              v-if="editablePriority" :ticket="t"
+              @changed="emit('priority-changed', t)" @error="(msg) => emit('error', msg)"
+            />
+            <template v-else>{{ t.priority_label || t.priority_label_snapshot }}</template>
+          </td>
           <td class="small">{{ techNames(t) }}</td>
           <td class="right nowrap" :style="hoursOver(t) ? 'color: var(--amber)' : ''">
             {{ hoursLabel(t) }}
