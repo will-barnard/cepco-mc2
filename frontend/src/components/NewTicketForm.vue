@@ -82,6 +82,9 @@ const form = ref({
   subcategory_key: '',
   subcategory_other_text: '',
   priority_key: '',
+  // Migration 063 -- checkbox beside Priority; the Queue's "Fast Track"
+  // quick filter. Carried onto sibling tickets like priority is.
+  fast_track: false,
   status_key: '',
   customer_id: '',
   instrument_id: '',
@@ -568,6 +571,7 @@ async function submit() {
             subcategory_key: payload.subcategory_key,
             subcategory_other_text: payload.subcategory_other_text,
             priority_key: payload.priority_key,
+            fast_track: payload.fast_track,
             status_key: payload.status_key,
             customer_id: payload.customer_id,
             instrument_id: instrumentId,
@@ -684,11 +688,17 @@ async function submit() {
       <div class="field-row">
         <div class="field">
           <label>Priority *</label>
-          <select v-model="form.priority_key" required>
-            <option v-for="p in settings.active('priority_tier')" :key="p.key" :value="p.key">
-              {{ p.label }}
-            </option>
-          </select>
+          <div class="row" style="flex-wrap: nowrap">
+            <select v-model="form.priority_key" required style="flex: 1; min-width: 0">
+              <option v-for="p in settings.active('priority_tier')" :key="p.key" :value="p.key">
+                {{ p.label }}
+              </option>
+            </select>
+            <label class="checkbox nowrap" style="margin: 0">
+              <input v-model="form.fast_track" type="checkbox" />
+              <span>Fast Track</span>
+            </label>
+          </div>
         </div>
         <div class="field">
           <label>Status</label>

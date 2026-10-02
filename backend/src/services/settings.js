@@ -255,6 +255,27 @@ async function validateParentKey(category, key, meta) {
   }
 }
 
+/**
+ * Migration 063: shop_config 'queue_split_view' — meta.value is the ordered
+ * list of ticket_status keys the Queue page shows in its right-hand column.
+ * Checked here because nothing else validates shop_config meta, and a typo'd
+ * key would otherwise just silently never match a ticket. Retired statuses
+ * are allowed (a status retired *after* being picked shouldn't make the
+ * whole setting unsaveable); the Queue page simply has no tickets for it.
+ */
+async function validateQueueSplitView(meta) {
+  const value = meta && meta.value;
+  if (!Array.isArray(value)) throw badRequest('queue_split_view needs meta.value to be a list of status keys');
+  if (new Set(value).size !== value.length) throw badRequest('A status can only appear once in the split view');
+  const { rows } = await query(
+    "SELECT key FROM settings WHERE category = 'ticket_status' AND key = ANY($1)",
+    [value.map(String)],
+  );
+  const known = new Set(rows.map((r) => r.key));
+  const unknown = value.filter((k) => !known.has(String(k)));
+  if (unknown.length) throw badRequest(`Unknown ticket status(es): ${unknown.join(', ')}`);
+}
+
 async function create({
   category, key, label, sort_order, meta,
 }) {
@@ -302,6 +323,9 @@ async function update(id, {
   }
 
   if (meta !== undefined) await validateParentKey(current.category, current.key, meta);
+  if (meta !== undefined && current.category === 'shop_config' && current.key === 'queue_split_view') {
+    await validateQueueSplitView(meta);
+  }
 
   const { rows } = await query(
     `UPDATE settings SET

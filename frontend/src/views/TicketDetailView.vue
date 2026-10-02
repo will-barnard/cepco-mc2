@@ -438,14 +438,26 @@ const showProgressUpdate = computed(() => (
           <div class="field-row">
             <div class="field">
               <label>Priority</label>
-              <select
-                :value="ticket.priority_key"
-                @change="patch({ priority_key: $event.target.value })"
-              >
-                <option v-for="p in settings.active('priority_tier')" :key="p.key" :value="p.key">
-                  {{ p.label }}
-                </option>
-              </select>
+              <!-- Fast Track (migration 063) sits beside priority rather
+                   than being a tier of it: a quick job can be Fast Track
+                   at any priority. The Queue page filters on it. -->
+              <div class="row" style="flex-wrap: nowrap">
+                <select
+                  :value="ticket.priority_key" style="flex: 1; min-width: 0"
+                  @change="patch({ priority_key: $event.target.value })"
+                >
+                  <option v-for="p in settings.active('priority_tier')" :key="p.key" :value="p.key">
+                    {{ p.label }}
+                  </option>
+                </select>
+                <label class="checkbox nowrap" style="margin: 0">
+                  <input
+                    type="checkbox" :checked="!!ticket.fast_track"
+                    @change="patch({ fast_track: $event.target.checked })"
+                  />
+                  <span>Fast Track</span>
+                </label>
+              </div>
             </div>
             <div class="field">
               <label>Category</label>

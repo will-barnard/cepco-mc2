@@ -166,6 +166,9 @@ router.get('/', asyncHandler(async (req, res) => {
     }
   }
   if (req.query.fleet === 'true') clauses.push('i.is_fleet = TRUE');
+  // Queue page's "Fast Track" quick filter (migration 063). Only the TRUE
+  // side is a filter — there's no "show me the non-fast-track ones" view.
+  if (req.query.fast_track === 'true') clauses.push('t.fast_track = TRUE');
   if (req.query.q) {
     params.push(`%${req.query.q}%`);
     // Published notes (migration 061) are searched alongside the old
@@ -571,9 +574,9 @@ async function insertTicketRow(client, b, resolved, createdById) {
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
-       family_queue_position, is_shipping, recurring_ticket_template_id
+       family_queue_position, is_shipping, recurring_ticket_template_id, fast_track
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-               COALESCE($21,'{}'::jsonb),$22,COALESCE($23,TRUE),$24,$25,$26,$27,$28,$29,$30)
+               COALESCE($21,'{}'::jsonb),$22,COALESCE($23,TRUE),$24,$25,$26,$27,$28,$29,$30,$31)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -615,6 +618,10 @@ async function insertTicketRow(client, b, resolved, createdById) {
       // flow) leaves this unset and it stays NULL, same posture as
       // source_ticket_id/source_estimate_id above.
       b.recurring_ticket_template_id || null,
+      // Migration 063. Strict === true like is_shipping/multi_instrument —
+      // callers that build their own object (Shopify webhook, purchases,
+      // recurring templates) never set it, so they stay FALSE.
+      b.fast_track === true,
     ],
   );
   const created = rows[0];
@@ -1147,7 +1154,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          category_queue_position = CASE WHEN $29::boolean THEN $30 ELSE category_queue_position END,
          family_queue_position   = CASE WHEN $31::boolean THEN $32 ELSE family_queue_position END,
          service_done_notes      = COALESCE($33, service_done_notes),
-         service_needed_notes    = COALESCE($34, service_needed_notes)
+         service_needed_notes    = COALESCE($34, service_needed_notes),
+         fast_track              = COALESCE($36, fast_track)
        WHERE id = $1
        RETURNING *`,
       [
@@ -1181,6 +1189,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.service_done_notes === undefined ? null : b.service_done_notes,
         b.service_needed_notes === undefined ? null : b.service_needed_notes,
         ticketNameOverride,
+        // Migration 063 — only a real boolean counts as a touch, so a
+        // stray string/number can't flip the flag.
+        typeof b.fast_track === 'boolean' ? b.fast_track : null,
       ],
     );
 

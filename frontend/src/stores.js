@@ -188,6 +188,17 @@ export const useSettings = defineStore('settings', {
     // level's work impossible to miss. Off by default, same opt-in
     // convention as statusNotesAllowed (migration 042 flags Expedited /
     // SOS on as the one sensible starting example).
+    // Queue page split view (migration 063, Settings -> Queue split view):
+    // the ordered status keys that render in the right-hand column instead
+    // of the main list. Retired/deleted statuses are dropped here rather
+    // than refused at save time, so retiring a status never breaks the
+    // setting — it just stops appearing. Empty = no split.
+    queueSideStatuses: (s) => {
+      const row = (s.data.shop_config || []).find((r) => r.key === 'queue_split_view');
+      const keys = Array.isArray(row?.meta?.value) ? row.meta.value : [];
+      const live = new Set((s.data.ticket_status || []).filter((r) => !r.retired).map((r) => r.key));
+      return keys.filter((k) => live.has(k));
+    },
     highlightTasksForPriority: (s) => (priorityKey) => (
       !!(s.data.priority_tier || []).find((r) => r.key === priorityKey)?.meta?.highlight_in_tasks
     ),

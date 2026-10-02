@@ -109,6 +109,7 @@ function rowClass(sectionKey) {
         >
           <td>
             <strong>{{ t.title }}</strong>
+            <span v-if="t.fast_track" class="tag fast-track-tag">Fast Track</span>
             <div v-if="t.instrument_family" class="muted small">
               {{ t.instrument_family }}<span v-if="t.instrument_model"> · {{ t.instrument_model }}</span>
               <span v-if="t.attachment_count" class="tag" style="margin-left: 6px">

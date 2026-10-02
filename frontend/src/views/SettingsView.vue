@@ -199,6 +199,63 @@ async function setShopifyCategory(row, categoryKey) {
   }
 }
 
+// Queue split view (migration 063): which statuses the Queue page pulls
+// into its right-hand column, in what order. One shop_config row whose
+// meta.value is the ordered key list; the whole list is re-saved on every
+// change (it's a handful of keys), and the backend checks every key is a
+// real status (services/settings.js's validateQueueSplitView).
+const splitViewRow = computed(
+  () => (settings.data.shop_config || []).find((r) => r.key === 'queue_split_view') || null,
+);
+// Raw saved keys, including any since-retired status, so a reorder or
+// removal never silently drops one the admin can still see listed here.
+const splitViewKeys = computed(() => {
+  const v = splitViewRow.value?.meta?.value;
+  return Array.isArray(v) ? v : [];
+});
+const splitViewAddable = computed(
+  () => settings.active('ticket_status').filter((st) => !splitViewKeys.value.includes(st.key)),
+);
+const splitViewAddKey = ref('');
+
+function splitViewLabel(key) {
+  const row = (settings.data.ticket_status || []).find((st) => st.key === key);
+  if (!row) return key;
+  return row.retired ? `${row.label} (retired — not shown)` : row.label;
+}
+
+async function saveSplitView(keys) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.patch(`/settings/${splitViewRow.value.id}`, {
+      meta: { ...splitViewRow.value.meta, value: keys },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+async function addSplitViewStatus() {
+  if (!splitViewAddKey.value) return;
+  const key = splitViewAddKey.value;
+  splitViewAddKey.value = '';
+  await saveSplitView([...splitViewKeys.value, key]);
+}
+
+async function removeSplitViewStatus(key) {
+  await saveSplitView(splitViewKeys.value.filter((k) => k !== key));
+}
+
+async function moveSplitViewStatus(index, delta) {
+  const keys = [...splitViewKeys.value];
+  const target = index + delta;
+  if (target < 0 || target >= keys.length) return;
+  [keys[index], keys[target]] = [keys[target], keys[index]];
+  await saveSplitView(keys);
+}
+
 // Per-category auto-assignment (e.g. every Shipping ticket goes straight to
 // the shipping manager). Stored on the ticket_category row's own meta so no
 // new table is needed; resolveNewTicketFields (backend) reads it whenever a
@@ -522,6 +579,55 @@ onMounted(refresh);
             />
           </div>
         </div>
+      </div>
+
+      <!-- ------------------------------------------- queue split view -->
+      <div class="card">
+        <h2>Queue split view</h2>
+        <p class="muted small" style="margin-top: -6px">
+          Statuses listed here move out of the Queue page's main list into a right-hand column,
+          top to bottom in this order. Everything else stays on the left in workflow order.
+          On phones the right column shows first. Leave it empty for a single list.
+        </p>
+        <p v-if="!splitViewRow" class="muted small">
+          This setting hasn't been created yet — it arrives with migration 063.
+        </p>
+        <template v-else>
+          <p v-if="!splitViewKeys.length" class="muted small">No statuses in the right column.</p>
+          <div v-else class="table-wrap" style="margin-bottom: 12px">
+            <table>
+              <thead>
+                <tr><th>Right column</th><th>Order</th><th /></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(key, i) in splitViewKeys" :key="key">
+                  <td>
+                    <span :class="['pill', settings.colorFor(key)]">{{ splitViewLabel(key) }}</span>
+                  </td>
+                  <td class="nowrap">
+                    <button class="small" :disabled="i === 0" @click="moveSplitViewStatus(i, -1)">↑</button>
+                    <button
+                      class="small" :disabled="i === splitViewKeys.length - 1"
+                      @click="moveSplitViewStatus(i, 1)"
+                    >
+                      ↓
+                    </button>
+                  </td>
+                  <td class="right">
+                    <button class="small" @click="removeSplitViewStatus(key)">Remove</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="splitViewAddable.length" class="row">
+            <select v-model="splitViewAddKey" style="max-width: 280px">
+              <option value="">Add a status…</option>
+              <option v-for="st in splitViewAddable" :key="st.key" :value="st.key">{{ st.label }}</option>
+            </select>
+            <button :disabled="!splitViewAddKey" @click="addSplitViewStatus">Add</button>
+          </div>
+        </template>
       </div>
 
       <div v-for="[category, title] in CATEGORIES" :key="category" class="card">

@@ -549,3 +549,11 @@ tbody tr.row-highlight:hover  { background: var(--surface-2); }
   .folder-tab { padding: 9px 12px 8px; font-size: 13px; }
   .folder-tab-panel { padding: 14px; }
 }
+
+/* --- Fast Track (migration 063) ------------------------------------------ */
+/* Accent-tinted so it reads as distinct from the plain grey .tag used for
+   photo counts etc. Shared by QueueCard.vue and TicketTable.vue. */
+.tag.fast-track-tag {
+  margin-left: 6px; background: rgba(212, 129, 63, 0.15); color: var(--accent);
+  font-weight: 600; vertical-align: middle;
+}
