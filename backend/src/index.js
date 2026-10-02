@@ -47,6 +47,7 @@ app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/shopify', require('./routes/shopifyWebhooks'));
 // Before /api/tickets: see routes/ticketNotes.js's header.
 app.use('/api/tickets/:ticketId/notes', require('./routes/ticketNotes'));
+app.use('/api/tickets/:ticketId/vendor-work', require('./routes/ticketVendorWork'));
 app.use('/api/tickets', require('./routes/tickets'));
 app.use('/api/ticket-links', require('./routes/ticketLinks'));
 app.use('/api/tasks', require('./routes/tasks'));

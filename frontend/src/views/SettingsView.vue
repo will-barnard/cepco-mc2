@@ -23,6 +23,12 @@ const CATEGORIES = [
   ['ticket_status', 'Ticket statuses'],
   ['priority_tier', 'Priority tiers'],
   ['tech_level', 'Tech levels'],
+  // Migration 064: a ticket's Vendor work panel (TicketVendorWork.vue).
+  // Plain lists — the generic table below (rename/reorder/retire/add) is
+  // all either needs. Status colors live in meta.color, seeded by the
+  // migration.
+  ['vendor_track', 'Vendor work types'],
+  ['vendor_status', 'Vendor work statuses'],
 ];
 
 const error = ref('');
@@ -642,7 +648,7 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">Default assignee</th>
                 <th v-if="category === 'ticket_category'">Ship button</th>
                 <th v-if="category === 'ticket_category'">Progress update</th>
-                <th v-if="category === 'ticket_category'">Status notes</th>
+                <th v-if="category === 'ticket_category'">Service log &amp; notes</th>
                 <th v-if="category === 'ticket_category'">Queue picker</th>
                 <th v-if="category === 'ticket_category'">Auto-task from title</th>
                 <th v-if="category === 'ticket_category'">QC</th>
@@ -717,7 +723,7 @@ onMounted(refresh);
                 </td>
 
                 <td v-if="category === 'ticket_category'">
-                  <label class="checkbox" title="Show the Status notes fields (Service done / Service needed) on tickets in this category">
+                  <label class="checkbox" title="Show the Service Log and the Service needed notes on tickets in this category">
                     <input
                       type="checkbox" :checked="!!row.meta.show_status_notes"
                       @change="toggleStatusNotes(row)"

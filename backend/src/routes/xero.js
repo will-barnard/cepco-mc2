@@ -14,6 +14,7 @@
 const express = require('express');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
+const config = require('../config');
 const { runXeroSync, fillMissingFieldsFromXero } = require('../services/xeroSync');
 const {
   computeBackfillCandidates, linkCustomerToXero, dismissMatch,
@@ -24,6 +25,16 @@ const {
 
 const router = express.Router();
 router.use(requireAuth);
+
+// The ticket page's "Xero contact" button (shop feedback, Oct 2026) builds
+// go.xero.com/app/{short_code}/contacts/contact/{xero_contact_id} from
+// this. Open to all staff (no requireAdmin) — it's a link, not data. The
+// short code comes from config (XERO_SHORT_CODE; see config.js for why not
+// the API); null when unset, and the button falls back to Xero's org-less
+// contact URL.
+router.get('/org', (req, res) => {
+  res.json({ short_code: config.xero.shortCode || null });
+});
 
 // Runs the exact same sync the nightly schedule uses (services/
 // xeroScheduler.js) — never a behavioral difference between "it fired on

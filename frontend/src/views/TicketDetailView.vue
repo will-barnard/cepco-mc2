@@ -12,6 +12,9 @@ import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
 import TicketVendorOrders from '../components/TicketVendorOrders.vue';
+import TicketVendorWork from '../components/TicketVendorWork.vue';
+import TicketServiceLog from '../components/TicketServiceLog.vue';
+import { xeroContactUrl } from '../xeroLinks';
 import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
 import TicketNotes from '../components/TicketNotes.vue';
@@ -41,16 +44,19 @@ const estimateRef = ref(null);
 // an open form, or an error, so this is what puts something in it for a
 // ticket that didn't get a Vendor Orders order at creation time.
 const vendorOrdersRef = ref(null);
+// Same idea for Vendor work (migration 064) — "+ Vendor work" up top.
+const vendorWorkRef = ref(null);
+// "Xero contact" button by the customer's name — resolved async since the
+// link may need the org's short code (xeroLinks.js).
+const xeroUrl = ref(null);
 const loading = ref(true);
 const error = ref('');
 const statusNote = ref('');
-// "Status notes" (Settings -> Ticket categories -> "Status notes" toggle) —
-// two free-text fields distinct from the status-CHANGE note above
-// (statusNote, attached to the audit log entry when the status dropdown
-// changes) and from the general Notes & parts field: these track what was
-// actually done on the job vs. what's still outstanding, editable any time
-// rather than only at the moment of a status change.
-const serviceDoneDraft = ref('');
+// "Service needed" (Settings -> Ticket categories -> "Service log & notes"
+// toggle) — free text for what's still outstanding on the job, distinct
+// from the status-CHANGE note above. Its old sibling "Service done" became
+// the Service Log (TicketServiceLog.vue, migration 064); anything typed in
+// it before is shown read-only there.
 const serviceNeededDraft = ref('');
 const savingStatusNotes = ref(false);
 const progressUpdate = ref(null);
@@ -223,7 +229,6 @@ async function load(silent = false) {
     // shouldn't clobber text someone is still mid-typing in the status
     // notes with whatever the server happened to have at that moment.
     if (!silent) {
-      serviceDoneDraft.value = ticket.value.service_done_notes || '';
       serviceNeededDraft.value = ticket.value.service_needed_notes || '';
     }
     if (lastInitializedTicketId.value !== ticket.value.id) {
@@ -239,6 +244,9 @@ async function load(silent = false) {
 
 onMounted(() => load());
 watch(() => props.id, () => load());
+watch(() => ticket.value?.customer_xero_contact_id, async (contactId) => {
+  xeroUrl.value = contactId ? await xeroContactUrl(contactId) : null;
+}, { immediate: true });
 
 async function patch(payload) {
   error.value = '';
@@ -258,7 +266,6 @@ async function changeStatus(event) {
 async function saveStatusNotes() {
   savingStatusNotes.value = true;
   await patch({
-    service_done_notes: serviceDoneDraft.value,
     service_needed_notes: serviceNeededDraft.value,
   });
   savingStatusNotes.value = false;
@@ -395,6 +402,7 @@ const showProgressUpdate = computed(() => (
           + Add estimate
         </button>
         <button class="small" @click="vendorOrdersRef?.openForm()">+ Vendor Orders</button>
+        <button class="small" @click="vendorWorkRef?.openForm()">+ Vendor work</button>
         <button
           v-if="showProgressUpdate && !progressUpdate" class="small"
           :disabled="generatingUpdate" @click="generateUpdate"
@@ -541,6 +549,13 @@ const showProgressUpdate = computed(() => (
                     </RouterLink>
                   </div>
                 </div>
+                <!-- Only for a customer linked to a Xero contact (the nightly
+                     sync / Customers page links them); see xeroLinks.js. -->
+                <a
+                  v-if="ticket.customer_id && xeroUrl" class="btn small" style="margin-top: 6px"
+                  :href="xeroUrl" target="_blank" rel="noopener"
+                  title="Open this customer's contact in Xero"
+                >Xero contact ↗</a>
                 <p v-else style="margin: 0">
                   <span class="muted">
                     {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : '—' }}
@@ -638,17 +653,8 @@ const showProgressUpdate = computed(() => (
             </div>
           </div>
 
-          <div
-            v-if="ticket.vendor_tracks && Object.keys(ticket.vendor_tracks).length"
-            class="field"
-          >
-            <label>Vendor work</label>
-            <div class="row">
-              <span v-for="(v, k) in ticket.vendor_tracks" :key="k" class="tag">
-                {{ k }}: {{ v }}
-              </span>
-            </div>
-          </div>
+          <!-- Imported vendor_tracks moved into the Vendor work card
+               (TicketVendorWork.vue, migration 064), editable now. -->
 
           <TicketLinks :ticket="ticket" @changed="load(true)" />
 
@@ -658,19 +664,10 @@ const showProgressUpdate = computed(() => (
           <TicketNotes :ticket="ticket" @changed="load(true)" />
 
           <div v-if="settings.statusNotesAllowed(ticket.category_key)" class="field">
-            <label>Status notes</label>
-            <div class="field-row">
-              <div class="field">
-                <label class="small muted">Service done</label>
-                <textarea v-model="serviceDoneDraft" style="min-height: 80px" />
-              </div>
-              <div class="field">
-                <label class="small muted">Service needed</label>
-                <textarea v-model="serviceNeededDraft" style="min-height: 80px" />
-              </div>
-            </div>
-            <button class="small" :disabled="savingStatusNotes" @click="saveStatusNotes">
-              {{ savingStatusNotes ? 'Saving…' : 'Save status notes' }}
+            <label>Service needed</label>
+            <textarea v-model="serviceNeededDraft" style="min-height: 80px" />
+            <button class="small" style="margin-top: 6px" :disabled="savingStatusNotes" @click="saveStatusNotes">
+              {{ savingStatusNotes ? 'Saving…' : 'Save' }}
             </button>
           </div>
         </div>
@@ -678,11 +675,20 @@ const showProgressUpdate = computed(() => (
         <TicketPhotos v-if="isMobile" :ticket-id="ticket.id" />
 
         <TicketSubTickets ref="subTicketsRef" :ticket="ticket" @changed="load(true)" />
-        <TicketTasks ref="ticketTasksRef" :ticket="ticket" />
+        <TicketTasks ref="ticketTasksRef" :ticket="ticket" @changed="load(true)" />
+        <!-- Service Log (migration 064) — completed tasks land here on their
+             own; the reload after an edit also refreshes Tasks, since a
+             task's hours live on its log entry. Same per-category toggle
+             the old Service done / Service needed boxes used. -->
+        <TicketServiceLog
+          v-if="!isShipping && settings.statusNotesAllowed(ticket.category_key)" :ticket="ticket"
+          @changed="load(true); ticketTasksRef?.load(true)"
+        />
 
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load(true)" />
         <TicketEstimate v-if="!isShipping" ref="estimateRef" :ticket="ticket" @changed="load(true)" />
         <TicketVendorOrders ref="vendorOrdersRef" :ticket="ticket" />
+        <TicketVendorWork ref="vendorWorkRef" :ticket="ticket" @changed="load(true)" />
         <!-- TicketHours.vue (ticket-level manual hours entry) is hidden for now —
              hours are captured per-task instead, right where a task is marked done
              (see TicketTasks.vue's inline hours field, and routes/tasks.js's PATCH

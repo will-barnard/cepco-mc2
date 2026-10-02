@@ -79,6 +79,13 @@ const config = {
   xero: {
     clientId: process.env.XERO_CLIENT_ID || '',
     clientSecret: process.env.XERO_CLIENT_SECRET || '',
+    // The org's short code — the '!xxxxx' segment in any go.xero.com/app/
+    // URL. Only used to build "open this contact in Xero" links (the
+    // ticket page's Xero contact button); read from config rather than
+    // the API because GET /Organisation needs a settings scope this
+    // contacts-only connection deliberately doesn't have. Optional:
+    // without it the link uses Xero's org-less contact URL.
+    shortCode: process.env.XERO_SHORT_CODE || '',
   },
 };
 

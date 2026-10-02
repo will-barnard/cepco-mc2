@@ -14,11 +14,13 @@
  * Takes the whole `ticket` object (same convention as TicketSubTickets.vue/
  * TicketQc.vue) since it needs `instrument_family` (to filter procedures)
  * and `status_key` (to know whether tasks are currently "live" — see
- * unlockedNote below). Unlike those siblings, it doesn't emit `changed`:
- * tasks aren't embedded in GET /tickets/:id's payload, so a parent reload
- * wouldn't show anything new — this component just re-fetches its own
- * list after a mutation, the same self-contained way TicketPhotos.vue
- * manages its own attachments off of a ticket id.
+ * unlockedNote below). Tasks aren't embedded in GET /tickets/:id's
+ * payload, so this component re-fetches its own list after a mutation,
+ * the same self-contained way TicketPhotos.vue manages its attachments.
+ * It does emit `changed` after checking a task off/on, changing its hours,
+ * or deleting it, though: since migration 064 those write the ticket's
+ * Service Log (hours_log, which *is* in the ticket payload), so the parent
+ * reloads to show it.
  *
  * The task list itself is always visible and editable regardless of the
  * ticket's status, so staff can plan a job's tasks during intake — the
@@ -31,6 +33,7 @@ import api from '../api';
 import { useSettings, useRefData } from '../stores';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
+const emit = defineEmits(['changed']);
 
 const settings = useSettings();
 const refData = useRefData();
@@ -130,6 +133,7 @@ async function toggleDone(task) {
   try {
     await api.patch(`/tasks/${task.id}`, { done: !task.done });
     await load(true);
+    emit('changed');
   } catch (err) {
     error.value = err.message;
   }
@@ -161,13 +165,15 @@ async function setTechLevel(task, techLevelKey) {
 // linking them to the task's standard_procedure_id when it has one, is
 // what eventually lets us show "this procedure has been averaging N hours
 // in practice" back on EstimateNewView.vue instead of a guessed default.
-// Backed by hours_log.ticket_task_id (routes/tasks.js's PATCH /:id), which
-// upserts one row per task -- clearing the field deletes that row.
+// Backed by hours_log.ticket_task_id (routes/tasks.js's PATCH /:id) -- the
+// task's own Service Log entry (migration 064). Clearing the field blanks
+// the hours on that entry; unchecking the task removes the entry.
 async function setHours(task, value) {
   error.value = '';
   try {
     await api.patch(`/tasks/${task.id}`, { hours: value === '' ? null : value });
     await load(true);
+    emit('changed');
   } catch (err) {
     error.value = err.message;
   }
@@ -188,6 +194,7 @@ async function removeTask(task) {
   try {
     await api.del(`/tasks/${task.id}`);
     await load(true);
+    emit('changed');
   } catch (err) {
     error.value = err.message;
   }

@@ -10,6 +10,9 @@
  * (standard_procedure_id + title) or is free-form (standard_procedure_id
  * NULL, title typed directly) — see the migration for why both exist.
  *
+ * Migration 064: checking a task off also writes its Service Log entry
+ * (hours_log) — see PATCH /:id.
+ *
  * Migration 055: hours now live here too, not in a separate ticket-level
  * form (TicketHours.vue is hidden from TicketDetailView.vue for this
  * reason). PATCH /:id accepts an optional `hours` alongside `done: true` —
@@ -279,30 +282,49 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     [req.params.id, title, technicianId, done, doneAt, doneBy, techLevelKey, techLevelLabel],
   );
 
-  // Migration 055: "how many hours did this take" lives on the task now,
-  // recorded (or edited, or cleared) whenever the caller explicitly sends
-  // one — typically alongside `done: true`, but not required to be, so
-  // fixing a number later doesn't need to also re-toggle done. One row per
-  // task (hours_log.ticket_task_id, unique when set) rather than an
-  // appending ledger — re-submitting just replaces the number. Doesn't
-  // apply to an ephemeral task, which has no ticket_id for hours_log to
-  // hang off of in the first place.
-  if (b.hours !== undefined) {
-    if (!existing.ticket_id) throw badRequest('hours require a real ticket, not an ephemeral task');
-    if (b.hours === null || b.hours === '') {
-      await query('DELETE FROM hours_log WHERE ticket_task_id = $1', [req.params.id]);
-    } else {
-      const hours = Number(b.hours);
-      if (!Number.isFinite(hours) || hours <= 0) throw badRequest('hours must be a positive number');
-      if (hours > 24) throw badRequest('hours must be 24 or less for a single entry');
+  // Migration 064 (Service Log): a completed task registers itself in the
+  // ticket's Service Log — which is hours_log — the moment it's checked
+  // off, hours or not; unchecking it takes the entry back out, since an
+  // undone task isn't service that was performed. One row per task
+  // (hours_log.ticket_task_id, unique when set). Ephemeral tasks have no
+  // ticket, so no log.
+  const doneChanged = b.done !== undefined && Boolean(b.done) !== existing.done;
+  if (doneChanged && existing.ticket_id) {
+    if (done) {
       await query(
         `INSERT INTO hours_log (ticket_id, ticket_task_id, employee_id, hours, task_description)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (ticket_task_id) WHERE ticket_task_id IS NOT NULL
-         DO UPDATE SET hours = EXCLUDED.hours, task_description = EXCLUDED.task_description`,
-        [existing.ticket_id, req.params.id, req.user.id, hours, title],
+         VALUES ($1, $2, $3, NULL, $4)
+         ON CONFLICT (ticket_task_id) WHERE ticket_task_id IS NOT NULL DO NOTHING`,
+        [existing.ticket_id, req.params.id, req.user.id, title],
       );
+    } else {
+      await query('DELETE FROM hours_log WHERE ticket_task_id = $1', [req.params.id]);
     }
+  }
+
+  // Migration 055: "how many hours did this take" lives on the task,
+  // recorded (or edited, or cleared) whenever the caller explicitly sends
+  // one — typically alongside `done: true`, but not required to be, so
+  // fixing a number later doesn't need to also re-toggle done. Since 064
+  // this only ever sets the hours on the task's Service Log entry: clearing
+  // the number blanks the hours but keeps the entry (the task is still
+  // done), and the entry's description is left alone, since it may have
+  // been edited from the Service Log since.
+  if (b.hours !== undefined) {
+    if (!existing.ticket_id) throw badRequest('hours require a real ticket, not an ephemeral task');
+    let hours = null;
+    if (b.hours !== null && b.hours !== '') {
+      hours = Number(b.hours);
+      if (!Number.isFinite(hours) || hours <= 0) throw badRequest('hours must be a positive number');
+      if (hours > 24) throw badRequest('hours must be 24 or less for a single entry');
+    }
+    await query(
+      `INSERT INTO hours_log (ticket_id, ticket_task_id, employee_id, hours, task_description)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (ticket_task_id) WHERE ticket_task_id IS NOT NULL
+       DO UPDATE SET hours = EXCLUDED.hours`,
+      [existing.ticket_id, req.params.id, req.user.id, hours, title],
+    );
   }
 
   const { rows: updated } = await query(`${TASK_SELECT} WHERE tk.id = $1`, [req.params.id]);

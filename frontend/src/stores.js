@@ -120,8 +120,9 @@ export const useSettings = defineStore('settings', {
     shipButtonAllowed: (s) => (categoryKey) => (
       !(s.data.ticket_category || []).find((r) => r.key === categoryKey)?.meta?.hide_ship_button
     ),
-    // TicketDetailView.vue's "Status notes" section (Service done / Service
-    // needed) — another Settings -> Ticket categories per-category toggle,
+    // TicketDetailView.vue's Service Log + "Service needed" box (migration
+    // 064; formerly the "Status notes" Service done / Service needed pair)
+    // — another Settings -> Ticket categories per-category toggle,
     // same meta-on-the-category-row mechanism as shipButtonAllowed just
     // above, but opposite default: a brand-new field starts OFF everywhere
     // until an admin opts a category in, rather than starting on and being

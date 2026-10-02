@@ -25,6 +25,10 @@ const CATEGORIES = [
   // pair, since the shop will invent a third award eventually and this way
   // they add it themselves rather than filing an engineering ticket for it.
   'ceppy_category',
+  // Migration 064: outside-vendor work on a ticket (Painting, Woodshop,
+  // ...) and the statuses that work moves through — ticket_vendor_work.
+  'vendor_track',
+  'vendor_status',
   // 'qc_tier' used to live here — retired in migration 021 (see
   // routes/qc.js). Deliberately left out of CATEGORIES so a new one can't
   // be created, but existing rows (retired, not deleted) still resolve()
@@ -42,6 +46,8 @@ const USAGE_SOURCE = {
   priority_tier: { table: 'tickets', column: 'priority_key', noun: 'ticket' },
   tech_level: { table: 'tickets', column: 'tech_level_key', noun: 'ticket' },
   ceppy_category: { table: 'ceppy_nominations', column: 'category_key', noun: 'nomination' },
+  vendor_track: { table: 'ticket_vendor_work', column: 'track_key', noun: 'vendor work record' },
+  vendor_status: { table: 'ticket_vendor_work', column: 'status_key', noun: 'vendor work record' },
 };
 
 async function listAll() {

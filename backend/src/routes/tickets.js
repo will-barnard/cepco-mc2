@@ -321,7 +321,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   const [
     estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows, siblingRows,
-    linkRows, noteRows,
+    linkRows, noteRows, vendorWorkRows,
   ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
@@ -412,6 +412,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
     query(`SELECT n.*, emp.name AS created_by_name
              FROM ticket_notes n LEFT JOIN employees emp ON emp.id = n.created_by
             WHERE n.ticket_id = $1 ORDER BY n.created_at, n.id`, [req.params.id]),
+    // Vendor work (migration 064), in the vendor types' Settings order.
+    query(`SELECT w.*, tr.label AS track_label, st.label AS status_label,
+                  st.meta AS status_meta, emp.name AS updated_by_name
+             FROM ticket_vendor_work w
+             LEFT JOIN settings tr ON tr.category = 'vendor_track'  AND tr.key = w.track_key
+             LEFT JOIN settings st ON st.category = 'vendor_status' AND st.key = w.status_key
+             LEFT JOIN employees emp ON emp.id = w.updated_by
+            WHERE w.ticket_id = $1
+            ORDER BY tr.sort_order NULLS LAST, w.id`, [req.params.id]),
   ]);
 
   res.json({
@@ -427,6 +436,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     sibling_tickets: siblingRows.rows,
     links: linkRows.rows,
     notes_log: noteRows.rows,
+    vendor_work: vendorWorkRows.rows,
   });
 }));
 
