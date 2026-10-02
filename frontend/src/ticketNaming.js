@@ -144,3 +144,31 @@ export function instrumentShortName(familyLabel, model) {
   const segments = String(model || '').split('/').map((x) => x.trim()).filter(Boolean);
   return [familyLabel, segments[segments.length - 1]].filter(Boolean).join(' ');
 }
+
+/**
+ * Queue page alignment (shop feedback, Oct 2026): the Queue shows the
+ * customer in its own fixed-width column so names line up down the page,
+ * which means the title next to it shouldn't repeat the name. This strips
+ * the customer off either end of a title, together with the separator the
+ * naming templates join it with (" - " in every shipped template, but any
+ * of - – — | , : is accepted so a template edit in Settings -> Ticket
+ * naming doesn't need a matching code change here).
+ *
+ * Display-only: the saved title is untouched, and the ticket page, emails
+ * and Xero keep using it whole. A title that doesn't contain the name at
+ * either end (hand-typed, or from a template that puts {customer} in the
+ * middle) is returned unchanged, so the worst case is the name showing
+ * twice, never a mangled title.
+ */
+export function titleWithoutCustomer(title, customerName) {
+  const t = String(title || '').trim();
+  const name = String(customerName || '').trim();
+  if (!name) return t;
+  if (t.toLowerCase() === name.toLowerCase()) return '';
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sep = '\\s*[-–—|,:]\\s*';
+  const stripped = t
+    .replace(new RegExp(`^${esc}${sep}`, 'i'), '')
+    .replace(new RegExp(`${sep}${esc}$`, 'i'), '');
+  return stripped || t;
+}

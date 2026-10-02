@@ -350,15 +350,13 @@ async function persistOrder(statusKey) {
   }
 }
 
-// Inline priority change (PrioritySelect) -- re-fetch quietly afterwards:
-// the unfiltered "All instruments" view sorts by priority, so the row may
-// need to move; a queue-ordered view just picks up the new label.
-function onPriorityChanged() {
-  load(true);
-}
-function onPriorityError(message) {
-  error.value = `Couldn't change priority: ${message}`;
-}
+// Customer column (QueueCard / TicketTable queueLayout): dropped for a queue
+// where nothing has a customer at all — Daily To-Do's, Housekeeping, ... —
+// rather than showing a column of dashes. Decided once for the whole page,
+// not per box, so the title column starts at the same x in every box.
+const showCustomer = computed(
+  () => tickets.value.some((t) => t.customer_name || t.instrument_is_fleet),
+);
 
 </script>
 
@@ -370,7 +368,7 @@ function onPriorityError(message) {
         <p class="muted small" style="margin: 0">
           Drag a ticket to move it within an instrument type's queue or a category's queue —
           grouped by status, and only reorderable within a status section, with no other filters
-          narrowing the list. The new order saves as soon as you drop it. Change a ticket's priority right from its row.
+          narrowing the list. The new order saves as soon as you drop it.
         </p>
       </div>
       <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
@@ -524,8 +522,7 @@ function onPriorityError(message) {
              priority) — the plain flat table, as before. -->
         <div v-if="!canReorder && !isQueueOrdered" class="card tight">
           <TicketTable
-            :tickets="mainTickets" editable-priority
-            @priority-changed="onPriorityChanged" @error="onPriorityError"
+            :tickets="mainTickets" queue-layout
           />
         </div>
 
@@ -543,20 +540,18 @@ function onPriorityError(message) {
             <span class="muted small">{{ sec.rows.length }}</span>
           </div>
           <TicketTable
-            v-if="!canReorder" :tickets="sec.rows.map((r) => r.ticket)" editable-priority
-            @priority-changed="onPriorityChanged" @error="onPriorityError"
+            v-if="!canReorder" :tickets="sec.rows.map((r) => r.ticket)" queue-layout :show-status="false"
           />
           <template v-else>
             <QueueCard
               v-for="row in sec.rows" :key="row.ticket.id"
-              :ticket="row.ticket" :pos="row.posInGroup" :show-family="!filters.instrument_family"
+              :ticket="row.ticket" :pos="row.posInGroup" :show-customer="showCustomer"
               :dragging="dragIndex === row.index"
               draggable="true"
               @dragstart="onDragStart(row.index, $event)"
               @dragover.prevent="onDragOver(row.index)"
               @drop.prevent
               @dragend="onDragEnd"
-              @priority-changed="onPriorityChanged" @priority-error="onPriorityError"
             />
           </template>
         </section>
@@ -578,14 +573,13 @@ function onPriorityError(message) {
           <QueueCard
             v-for="row in sec.rows" :key="row.ticket.id"
             :ticket="row.ticket" :pos="canReorder ? row.posInGroup : null"
-            :show-family="!filters.instrument_family" compact
+            :show-customer="showCustomer" compact
             :dragging="dragIndex === row.index"
             :draggable="canReorder ? 'true' : 'false'"
             @dragstart="onDragStart(row.index, $event)"
             @dragover.prevent="onDragOver(row.index)"
             @drop.prevent
             @dragend="onDragEnd"
-            @priority-changed="onPriorityChanged" @priority-error="onPriorityError"
           />
         </section>
       </aside>
