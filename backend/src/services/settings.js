@@ -9,7 +9,7 @@
  * ticket row). Deleting a key that is in use is refused outright.
  */
 
-const { query } = require('../db');
+const { query, withTransaction } = require('../db');
 const { badRequest, conflict, notFound } = require('../middleware/errors');
 
 const CATEGORIES = [
@@ -282,6 +282,17 @@ async function validateQueueSplitView(meta) {
   if (unknown.length) throw badRequest(`Unknown ticket status(es): ${unknown.join(', ')}`);
 }
 
+/**
+ * Queue sections (migration 065): ticket statuses whose meta.queue_group
+ * matches share one queue section on the Queue page and dashboard. Stored
+ * trimmed + lowercased so "Waiting" and "waiting " are the same section,
+ * and removed outright when blank so "no section" has one representation.
+ */
+function normalizeQueueGroup(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return v || null;
+}
+
 async function create({
   category, key, label, sort_order, meta,
 }) {
@@ -333,23 +344,51 @@ async function update(id, {
     await validateQueueSplitView(meta);
   }
 
-  const { rows } = await query(
-    `UPDATE settings SET
-        label      = COALESCE($2, label),
-        sort_order = COALESCE($3, sort_order),
-        meta       = COALESCE($4, meta),
-        retired    = COALESCE($5, retired)
-      WHERE id = $1
-      RETURNING *`,
-    [
-      id,
-      label === undefined ? null : String(label).trim(),
-      sort_order === undefined ? null : sort_order,
-      meta === undefined ? null : JSON.stringify(meta),
-      retired === undefined ? null : retired,
-    ],
-  );
-  return rows[0];
+  // Joining a status to a queue section (or moving it to another one) means
+  // its tickets' positions now share one order with the section's other
+  // statuses — but each status was numbered on its own (10, 20, 30... per
+  // drag), so the numbers would interleave meaninglessly. Re-seed that
+  // section oldest-first, same as migration 065 did for Reservation + Not
+  // Started. Leaving a section needs nothing: what's left keeps its order.
+  let regroupTo = null;
+  if (meta !== undefined && current.category === 'ticket_status' && meta && typeof meta === 'object') {
+    const nextGroup = normalizeQueueGroup(meta.queue_group);
+    meta = { ...meta };
+    if (nextGroup) meta.queue_group = nextGroup; else delete meta.queue_group;
+    if (nextGroup && nextGroup !== normalizeQueueGroup(current.meta?.queue_group)) regroupTo = nextGroup;
+  }
+
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `UPDATE settings SET
+          label      = COALESCE($2, label),
+          sort_order = COALESCE($3, sort_order),
+          meta       = COALESCE($4, meta),
+          retired    = COALESCE($5, retired)
+        WHERE id = $1
+        RETURNING *`,
+      [
+        id,
+        label === undefined ? null : String(label).trim(),
+        sort_order === undefined ? null : sort_order,
+        meta === undefined ? null : JSON.stringify(meta),
+        retired === undefined ? null : retired,
+      ],
+    );
+
+    if (regroupTo) {
+      const { rows: members } = await client.query(
+        `SELECT key FROM settings
+          WHERE category = 'ticket_status' AND lower(btrim(meta->>'queue_group')) = $1`,
+        [regroupTo],
+      );
+      if (members.length > 1) {
+        await client.query('SELECT renumber_queue_section($1::text[])', [members.map((r) => r.key)]);
+      }
+    }
+
+    return rows[0];
+  });
 }
 
 /** Read a numeric value out of a shop_config row, with a fallback. */

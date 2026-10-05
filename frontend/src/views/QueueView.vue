@@ -211,7 +211,12 @@ const isQueueOrdered = computed(() => {
 // "Show archived" pulls in a different set entirely, which the backend's
 // reorder-queue mismatch check doesn't recognize), and no explicit sort
 // override is replacing the queue's own order. Status/hide-status are
-// fine — they only ever drop whole status sections, never part of one.
+// fine — they only ever drop whole status sections, never part of one —
+// *except* when they drop some but not all statuses of a shared section
+// (migration 065: e.g. filtering to just Reservation, which shares its
+// box with Not Started). That leaves part of a section on screen, which
+// the backend's reorder-queue membership check would reject, so it turns
+// dragging off the same way search text does (splitsASection).
 // 'date' (Q3) is excluded for the same reason 'status' already was: the
 // visual order it produces has nothing to do with the persisted queue
 // position, so dragging a row wouldn't mean what it looks like it means.
@@ -219,7 +224,25 @@ const canReorder = computed(() => {
   const f = filters.value;
   const singleScope = Boolean(f.category) !== Boolean(f.instrument_family);
   return singleScope && !f.technician_id && f.sort !== 'status' && f.sort !== 'date'
-    && f.q === '' && f.priority === '' && !f.archived && !f.fast_track;
+    && f.q === '' && f.priority === '' && !f.archived && !f.fast_track
+    && !splitsASection.value;
+});
+
+const splitsASection = computed(() => {
+  const f = filters.value;
+  const hidden = new Set(f.hide_status);
+  const bySection = new Map();
+  for (const row of settings.data.ticket_status || []) {
+    const sec = settings.queueSectionOf(row.key);
+    if (!bySection.has(sec)) bySection.set(sec, []);
+    bySection.get(sec).push(row.key);
+  }
+  for (const members of bySection.values()) {
+    if (members.length < 2) continue;
+    const shown = members.filter((k) => !hidden.has(k) && (!f.status || f.status === k));
+    if (shown.length && shown.length < members.length) return true;
+  }
+  return false;
 });
 
 // Per-row rendering info for the draggable view: which tickets start a new
@@ -228,10 +251,16 @@ const canReorder = computed(() => {
 // position *within* its own status section, since positions are scoped
 // per status (POST /reorder-queue below only ever renumbers one status
 // section at a time).
+// "Status section" now means queue *section* (migration 065): statuses that
+// share a queue_group in Settings (Reservation + Not Started) are one box,
+// one shared order, one drag scope. The backend tags every ticket with its
+// section (`queue_section`); an ungrouped status is a section of its own.
+const sectionOf = (t) => t.queue_section || t.status_key;
+
 const rowInfo = computed(() => {
   let groupStart = 0;
   return tickets.value.map((t, i) => {
-    if (i === 0 || tickets.value[i - 1].status_key !== t.status_key) groupStart = i;
+    if (i === 0 || sectionOf(tickets.value[i - 1]) !== sectionOf(t)) groupStart = i;
     return {
       ticket: t, index: i, isGroupStart: i === groupStart, posInGroup: i - groupStart + 1,
     };
@@ -251,11 +280,16 @@ const sideKeys = computed(() => {
     .filter((k) => !f.hide_status.includes(k) && (!f.status || f.status === k));
 });
 const splitActive = computed(() => sideKeys.value.length > 0);
-const sideSet = computed(() => new Set(sideKeys.value));
+// Picking one member of a shared section for the right column moves the
+// whole section -- it's one list, it can't be split across two columns.
+const sideSectionKeys = computed(
+  () => [...new Set(sideKeys.value.map((k) => settings.queueSectionOf(k)))],
+);
+const sideSet = computed(() => new Set(sideSectionKeys.value));
 
-// Main column: every row whose status isn't pulled out. Removing whole
-// status sections keeps rowInfo's posInGroup valid as-is.
-const mainRows = computed(() => rowInfo.value.filter((r) => !sideSet.value.has(r.ticket.status_key)));
+// Main column: every row whose section isn't pulled out. Removing whole
+// sections keeps rowInfo's posInGroup valid as-is.
+const mainRows = computed(() => rowInfo.value.filter((r) => !sideSet.value.has(sectionOf(r.ticket))));
 const mainTickets = computed(() => mainRows.value.map((r) => r.ticket));
 
 // The main column as one boxed panel per status (the shop's sketch: an "In
@@ -266,11 +300,12 @@ const mainSections = computed(() => {
   const out = [];
   for (const row of mainRows.value) {
     const last = out[out.length - 1];
-    if (last && last.key === row.ticket.status_key) last.rows.push(row);
+    if (last && last.key === sectionOf(row.ticket)) last.rows.push(row);
     else {
       out.push({
-        key: row.ticket.status_key,
-        label: row.ticket.status_label || row.ticket.status_label_snapshot,
+        key: sectionOf(row.ticket),
+        statusKey: row.ticket.queue_section_status_key || row.ticket.status_key,
+        label: row.ticket.queue_section_label || row.ticket.status_label || row.ticket.status_label_snapshot,
         rows: [row],
       });
     }
@@ -281,11 +316,15 @@ const mainSections = computed(() => {
 // Right column: one section per configured status, in Settings order, and
 // shown even when empty so the column keeps the same shape from one queue
 // to the next instead of jumping around.
-const sideSections = computed(() => sideKeys.value.map((key) => ({
-  key,
-  label: settings.labelFor('ticket_status', key),
-  rows: rowInfo.value.filter((r) => r.ticket.status_key === key),
-})));
+const sideSections = computed(() => sideSectionKeys.value.map((key) => {
+  const lead = settings.queueSectionLead(key);
+  return {
+    key,
+    statusKey: lead?.key || key,
+    label: lead?.label || settings.labelFor('ticket_status', key),
+    rows: rowInfo.value.filter((r) => sectionOf(r.ticket) === key),
+  };
+}));
 
 onMounted(load);
 onMounted(() => {
@@ -304,10 +343,11 @@ function onDragStart(index, event) {
 // the actual save happens once, on drop/dragend, not on every one of these.
 function onDragOver(index) {
   if (dragIndex.value === null || dragIndex.value === index) return;
-  // Confines drag-and-drop to one status section: a drag-over that would
-  // cross into a different status's rows is simply ignored, so a ticket can
-  // never be spliced across the boundary in the first place.
-  if (tickets.value[dragIndex.value].status_key !== tickets.value[index].status_key) return;
+  // Confines drag-and-drop to one queue section: a drag-over that would
+  // cross into a different section's rows is simply ignored, so a ticket
+  // can never be spliced across the boundary in the first place. Within a
+  // shared section (Reservation + Not Started) it moves freely.
+  if (sectionOf(tickets.value[dragIndex.value]) !== sectionOf(tickets.value[index])) return;
   const moved = tickets.value.splice(dragIndex.value, 1)[0];
   tickets.value.splice(index, 0, moved);
   dragIndex.value = index;
@@ -316,11 +356,11 @@ function onDragOver(index) {
 async function onDragEnd() {
   if (dragIndex.value === null) return;
   // Capture before clearing dragIndex — onDragOver's guard above means the
-  // dragged ticket's status_key never changed during the drag, so this is
-  // exactly the one status section that just got reordered.
-  const statusKey = tickets.value[dragIndex.value].status_key;
+  // dragged ticket never left its section during the drag, so this is
+  // exactly the one section that just got reordered.
+  const dragged = tickets.value[dragIndex.value];
   dragIndex.value = null;
-  await persistOrder(statusKey);
+  await persistOrder(sectionOf(dragged), dragged.status_key);
 }
 
 // Sends just the reordered id list for the one status section that was
@@ -329,11 +369,13 @@ async function onDragEnd() {
 // positions to match, leaving every other status section's positions
 // untouched. A mismatch reloads the queue instead of silently applying a
 // stale order on top of whatever changed.
-async function persistOrder(statusKey) {
+// statusKey is the dragged ticket's own status; the server expands it to
+// its whole section (routes/tickets.js) and checks ticketIds against that.
+async function persistOrder(sectionKey, statusKey) {
   error.value = '';
   saving.value = true;
   try {
-    const ticketIds = tickets.value.filter((t) => t.status_key === statusKey).map((t) => t.id);
+    const ticketIds = tickets.value.filter((t) => sectionOf(t) === sectionKey).map((t) => t.id);
     const body = filters.value.category
       ? {
         scope: 'category', category_key: filters.value.category, status_key: statusKey, ticket_ids: ticketIds,
@@ -367,7 +409,8 @@ const showCustomer = computed(
         <h1 style="margin-bottom: 4px">Queue</h1>
         <p class="muted small" style="margin: 0">
           Drag a ticket to move it within an instrument type's queue or a category's queue —
-          grouped by status, and only reorderable within a status section, with no other filters
+          grouped by status (some statuses share a box, set in Settings → Ticket statuses), and only
+          reorderable within a box, with no other filters
           narrowing the list. The new order saves as soon as you drop it.
         </p>
       </div>
@@ -536,7 +579,7 @@ const showCustomer = computed(
         <template v-else>
         <section v-for="sec in mainSections" :key="sec.key" class="card tight queue-section">
           <div class="queue-section-head">
-            <span :class="['pill', settings.colorFor(sec.key)]">{{ sec.label }}</span>
+            <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
             <span class="muted small">{{ sec.rows.length }}</span>
           </div>
           <TicketTable
@@ -566,7 +609,7 @@ const showCustomer = computed(
       <aside v-if="splitActive" class="queue-side">
         <section v-for="sec in sideSections" :key="sec.key" class="card tight queue-section">
           <div class="queue-section-head">
-            <span :class="['pill', settings.colorFor(sec.key)]">{{ sec.label }}</span>
+            <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
             <span class="muted small">{{ sec.rows.length }}</span>
           </div>
           <p v-if="!sec.rows.length" class="muted small" style="margin: 0">None</p>

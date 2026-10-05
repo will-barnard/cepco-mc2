@@ -409,6 +409,25 @@ async function toggleUnlocksTasks(row) {
   }
 }
 
+// Per-status "Queue section" (migration 065): statuses given the same
+// name share one box on the Queue page and dashboard, ordered as one list
+// (Reservation + Not Started share "waiting" out of the box). Blank = the
+// status is its own box, as before. The backend normalizes the name
+// (trim + lowercase) and, when a status joins a section, re-seeds that
+// section's order oldest Date of Order/Queue first — see
+// services/settings.js update().
+async function saveQueueGroup(row, value) {
+  const next = String(value || '').trim().toLowerCase();
+  if (next === String(row.meta.queue_group || '')) return;
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, queue_group: next || null } });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Which ticket categories a status is EXCLUDED from (empty/absent meta
 // means "every category" — see NOTES.md and services/settings.js). A
 // denylist, not an allowlist (N4a) — unchecking a box means "this category
@@ -654,6 +673,10 @@ onMounted(refresh);
                 <th v-if="category === 'ticket_category'">QC</th>
                 <th v-if="category === 'ticket_status'">Applies to</th>
                 <th v-if="category === 'ticket_status'">Unlocks tasks</th>
+                <th
+                  v-if="category === 'ticket_status'"
+                  title="Statuses with the same name share one box on the Queue, ordered together"
+                >Queue section</th>
                 <th v-if="category === 'priority_tier'">Highlight in tasks</th>
                 <th>Order</th><th>State</th><th />
               </tr>
@@ -784,6 +807,14 @@ onMounted(refresh);
                       @change="toggleUnlocksTasks(row)"
                     />
                   </label>
+                </td>
+
+                <td v-if="category === 'ticket_status'">
+                  <input
+                    :value="row.meta.queue_group || ''" placeholder="Own box" style="width: 110px"
+                    title="Statuses with the same name share one box on the Queue, ordered together. Joining a section re-sorts it oldest Date of Order/Queue first."
+                    @change="saveQueueGroup(row, $event.target.value)"
+                  />
                 </td>
 
                 <td v-if="category === 'priority_tier'">

@@ -26,6 +26,7 @@
 import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { titleWithoutCustomer } from '../ticketNaming';
+import { useSettings } from '../stores';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -41,6 +42,15 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
   dragging: { type: Boolean, default: false },
 });
+
+const settings = useSettings();
+
+// Shared queue sections (migration 065): a Reservation sits in the "Not
+// Started" box, so it carries its own status pill -- the instrument isn't
+// in the shop yet, and that's the one thing the box header doesn't say.
+const otherStatus = computed(() => (
+  props.ticket.queue_section_status_key && props.ticket.status_key !== props.ticket.queue_section_status_key
+));
 
 const customer = computed(
   () => props.ticket.customer_name || (props.ticket.instrument_is_fleet ? 'CEPCo fleet' : ''),
@@ -76,6 +86,9 @@ const dropOff = computed(
         {{ rest || ticket.title }}
       </RouterLink>
       <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Fast Track">Fast Track</span>
+      <span
+        v-if="otherStatus" :class="['pill', 'status-pill', settings.colorFor(ticket.status_key)]"
+      >{{ ticket.status_label || ticket.status_label_snapshot }}</span>
       <!-- Under the title in the narrow right column and on phones; the
            wide layout gives date/techs columns of their own instead. -->
       <div class="sub muted small">{{ dropOff }} · {{ techs }}</div>
@@ -104,6 +117,7 @@ const dropOff = computed(
 .rest { flex: 1; min-width: 0; }
 .rest-title { color: var(--text); }
 .rest-title:hover { color: var(--accent); }
+.status-pill { margin-left: 6px; }
 .date { width: 6.5em; flex: none; }
 .techs { width: 140px; flex: none; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 

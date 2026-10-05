@@ -64,9 +64,12 @@ const SETTINGS = [
   // identified by tickets.is_shipping (migration 028) instead of a
   // dedicated category. See backend/src/services/settings.js's
   // statusAppliesToCategory.
+  // queue_group (migration 065): Reservation and Not Started share one
+  // queue section, ordered together. Repeated here because on a fresh
+  // database the migrations run before this seed inserts the rows.
   ['ticket_status', 'reservation', 'Reservation', 10,
-    { color: 'slate', excluded_for_shipping: true }],
-  ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate' }],
+    { color: 'slate', excluded_for_shipping: true, queue_group: 'waiting' }],
+  ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate', queue_group: 'waiting' }],
   // unlocks_tasks (migration 022, NOTES.md §2.28): the tech dashboard's
   // "My tasks" section only ever surfaces tasks belonging to a ticket
   // whose current status carries this flag — admin-editable per status

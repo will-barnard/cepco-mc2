@@ -194,6 +194,27 @@ export const useSettings = defineStore('settings', {
     // of the main list. Retired/deleted statuses are dropped here rather
     // than refused at save time, so retiring a status never breaks the
     // setting — it just stops appearing. Empty = no split.
+    // Queue sections (migration 065): statuses sharing a meta.queue_group
+    // (Reservation + Not Started by default) render as one Queue box and
+    // reorder as one list. Mirrors routes/tickets.js's SECTION_KEY exactly
+    // -- the backend hands the same key back on every ticket as
+    // `queue_section`; this is for places that start from a status key
+    // instead (the split view's right column). Ungrouped -> the status key.
+    queueSectionOf: (s) => (statusKey) => {
+      const row = (s.data.ticket_status || []).find((r) => r.key === statusKey);
+      const group = String(row?.meta?.queue_group ?? '').trim().toLowerCase();
+      return group ? `group:${group}` : statusKey;
+    },
+    // The status a section is named and colored after: its highest
+    // sort_order member, live statuses first (same as the backend's `sec`).
+    queueSectionLead: (s) => (sectionKey) => {
+      const rows = s.data.ticket_status || [];
+      if (!String(sectionKey).startsWith('group:')) return rows.find((r) => r.key === sectionKey) || null;
+      const group = String(sectionKey).slice('group:'.length);
+      const members = rows.filter((r) => String(r.meta?.queue_group ?? '').trim().toLowerCase() === group);
+      members.sort((a, b) => (Number(!!a.retired) - Number(!!b.retired)) || (b.sort_order - a.sort_order) || (a.id - b.id));
+      return members[0] || null;
+    },
     queueSideStatuses: (s) => {
       const row = (s.data.shop_config || []).find((r) => r.key === 'queue_split_view');
       const keys = Array.isArray(row?.meta?.value) ? row.meta.value : [];

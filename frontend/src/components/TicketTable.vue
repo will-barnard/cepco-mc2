@@ -47,14 +47,25 @@ const dropOff = (t) => (t.drop_off_date ? new Date(t.drop_off_date).toLocaleDate
 // previous row. When groupByStatus is false, everything is one unlabeled
 // section so the template below only has one rendering path.
 const sections = computed(() => {
-  if (!props.groupByStatus) return [{ key: null, label: null, tickets: props.tickets }];
+  if (!props.groupByStatus) return [{ key: null, statusKey: null, label: null, tickets: props.tickets }];
   const out = [];
+  // Grouped by queue *section* (migration 065), not raw status: statuses
+  // sharing a queue_group (Reservation + Not Started) arrive interleaved
+  // in one shared order, and grouping on status_key would chop that into
+  // a header per run. statusKey is the section's lead status, for its
+  // pill color and highlightStatus.
   for (const t of props.tickets) {
+    const key = t.queue_section || t.status_key;
     const last = out[out.length - 1];
-    if (last && last.key === t.status_key) {
+    if (last && last.key === key) {
       last.tickets.push(t);
     } else {
-      out.push({ key: t.status_key, label: t.status_label || t.status_label_snapshot, tickets: [t] });
+      out.push({
+        key,
+        statusKey: t.queue_section_status_key || t.status_key,
+        label: t.queue_section_label || t.status_label || t.status_label_snapshot,
+        tickets: [t],
+      });
     }
   }
   return out;
@@ -82,10 +93,15 @@ function techNames(t) {
 // Row class for the highlighted section (see highlightStatus above) --
 // reuses that status's own pill color (settings.colorFor) so the accent
 // always matches, rather than a second hardcoded color choice.
-function rowClass(sectionKey) {
-  if (!props.highlightStatus || sectionKey !== props.highlightStatus) return '';
-  return `row-highlight ${settings.colorFor(sectionKey)}`;
+function rowClass(statusKey) {
+  if (!props.highlightStatus || statusKey !== props.highlightStatus) return '';
+  return `row-highlight ${settings.colorFor(statusKey)}`;
 }
+
+// A row whose own status isn't the one its section is named after (a
+// Reservation inside the shared "Not Started" box) -- flagged inline when
+// the Status column is off, so it isn't mistaken for a ticket on hand.
+const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.queue_section_status_key;
 </script>
 
 <template>
@@ -128,13 +144,13 @@ function rowClass(sectionKey) {
         <template v-for="section in sections" :key="section.key ?? 'all'">
           <tr v-if="groupByStatus" class="status-section-row">
             <td :colspan="columnCount" style="padding-top: 16px; border-top: none">
-              <span :class="['pill', settings.colorFor(section.key)]">{{ section.label }}</span>
+              <span :class="['pill', settings.colorFor(section.statusKey)]">{{ section.label }}</span>
               <span class="muted small" style="margin-left: 6px">{{ section.tickets.length }}</span>
             </td>
           </tr>
         <tr
           v-for="t in section.tickets" :key="t.id"
-          :class="['clickable', rowClass(section.key)]" @click="open(t.id)"
+          :class="['clickable', rowClass(section.statusKey)]" @click="open(t.id)"
         >
           <td v-if="queueLayout" class="ellipsis" :title="customerLabel(t)">
             <strong>{{ customerLabel(t) }}</strong>
@@ -143,6 +159,10 @@ function rowClass(sectionKey) {
             <strong v-if="queueLayout">{{ titleWithoutCustomer(t.title, t.customer_name) || t.title }}</strong>
             <strong v-else>{{ t.title }}</strong>
             <span v-if="t.fast_track" class="tag fast-track-tag">Fast Track</span>
+            <span
+              v-if="!showStatus && statusDiffers(t)"
+              :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 6px"
+            >{{ t.status_label || t.status_label_snapshot }}</span>
             <div v-if="t.instrument_family && !queueLayout" class="muted small">
               {{ t.instrument_family }}<span v-if="t.instrument_model"> · {{ t.instrument_model }}</span>
               <span v-if="t.attachment_count" class="tag" style="margin-left: 6px">

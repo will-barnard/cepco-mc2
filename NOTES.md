@@ -3539,6 +3539,65 @@ previously the box would sit blank with a customer still selected.
 
 No migration.
 
+### 2.84 Reservation and Not Started share one queue
+
+Shop feedback: a Reservation is a job that hasn't started *and* whose
+instrument isn't in the shop yet. It should wait in the same line as Not
+Started tickets, so a reservation booked before a Not Started ticket sits
+above it. Before this, every status was its own queue section (ordered
+by status first, then position, and reorder-queue renumbered one status at
+a time). That meant every Not Started ticket sat above every Reservation,
+however old the reservation was.
+
+**Queue sections (migration 065).** `ticket_status.meta.queue_group`:
+statuses with the same name (trimmed, case-insensitive) are one section.
+The section sorts where its highest-sort_order member would, takes that
+member's label and colour (so the box reads "Not Started"), and orders by the
+usual position columns across all its statuses. Reservation and Not
+Started ship as `waiting`. An ungrouped status is its own section, so
+nothing else changes. It's editable per status in Settings → Ticket
+statuses → "Queue section" (blank = own box).
+
+- `routes/tickets.js`: TICKET_SELECT adds `queue_section`,
+  `queue_section_status_key` and `queue_section_label` (a LATERAL join to the
+  section's lead status). Every queue ORDER BY branch (category, family,
+  tech, unassigned, sort=status) now starts with section rank + section
+  key instead of `st.sort_order`.
+- `POST /tickets/reorder-queue` still takes the dragged ticket's own
+  `status_key` and expands it server-side to the whole section. The
+  membership check and the 10/20/30 renumbering cover all of the section's
+  statuses together, on all three axes.
+- QueueView, TicketTable (dashboard) and the split view group by section.
+  Picking one member of a section for the right column moves the whole
+  section. A Reservation inside the "Not Started" box gets its own status pill.
+  Filtering to one member of a shared section (Status filter or Hide
+  statuses) turns dragging off, the same as a search does: it leaves part of a
+  section on screen, which reorder-queue would reject.
+
+**Seeding the shared order.** Each status had been numbered on its own, so
+their positions overlapped. `renumber_queue_section(text[])` (a SQL
+function, migration 065) renumbers a section oldest Date of Order/Queue
+(drop_off_date) first, ties going to whichever ticket was entered first, on the
+category, family and per-tech axes. The migration runs it once for
+`waiting`. `services/settings.js` update() runs it again whenever an
+admin puts a status into a section, since that's the same overlap
+problem. This resets any manual drag order that existed inside the
+Reservation and Not Started boxes before the merge.
+
+After that: new tickets still join at the back (MAX + 10 across the
+category or family), so older-is-higher holds by default, and drags still
+override it. Reservation → Not Started doesn't touch positions, so a
+reservation whose instrument arrives keeps its place in line.
+
+A fresh database gets `queue_group` from seed.js, because there the
+migrations run before the seed inserts the statuses.
+
+Verified against Postgres 16 with every migration applied: shared
+section and labels, regroup → reseed oldest-first on the category and family
+queues, a cross-status drag persisting, a partial-section reorder being
+rejected, an arrived reservation keeping its place, new tickets joining at the back,
+and the sort=status / unassigned / detail queries.
+
 ## 4. Suggested first moves after deploy
 
 

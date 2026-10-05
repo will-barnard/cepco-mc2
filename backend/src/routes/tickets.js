@@ -48,6 +48,18 @@ async function activeSubcategoryKey(categoryKey, key) {
   return rows[0] ? rows[0].key : null;
 }
 
+// Queue sections (migration 065). Statuses sharing a meta.queue_group
+// (Reservation + Not Started, by default) are one section of the queue:
+// it sorts where its highest-sort_order member would, carries that
+// member's label/color, and is ordered by the position columns across all
+// of its statuses. An ungrouped status is a section of its own, keyed by
+// its status key, so everything below behaves exactly as before for it.
+// `sec` is the section's lead status (see the LATERAL join in
+// TICKET_SELECT); null for an ungrouped status.
+const QUEUE_GROUP_OF = (alias) => `NULLIF(lower(btrim(${alias}.meta->>'queue_group')), '')`;
+const SECTION_KEY = `CASE WHEN sec.key IS NULL THEN t.status_key ELSE 'group:' || ${QUEUE_GROUP_OF('st')} END`;
+const SECTION_RANK = 'COALESCE(sec.sort_order, st.sort_order)';
+
 const TICKET_SELECT = `
   SELECT t.*,
          src.title AS source_ticket_title,
@@ -62,6 +74,9 @@ const TICKET_SELECT = `
          contact.name AS shop_contact_name,
          cat.label  AS category_label,
          st.label   AS status_label,
+         ${SECTION_KEY} AS queue_section,
+         COALESCE(sec.key, t.status_key) AS queue_section_status_key,
+         COALESCE(sec.label, st.label)   AS queue_section_label,
          pr.label   AS priority_label,
          tl.label   AS tech_level_label,
          COALESCE(h.actual_hours, 0)  AS actual_hours,
@@ -78,6 +93,16 @@ const TICKET_SELECT = `
     LEFT JOIN employees   contact ON contact.id = t.shop_contact_id
     LEFT JOIN settings cat ON cat.category = 'ticket_category' AND cat.key = t.category_key
     LEFT JOIN settings st  ON st.category  = 'ticket_status'   AND st.key  = t.status_key
+    LEFT JOIN LATERAL (
+      -- Lead status of this ticket's queue section: the highest sort_order
+      -- member, preferring live statuses (migration 065).
+      SELECT g.key, g.label, g.sort_order
+        FROM settings g
+       WHERE g.category = 'ticket_status'
+         AND ${QUEUE_GROUP_OF('g')} = ${QUEUE_GROUP_OF('st')}
+       ORDER BY g.retired, g.sort_order DESC, g.id
+       LIMIT 1
+    ) sec ON TRUE
     LEFT JOIN settings pr  ON pr.category  = 'priority_tier'   AND pr.key  = t.priority_key
     LEFT JOIN settings tl  ON tl.category  = 'tech_level'      AND tl.key  = t.tech_level_key
     LEFT JOIN LATERAL (
@@ -193,12 +218,15 @@ router.get('/', asyncHandler(async (req, res) => {
   // falls back to the old priority/recency sort, since there's no one queue
   // order that spans multiple categories, techs, or families.
   //
-  // Every queue axis below is now prefixed with st.sort_order DESC — status
+  // Every queue axis below is now prefixed with the queue *section* — status
   // is the primary grouping everywhere a queue exists (Queue page,
   // dashboard), and the axis-specific position column is just the
-  // tiebreaker *within* a status. POST /reorder-queue (below) only ever
-  // renumbers positions within one status for exactly this reason — the
-  // two have to agree.
+  // tiebreaker *within* a section. A section is one status, or several
+  // statuses sharing a meta.queue_group (migration 065 — Reservation + Not
+  // Started), ranked by its lead status's sort_order (SECTION_RANK) with
+  // SECTION_KEY keeping two sections that happen to tie on rank from
+  // interleaving. POST /reorder-queue (below) only ever renumbers positions
+  // within one section for exactly this reason — the two have to agree.
   //
   // DESC here is deliberate, and separate from Settings -> Ticket statuses'
   // own ordering: that page (and defaultStatusForCategory, which picks a
@@ -221,26 +249,26 @@ router.get('/', asyncHandler(async (req, res) => {
   let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
   let extraJoin = '';
   if (req.query.sort === 'status') {
-    orderBy = 'st.sort_order DESC NULLS LAST, t.updated_at DESC';
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, st.sort_order DESC NULLS LAST, t.updated_at DESC`;
   } else if (req.query.sort === 'date') {
     orderBy = 't.drop_off_date NULLS LAST, t.updated_at DESC';
   } else if (req.query.category && !req.query.technician_id) {
-    orderBy = 'st.sort_order DESC NULLS LAST, t.category_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, t.category_queue_position NULLS LAST, t.updated_at DESC`;
   } else if (technicianParamIdx && !req.query.category) {
     // Order by *this* tech's position for this ticket specifically — a
     // ticket can be #2 for one assigned tech and #7 for another.
     extraJoin = ` LEFT JOIN ticket_technicians tt_order
                     ON tt_order.ticket_id = t.id AND tt_order.employee_id = $${technicianParamIdx}`;
-    orderBy = 'st.sort_order DESC NULLS LAST, tt_order.queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, tt_order.queue_position NULLS LAST, t.updated_at DESC`;
   } else if (req.query.instrument_family && !req.query.category && !req.query.technician_id) {
     // Third queue axis (migration 015): a family, e.g. every Rhodes job,
     // in its own deliberate order independent of category or tech.
-    orderBy = 'st.sort_order DESC NULLS LAST, t.family_queue_position NULLS LAST, t.updated_at DESC';
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, t.family_queue_position NULLS LAST, t.updated_at DESC`;
   } else if (req.query.technician_id === 'unassigned' && !req.query.category && !req.query.instrument_family) {
     // Not a positioned queue (an unassigned ticket has no tech_queue_position
     // to speak of), but the dashboard's "Unassigned" list still wants status
     // grouping — tiebroken by priority same as the no-filter fallback below.
-    orderBy = 'st.sort_order DESC NULLS LAST, pr.sort_order NULLS LAST, t.updated_at DESC';
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, pr.sort_order NULLS LAST, t.updated_at DESC`;
   }
 
   const { rows } = await query(
@@ -1292,6 +1320,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 // positions 10, 20, 30... in the given order — a plain reindex, not a
 // series of swaps, since drag-and-drop can move something many places in
 // one action. Other statuses' position values are never touched.
+//
+// Migration 065 widened "one status" to "one queue section": statuses that
+// share a meta.queue_group (Reservation + Not Started) are one section, so
+// `status_key` is expanded to every status in its section and the
+// membership check / renumbering covers all of them together.
 // ---------------------------------------------------------------------------
 router.post('/reorder-queue', asyncHandler(async (req, res) => {
   const { scope } = req.body || {};
@@ -1300,8 +1333,23 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
   }
 
   const statusKey = req.body.status_key;
-  if (!statusKey) throw badRequest('status_key is required — reordering is scoped to one status at a time');
+  if (!statusKey) throw badRequest('status_key is required — reordering is scoped to one queue section at a time');
   await settings.resolve('ticket_status', statusKey); // throws if unknown
+
+  // The section status_key belongs to (migration 065): itself, plus every
+  // status sharing its meta.queue_group — e.g. Reservation + Not Started
+  // reorder as one list. Callers still just send the dragged ticket's own
+  // status; the expansion lives here so the client can't drift from the
+  // server's idea of what a section is.
+  const { rows: sectionRows } = await query(
+    `SELECT g.key FROM settings s
+       JOIN settings g ON g.category = 'ticket_status'
+                      AND (g.key = s.key
+                           OR ${QUEUE_GROUP_OF('g')} = ${QUEUE_GROUP_OF('s')})
+      WHERE s.category = 'ticket_status' AND s.key = $1`,
+    [statusKey],
+  );
+  const sectionKeys = sectionRows.map((r) => r.key);
 
   const ticketIds = [...new Set(
     (Array.isArray(req.body.ticket_ids) ? req.body.ticket_ids : [])
@@ -1330,8 +1378,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
 
     await withTransaction(async (client) => {
       const { rows: current } = await client.query(
-        'SELECT id FROM tickets WHERE category_key = $1 AND status_key = $2 AND archived = FALSE',
-        [categoryKey, statusKey],
+        'SELECT id FROM tickets WHERE category_key = $1 AND status_key = ANY($2) AND archived = FALSE',
+        [categoryKey, sectionKeys],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -1354,8 +1402,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
       const { rows: current } = await client.query(
         `SELECT tt.ticket_id AS id FROM ticket_technicians tt
            JOIN tickets t2 ON t2.id = tt.ticket_id
-          WHERE tt.employee_id = $1 AND t2.status_key = $2 AND t2.archived = FALSE`,
-        [employeeId, statusKey],
+          WHERE tt.employee_id = $1 AND t2.status_key = ANY($2) AND t2.archived = FALSE`,
+        [employeeId, sectionKeys],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -1377,8 +1425,8 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
     await withTransaction(async (client) => {
       const { rows: current } = await client.query(
         `SELECT t2.id FROM tickets t2 JOIN instruments i2 ON i2.id = t2.instrument_id
-          WHERE i2.family = $1 AND t2.status_key = $2 AND t2.archived = FALSE`,
-        [family, statusKey],
+          WHERE i2.family = $1 AND t2.status_key = ANY($2) AND t2.archived = FALSE`,
+        [family, sectionKeys],
       );
       const currentIds = new Set(current.map((r) => r.id));
       if (currentIds.size !== ticketIds.length || ticketIds.some((id) => !currentIds.has(id))) {
@@ -1393,7 +1441,9 @@ router.post('/reorder-queue', asyncHandler(async (req, res) => {
     });
   }
 
-  res.json({ scope, status_key: statusKey, reordered: ticketIds.length });
+  res.json({
+    scope, status_key: statusKey, section_status_keys: sectionKeys, reordered: ticketIds.length,
+  });
 }));
 
 // ---------------------------------------------------------------------------
