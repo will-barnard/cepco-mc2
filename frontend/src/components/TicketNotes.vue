@@ -15,11 +15,17 @@
 import { ref } from 'vue';
 import api from '../api';
 import XeroHistory from './XeroHistory.vue';
+import DraftNotice from './DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
 const emit = defineEmits(['changed']);
 
 const draft = ref('');
+// Kiosk feedback (Oct 2026): a half-typed note survives a user switch,
+// refresh or crash -- see drafts.js. Keyed per ticket, so it follows the
+// prop when the ticket page is reused for a different ticket.
+const noteDraft = useDraft(() => `ticket-note:${props.ticket.id}`, draft);
 const posting = ref(false);
 const error = ref('');
 const retrying = ref(null);
@@ -31,6 +37,7 @@ async function post() {
   try {
     const note = await api.post(`/tickets/${props.ticket.id}/notes`, { body: draft.value });
     draft.value = '';
+    noteDraft.clear();
     if (note.xero_status === 'failed') {
       error.value = `Note posted, but it didn't reach Xero: ${note.xero_error}. It'll be retried on the next Xero sync.`;
     }
@@ -114,6 +121,7 @@ function xeroBadge(note) {
     <p v-else class="muted small" style="margin: 4px 0 8px">No notes yet.</p>
 
     <form class="ticket-note-compose" @submit.prevent="post">
+      <DraftNotice :draft="noteDraft" />
       <textarea
         v-model="draft" placeholder="Add a note — grommets, hammer tips, what the customer said…"
         style="min-height: 70px" @keydown="onKeydown"

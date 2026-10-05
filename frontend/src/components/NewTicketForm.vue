@@ -7,7 +7,7 @@
  * own component rather than inline in NewView.vue purely because of size
  * -- nothing here assumes a particular parent, so it takes no props.
  */
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
@@ -19,6 +19,8 @@ import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import AddressFields from '../components/AddressFields.vue';
 import { CUSTOMER_SOURCES, blankAddress } from '../customerSources';
+import DraftNotice from './DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 // Shop-local "today" (the shop is in Chicago) as YYYY-MM-DD -- same
 // helper DashboardView/RentalCalendarView use, so a ticket opened late in
@@ -396,6 +398,49 @@ watch(selectedFamily, (family) => {
   form.value.technician_ids = [...(defaultTechsByFamily.value[family] || [])];
 });
 
+// Unsaved-form autosave (drafts.js, kiosk feedback Oct 2026). Manual start:
+// the baseline has to be the form *after* onMounted below fills in its
+// category/priority/status defaults, or every fresh form would look like a
+// draft. NewView also unmounts this form on a tab switch, so a half-built
+// ticket now survives that too.
+const ticketDraft = useDraft('new-ticket', null, {
+  manual: true,
+  get: () => ({
+    form: form.value,
+    newInstrument: newInstrument.value,
+    newCustomer: newCustomer.value,
+    selectedCustomer: selectedCustomer.value,
+    siblingInstruments: siblingInstruments.value,
+    vendorOrdersOpen: vendorOrdersOpen.value,
+    vendorOrders: vendorOrders.value,
+  }),
+  set: applyTicketDraft,
+});
+
+// Putting a snapshot back has to go through this form's own watchers in
+// the right order rather than one big assignment: flipping newCustomer on
+// wipes the customer pick, a customer pick needs its instrument list
+// fetched (without loadCustomerInstruments() clearing instrument_id), and
+// the instrument-type watcher overwrites technician_ids with the defaults.
+async function applyTicketDraft(v) {
+  newCustomer.value = v.newCustomer;
+  await nextTick();
+  selectedCustomer.value = v.selectedCustomer;
+  instruments.value = v.form.customer_id
+    ? await api.get('/instruments', { customer_id: v.form.customer_id }).catch(() => [])
+    : [];
+  form.value = v.form;
+  newInstrument.value = v.newInstrument;
+  vendorOrdersOpen.value = v.vendorOrdersOpen;
+  vendorOrders.value = v.vendorOrders;
+  await nextTick();
+  // ...then re-apply what those watchers just reacted to.
+  form.value.technician_ids = v.form.technician_ids;
+  form.value.title = v.form.title;
+  form.value.ticket_name = v.form.ticket_name;
+  siblingInstruments.value = v.siblingInstruments;
+}
+
 onMounted(async () => {
   defaultTechsByFamily.value = await api.get('/instruments/default-technicians');
   vendors.value = await api.get('/parts/vendors');
@@ -409,6 +454,8 @@ onMounted(async () => {
   const activePriorities = settings.active('priority_tier');
   form.value.priority_key = activePriorities.find((p) => p.key === 'standard_priority')?.key
     || activePriorities[0]?.key || '';
+  await nextTick();
+  ticketDraft.start();
 });
 
 async function submit() {
@@ -495,6 +542,9 @@ async function submit() {
 
     const ticket = await api.post('/tickets', payload);
     createdTicketId.value = ticket.id;
+    // The ticket exists now -- a restorable copy of this form could only
+    // ever be submitted again as a duplicate.
+    ticketDraft.stop();
 
     // Vendor Orders (bottom-of-form disclosure): only fires once the
     // section was actually opened *and* a vendor picked -- opening it and
@@ -617,6 +667,7 @@ async function submit() {
 <template>
   <div style="max-width: 780px">
     <form class="card" @submit.prevent="submit">
+      <DraftNotice :draft="ticketDraft" />
       <div class="field">
         <label>Category *</label>
         <div class="row">

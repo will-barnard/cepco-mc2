@@ -23,7 +23,7 @@
  * picks into the flat {instrument_id, procedure_id}[] POST /quotes wants.
  */
 import {
-  ref, computed, onMounted, watch,
+  ref, computed, onMounted, watch, nextTick,
 } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../api';
@@ -31,6 +31,8 @@ import { useSettings, useRefData } from '../stores';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import AddressFields from '../components/AddressFields.vue';
 import { CUSTOMER_SOURCES, blankAddress, addressFrom } from '../customerSources';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const router = useRouter();
 const settings = useSettings();
@@ -448,6 +450,8 @@ onMounted(async () => {
   const activePriorities = settings.active('priority_tier');
   priorityKey.value = activePriorities.find((p) => p.key === 'standard_priority')?.key
     || activePriorities[0]?.key || '';
+  await nextTick();
+  estimateDraft.start();
 });
 
 // --- submit ----------------------------------------------------------------------
@@ -463,6 +467,64 @@ onMounted(async () => {
 const createdCustomerId = ref(null);
 const createdInstrumentByBlock = ref(new Map());
 const createdEstimateId = ref(null);
+
+// Unsaved-wizard autosave (drafts.js, kiosk feedback Oct 2026) -- the whole
+// wizard position, not just the notes box, so someone pulled away mid-
+// estimate comes back to the same step. The created* ids ride along on
+// purpose: if a submit got partway (customer made, estimate not), a
+// restored draft retries from where it stopped instead of creating a
+// second customer -- the exact duplicate those refs exist to prevent.
+// Manual start: the baseline is the wizard after onMounted's defaults.
+const estimateDraft = useDraft('new-estimate', null, {
+  manual: true,
+  get: () => ({
+    stage: stage.value,
+    customerId: customerId.value,
+    selectedCustomer: selectedCustomer.value,
+    newCustomer: newCustomer.value,
+    contact: contact.value,
+    blocks: blocks.value,
+    activeBlockKey: activeBlockKey.value,
+    categoryKey: categoryKey.value,
+    priorityKey: priorityKey.value,
+    notes: notes.value,
+    createdCustomerId: createdCustomerId.value,
+    createdInstrumentByBlock: [...createdInstrumentByBlock.value],
+    createdEstimateId: createdEstimateId.value,
+  }),
+  set: applyEstimateDraft,
+});
+
+async function applyEstimateDraft(v) {
+  // newCustomer first, on its own tick: its watcher wipes the customer
+  // pick, contact and blocks when it flips on.
+  newCustomer.value = v.newCustomer;
+  await nextTick();
+  customerId.value = v.customerId;
+  selectedCustomer.value = v.selectedCustomer;
+  // Not loadCustomerInstruments() -- that clears blocks.
+  customerInstruments.value = v.customerId
+    ? await api.get('/instruments', { customer_id: v.customerId }).catch(() => [])
+    : [];
+  const families = [...new Set(v.blocks.map((b) => b.family).filter(Boolean))];
+  await Promise.all(families.map((f) => ensureFamilyNodes(f).catch(() => {})));
+  contact.value = v.contact;
+  blocks.value = v.blocks;
+  activeBlockKey.value = v.activeBlockKey;
+  categoryKey.value = v.categoryKey;
+  priorityKey.value = v.priorityKey;
+  notes.value = v.notes;
+  createdCustomerId.value = v.createdCustomerId;
+  createdInstrumentByBlock.value = new Map(v.createdInstrumentByBlock || []);
+  createdEstimateId.value = v.createdEstimateId;
+  stage.value = v.stage;
+}
+
+// Cancel is a deliberate "throw this away" -- don't keep a draft of it.
+function cancel() {
+  estimateDraft.stop();
+  router.back();
+}
 
 async function submit(sendAfterCreate) {
   error.value = '';
@@ -550,6 +612,7 @@ async function submit(sendAfterCreate) {
     }
 
     if (sendAfterCreate) await api.post(`/quotes/${createdEstimateId.value}/send`);
+    estimateDraft.stop();
     router.push({ name: 'estimate', params: { id: createdEstimateId.value } });
   } catch (err) {
     error.value = err.message;
@@ -563,9 +626,10 @@ async function submit(sendAfterCreate) {
   <div class="page wiz-page">
     <div class="page-head">
       <h1>New estimate</h1>
-      <button type="button" @click="router.back()">Cancel</button>
+      <button type="button" @click="cancel">Cancel</button>
     </div>
 
+    <DraftNotice :draft="estimateDraft" />
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
     <!-- STAGE: customer ------------------------------------------------- -->

@@ -41,6 +41,8 @@ import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings } from '../stores';
 import TechnicianPicker from './TechnicianPicker.vue';
+import DraftNotice from './DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
 const emit = defineEmits(['changed']);
@@ -67,6 +69,16 @@ function openForm() {
   showForm.value = true;
 }
 
+// Unsaved-form autosave (drafts.js, kiosk feedback Oct 2026). Only an open
+// form that's actually been touched counts as a draft -- Cancel (closing
+// it) throws the draft away, same as it always threw the typing away.
+const subTicketDraft = useDraft(() => `sub-ticket:${props.ticket.id}`, null, {
+  get: () => (showForm.value && JSON.stringify(form.value) !== JSON.stringify(blank()) ? form.value : null),
+  set: (v) => {
+    if (v) { form.value = v; showForm.value = true; } else { showForm.value = false; }
+  },
+});
+
 async function createSubTicket() {
   error.value = '';
   if (!form.value.title.trim()) {
@@ -86,6 +98,7 @@ async function createSubTicket() {
       source_ticket_id: props.ticket.id,
     });
     showForm.value = false;
+    subTicketDraft.clear();
     emit('changed');
   } catch (err) {
     error.value = err.message;
@@ -114,6 +127,7 @@ defineExpose({ openForm });
 
     <div v-if="error" class="alert" style="margin-bottom: 12px">{{ error }}</div>
 
+    <DraftNotice v-if="showForm" :draft="subTicketDraft" />
     <div v-if="showForm" class="field-row" style="margin-bottom: 16px">
       <div class="field" style="flex: 2">
         <label>Title</label>

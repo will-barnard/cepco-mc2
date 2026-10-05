@@ -18,6 +18,8 @@
 import { ref, computed, onMounted } from 'vue';
 import api from '../api';
 import { useAuth, useSettings, useRefData } from '../stores';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -39,6 +41,8 @@ const form = ref({
 });
 const submitting = ref(false);
 const submitted = ref(false);
+// Unsaved-nomination autosave (drafts.js, kiosk feedback Oct 2026).
+const nominationDraft = useDraft('ceppy-nomination', form);
 
 async function submitNomination() {
   error.value = '';
@@ -61,6 +65,7 @@ async function submitNomination() {
     form.value = {
       nominee_id: '', title: '', reason: '', category_key: '', category_other: '',
     };
+    nominationDraft.clear();
     submitted.value = true;
     await loadMine();
   } catch (err) {
@@ -264,6 +269,7 @@ onMounted(async () => {
     </div>
 
     <div v-if="tab === 'nominate'" class="card" style="max-width: 560px">
+      <DraftNotice :draft="nominationDraft" />
       <div class="field">
         <label>Who are you nominating?</label>
         <select v-model="form.nominee_id">

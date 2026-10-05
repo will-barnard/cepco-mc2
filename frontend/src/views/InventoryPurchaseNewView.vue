@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router';
 import api from '../api';
 import { useRefData } from '../stores';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const router = useRouter();
 const refData = useRefData();
@@ -23,6 +25,24 @@ const notes = ref('');
 const error = ref('');
 const busy = ref(false);
 
+// Unsaved-form autosave (drafts.js, kiosk feedback Oct 2026).
+const purchaseDraft = useDraft('inventory-purchase', null, {
+  get: () => ({
+    instrument: instrument.value,
+    seller: seller.value,
+    price: price.value,
+    purchaseDate: purchaseDate.value,
+    notes: notes.value,
+  }),
+  set: (v) => {
+    instrument.value = v.instrument;
+    seller.value = v.seller;
+    price.value = v.price;
+    purchaseDate.value = v.purchaseDate;
+    notes.value = v.notes;
+  },
+});
+
 async function submit() {
   error.value = '';
   busy.value = true;
@@ -34,6 +54,7 @@ async function submit() {
       purchase_date: purchaseDate.value,
       notes: notes.value || null,
     });
+    purchaseDraft.stop();
     router.push({ name: 'ticket', params: { id: result.ticket.id } });
   } catch (err) {
     error.value = err.message;
@@ -52,6 +73,7 @@ async function submit() {
     </p>
 
     <form class="card" @submit.prevent="submit">
+      <DraftNotice :draft="purchaseDraft" />
       <h2>Instrument</h2>
       <div class="field-row">
         <div class="field">

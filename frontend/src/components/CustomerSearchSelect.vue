@@ -139,6 +139,9 @@ watch(() => props.modelValue, (id, prevId) => {
   if (!id) { query.value = ''; return; }
   const known = results.value.find((r) => r.id === id);
   if (known) query.value = known.name;
+  // Set from outside to a customer this box never searched for (a
+  // restored form draft -- drafts.js): look the name up, same as onMounted.
+  else api.get(`/customers/${id}`).then((row) => { if (props.modelValue === id) query.value = row.name; }).catch(() => {});
 });
 </script>
 

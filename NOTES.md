@@ -3482,6 +3482,63 @@ that's *also* flagged-priority still only shows once, under Daily To-Do's
 
 No migration.
 
+### 2.83 Kiosk: walking away no longer loses what you were typing
+
+Shop feedback: someone stepped away mid-entry, kiosk mode idle-locked
+after 5 minutes (as designed), and their unsaved typing was gone when they
+came back. Two separate causes, two fixes.
+
+**1. Re-picking your own name sent you to the dashboard.** The overlay
+never unmounts the page underneath (UserSwitcher.vue was built that way on
+purpose), but the natural move on walking back up is to tap your own tile,
+and that went through the normal switch path -- `router.push` to the
+dashboard (§2.80), which unmounted the half-filled form. Your own tile now
+behaves exactly like "Stay signed in as ..." (just drops the overlay) and
+is labelled "Resume". No PIN for an admin re-picking themselves: "Stay
+signed in" already resumes the same session without one, so asking would
+be friction, not security.
+
+**2. Everything else that unmounts a form now keeps a draft.**
+`frontend/src/drafts.js` (`useDraft`) autosaves form state to
+localStorage, 400 ms after typing stops, and restores it the next time the
+*same person* opens the *same form*, with a "Restored your unsaved draft
+... Discard" banner (`DraftNotice.vue`). Covers a different tech switching
+in, a refresh, a browser crash, navigating away, and NewView's tab switch.
+
+- Keys are `mc2_draft:<userId>:<form>` -- per person, so one tech's
+  half-written note never appears in another tech's composer on the kiosk.
+- Expire after 7 days (pruned on page load). Browser-local only: a draft
+  doesn't follow someone to another computer. Deliberate -- drafts are
+  throwaway, and every form's real save path is untouched.
+- Fields that edit a server value (ticket "Service needed", the progress
+  update's three boxes) only restore if the server value is still what it
+  was when the draft started; if someone else saved since, theirs wins and
+  the stale draft is dropped.
+- New ticket / New estimate / Inventory purchase stop drafting once the
+  record is actually created, so a restored draft can't be resubmitted as
+  a duplicate. The estimate wizard's draft carries its `created*` ids
+  (§ the partial-submit retry comment in EstimateNewView.vue) for the same
+  reason. Its Cancel button discards the draft.
+- Open-on-demand forms (sub-ticket, rental) only draft once touched; their
+  Cancel discards.
+
+Wired into: ticket notes composer, ticket status-change note and Service
+needed, New ticket, New estimate, progress update detail, Ceppy
+nomination, inventory purchase, sub-ticket, rental.
+
+Not covered: photos / file inputs (a File can't be serialized), and
+`@change`-saved fields (QC notes, shipment notes) -- tapping anything on
+the kiosk overlay blurs them, which already saves them. Edit-in-place
+forms that prefill from the server (customer edit, ticket estimate card,
+purchase edit) aren't wired yet; same `useDraft(..., { manual: true,
+requireSameBase: true })` pattern if they need it.
+
+CustomerSearchSelect.vue now looks up the customer name when its value is
+set from outside to an id it never searched for (a restored draft) --
+previously the box would sit blank with a customer still selected.
+
+No migration.
+
 ## 4. Suggested first moves after deploy
 
 

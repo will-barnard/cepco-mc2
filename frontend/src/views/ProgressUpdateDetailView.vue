@@ -11,6 +11,8 @@
 import { ref, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -23,6 +25,29 @@ const summaryDraft = ref('');
 const serviceDoneDraft = ref('');
 const serviceNeededDraft = ref('');
 const savingDraft = ref(false);
+
+// Unsaved-text autosave for the three editable boxes (drafts.js, kiosk
+// feedback Oct 2026). Server-backed, so it starts after load() and only
+// restores if the saved values haven't changed underneath it since.
+const textOf = (u) => ({
+  summary: u?.summary || '',
+  service_done_notes: u?.service_done_notes || '',
+  service_needed_notes: u?.service_needed_notes || '',
+});
+const textDraft = useDraft(() => `progress-update:${props.id}`, null, {
+  manual: true,
+  requireSameBase: true,
+  get: () => ({
+    summary: summaryDraft.value,
+    service_done_notes: serviceDoneDraft.value,
+    service_needed_notes: serviceNeededDraft.value,
+  }),
+  set: (v) => {
+    summaryDraft.value = v.summary ?? '';
+    serviceDoneDraft.value = v.service_done_notes ?? '';
+    serviceNeededDraft.value = v.service_needed_notes ?? '';
+  },
+});
 const refreshing = ref(false);
 const sending = ref(false);
 
@@ -43,6 +68,7 @@ async function load() {
     summaryDraft.value = update.value.summary || '';
     serviceDoneDraft.value = update.value.service_done_notes || '';
     serviceNeededDraft.value = update.value.service_needed_notes || '';
+    textDraft.start();
     await loadPhotoUrls(update.value.attachments);
   } finally {
     loading.value = false;
@@ -59,6 +85,7 @@ async function saveDraft() {
       service_done_notes: serviceDoneDraft.value,
       service_needed_notes: serviceNeededDraft.value,
     }) };
+    textDraft.clear();
     notice.value = 'Saved.';
   } catch (err) {
     error.value = err.message;
@@ -78,6 +105,9 @@ async function refreshFromTicket() {
     update.value = await api.post(`/progress-updates/${props.id}/refresh`);
     serviceDoneDraft.value = update.value.service_done_notes || '';
     serviceNeededDraft.value = update.value.service_needed_notes || '';
+    // The pulled notes are the new server value; an unsaved summary edit
+    // (left as-is above) is still a draft against it.
+    textDraft.rebase(textOf(update.value));
     await loadPhotoUrls(update.value.attachments);
     notice.value = 'Updated from the ticket.';
   } catch (err) {
@@ -135,6 +165,7 @@ const when = (ts) => (ts ? new Date(ts).toLocaleString() : null);
         <span v-if="when(update.viewed_at)" class="muted small">· Viewed {{ when(update.viewed_at) }}</span>
       </div>
 
+      <DraftNotice :draft="textDraft" />
       <div class="field">
         <label>Summary</label>
         <textarea v-model="summaryDraft" style="min-height: 90px" placeholder="What should the customer know?" />

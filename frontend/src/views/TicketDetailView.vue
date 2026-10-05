@@ -18,6 +18,8 @@ import { xeroContactUrl } from '../xeroLinks';
 import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
 import TicketNotes from '../components/TicketNotes.vue';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
@@ -59,6 +61,15 @@ const statusNote = ref('');
 // it before is shown read-only there.
 const serviceNeededDraft = ref('');
 const savingStatusNotes = ref(false);
+
+// Unsaved-text autosave (drafts.js, kiosk feedback Oct 2026). The status
+// note starts blank, so it drafts from the get-go. "Service needed" edits a
+// server value, so it only starts once load() has put that value in place,
+// and only restores if nobody has saved a different value since.
+const statusNoteDraft = useDraft(() => `ticket-status-note:${props.id}`, statusNote);
+const serviceNeededDraftStore = useDraft(() => `ticket-service-needed:${props.id}`, serviceNeededDraft, {
+  manual: true, requireSameBase: true,
+});
 const progressUpdate = ref(null);
 const generatingUpdate = ref(false);
 // "Assigned technicians" takes up a lot of space once a ticket has people
@@ -230,6 +241,7 @@ async function load(silent = false) {
     // notes with whatever the server happened to have at that moment.
     if (!silent) {
       serviceNeededDraft.value = ticket.value.service_needed_notes || '';
+      serviceNeededDraftStore.start();
     }
     if (lastInitializedTicketId.value !== ticket.value.id) {
       showTechnicians.value = !(ticket.value.technicians || []).length;
@@ -261,6 +273,7 @@ async function patch(payload) {
 async function changeStatus(event) {
   await patch({ status_key: event.target.value, status_note: statusNote.value || null });
   statusNote.value = '';
+  statusNoteDraft.clear();
 }
 
 async function saveStatusNotes() {
@@ -268,6 +281,9 @@ async function saveStatusNotes() {
   await patch({
     service_needed_notes: serviceNeededDraft.value,
   });
+  // patch() reports failures through error.value rather than throwing --
+  // keep the draft unless the save actually landed.
+  if (!error.value) serviceNeededDraftStore.clear();
   savingStatusNotes.value = false;
 }
 
@@ -665,6 +681,7 @@ const showProgressUpdate = computed(() => (
 
           <div v-if="settings.statusNotesAllowed(ticket.category_key)" class="field">
             <label>Service needed</label>
+            <DraftNotice :draft="serviceNeededDraftStore" />
             <textarea v-model="serviceNeededDraft" style="min-height: 80px" />
             <button class="small" style="margin-top: 6px" :disabled="savingStatusNotes" @click="saveStatusNotes">
               {{ savingStatusNotes ? 'Saving…' : 'Save' }}

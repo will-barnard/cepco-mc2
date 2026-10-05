@@ -36,6 +36,18 @@ watch(target, (employee) => {
 
 function pick(employee) {
   error.value = '';
+  // Tapping your *own* tile is the natural thing to do when you walk back
+  // up to an idle-locked screen, so treat it exactly like "Stay signed in":
+  // just drop the overlay. Going through doSwitch() here would router.push
+  // to the dashboard and unmount whatever form was half-filled underneath —
+  // which is how a tech lost their typing (shop feedback, Oct 2026). No PIN
+  // for an admin re-picking themselves either: the "Stay signed in" link
+  // already resumes this same session without one, so asking would add
+  // friction without adding security.
+  if (employee.id === auth.user?.id) {
+    stayAsIs();
+    return;
+  }
   if (employee.role === 'admin') {
     target.value = employee;
     pin.value = '';
@@ -106,7 +118,8 @@ function stayAsIs() {
           >
             <span class="kiosk-avatar">{{ e.initials || e.name.slice(0, 2) }}</span>
             <span class="kiosk-name">{{ e.name }}</span>
-            <span v-if="e.role === 'admin'" class="tag">PIN required</span>
+            <span v-if="e.id === auth.user?.id" class="tag">Resume</span>
+            <span v-else-if="e.role === 'admin'" class="tag">PIN required</span>
           </button>
         </div>
 

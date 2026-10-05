@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
+import DraftNotice from '../components/DraftNotice.vue';
+import { useDraft } from '../drafts';
 
 // Local, timezone-safe date helpers. Every value here is either a plain
 // 'YYYY-MM-DD' string or a Date built from explicit y/m/d components — never
@@ -40,6 +42,18 @@ const form = ref({
 });
 const formError = ref('');
 const formBusy = ref(false);
+
+// Unsaved-form autosave (drafts.js, kiosk feedback Oct 2026). Only an open,
+// touched form is a draft; Cancel (closing it) discards it.
+const blankRentalForm = () => ({
+  instrument_id: '', start_date: shopToday, end_date: '', renter: '', notes: '',
+});
+const rentalDraft = useDraft('rental', null, {
+  get: () => (showForm.value && JSON.stringify(form.value) !== JSON.stringify(blankRentalForm()) ? form.value : null),
+  set: (v) => {
+    if (v) { form.value = v; showForm.value = true; } else { showForm.value = false; }
+  },
+});
 
 const monthLabel = computed(() => new Date(cursor.value.year, cursor.value.month, 1)
   .toLocaleDateString(undefined, { month: 'long', year: 'numeric' }));
@@ -113,9 +127,8 @@ async function submitForm() {
       notes: form.value.notes || null,
     });
     showForm.value = false;
-    form.value = {
-      instrument_id: '', start_date: shopToday, end_date: '', renter: '', notes: '',
-    };
+    form.value = blankRentalForm();
+    rentalDraft.clear();
     await load();
   } catch (err) {
     formError.value = err.message;
@@ -162,6 +175,7 @@ onMounted(async () => {
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
     <form v-if="showForm" class="card" style="margin-bottom: 16px" @submit.prevent="submitForm">
+      <DraftNotice :draft="rentalDraft" />
       <div class="field-row">
         <div class="field">
           <label>Instrument *</label>
