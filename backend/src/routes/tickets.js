@@ -1014,6 +1014,17 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const existing = existingRows[0];
   if (!existing) throw notFound('Ticket not found');
 
+  // Progress bar (migration 066): optional whole number 1-100. null or ''
+  // clears it (the ticket stops showing a bar on the Queue page).
+  const progressTouched = b.progress_percent !== undefined;
+  let progressPercent = null;
+  if (progressTouched && b.progress_percent !== null && b.progress_percent !== '') {
+    progressPercent = Number(b.progress_percent);
+    if (!Number.isInteger(progressPercent) || progressPercent < 1 || progressPercent > 100) {
+      throw badRequest('Progress must be a whole number from 1 to 100, or blank');
+    }
+  }
+
   const resolved = {};
   if (b.category_key && b.category_key !== existing.category_key) {
     resolved.category = await settings.resolveActive('ticket_category', b.category_key);
@@ -1193,7 +1204,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          family_queue_position   = CASE WHEN $31::boolean THEN $32 ELSE family_queue_position END,
          service_done_notes      = COALESCE($33, service_done_notes),
          service_needed_notes    = COALESCE($34, service_needed_notes),
-         fast_track              = COALESCE($36, fast_track)
+         fast_track              = COALESCE($36, fast_track),
+         progress_percent        = CASE WHEN $37::boolean THEN $38::smallint ELSE progress_percent END
        WHERE id = $1
        RETURNING *`,
       [
@@ -1230,6 +1242,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         // Migration 063 — only a real boolean counts as a touch, so a
         // stray string/number can't flip the flag.
         typeof b.fast_track === 'boolean' ? b.fast_track : null,
+        progressTouched, progressPercent,
       ],
     );
 

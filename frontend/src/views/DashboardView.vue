@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
+import { progressOf, progressStyle } from '../progress';
 import PartsOrdersPanel from '../components/PartsOrdersPanel.vue';
 
 const auth = useAuth();
@@ -283,9 +284,15 @@ onMounted(async () => {
                  yet (nothing broken out into tasks, or its open tasks are
                  someone else's) -- same fallback the old "Priority tasks"
                  card used, just extended to Daily To-Do's too. -->
-            <li v-for="t in dailyTodoTickets" :key="t.id">
+            <li
+              v-for="t in dailyTodoTickets" :key="t.id"
+              :class="{ 'progress-fill': progressOf(t) !== null }" :style="progressStyle(t)"
+            >
               <div style="flex: 1; min-width: 0">
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
+                <span v-if="progressOf(t) !== null" class="small progress-pct" style="margin-left: 6px">
+                  {{ progressOf(t) }}%
+                </span>
                 <div class="muted small">
                   <span :class="['pill', settings.colorFor(t.status_key)]">
                     {{ t.status_label || t.status_label_snapshot }}
@@ -310,9 +317,15 @@ onMounted(async () => {
                 <div class="muted small">{{ task.ticket_title }} · {{ task.priority_label }}</div>
               </div>
             </li>
-            <li v-for="t in priorityTickets" :key="t.id">
+            <li
+              v-for="t in priorityTickets" :key="t.id"
+              :class="{ 'progress-fill': progressOf(t) !== null }" :style="progressStyle(t)"
+            >
               <div style="flex: 1; min-width: 0">
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
+                <span v-if="progressOf(t) !== null" class="small progress-pct" style="margin-left: 6px">
+                  {{ progressOf(t) }}%
+                </span>
                 <div class="muted small">
                   {{ t.category_label || t.category_label_snapshot }} · {{ t.priority_label || t.priority_label_snapshot }}
                   <span :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 4px">
@@ -354,7 +367,7 @@ onMounted(async () => {
           </template>
         </p>
         <TicketTable
-          :tickets="myTickets" group-by-status highlight-status="qc"
+          :tickets="myTickets" group-by-status highlight-status="qc" show-progress
           empty-text="Nothing assigned to you right now."
         />
         <div v-if="mineTotal > MINE_PAGE_SIZE" class="row" style="align-items: center; margin-top: 10px">
@@ -366,7 +379,7 @@ onMounted(async () => {
 
       <div class="card">
         <h2>Unassigned</h2>
-        <TicketTable :tickets="unassigned" group-by-status empty-text="Every ticket has a tech." />
+        <TicketTable :tickets="unassigned" group-by-status show-progress empty-text="Every ticket has a tech." />
         <div v-if="unassignedTotal > UNASSIGNED_PAGE_SIZE" class="row" style="align-items: center; margin-top: 10px">
           <button class="small" :disabled="unassignedPage <= 1" @click="unassignedPage -= 1">‹ Prev</button>
           <span class="muted small">

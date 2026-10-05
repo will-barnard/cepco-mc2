@@ -27,6 +27,7 @@ import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { titleWithoutCustomer } from '../ticketNaming';
 import { useSettings } from '../stores';
+import { progressOf, progressStyle } from '../progress';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -41,7 +42,16 @@ const props = defineProps({
   // title instead of taking columns of their own.
   compact: { type: Boolean, default: false },
   dragging: { type: Boolean, default: false },
+  // Progress bar (migration 066): QueueView turns the percentage column on
+  // for the whole page as soon as any ticket has a progress value, so the
+  // column lines up across rows and boxes (same reasoning as showCustomer).
+  showProgress: { type: Boolean, default: false },
 });
+
+// The row itself is the bar (global .progress-fill, styles.css): its
+// background fills green left to right to this width. null = not tracked,
+// row looks as it always did.
+const progress = computed(() => progressOf(props.ticket));
 
 const settings = useSettings();
 
@@ -69,7 +79,10 @@ const dropOff = computed(
 </script>
 
 <template>
-  <div class="queue-card" :class="{ compact }" :style="dragging ? 'opacity: 0.4' : ''">
+  <div
+    class="queue-card" :class="{ compact, 'progress-fill': progress !== null }"
+    :style="[progressStyle(ticket), dragging ? { opacity: 0.4 } : null]"
+  >
     <template v-if="pos !== null">
       <span class="muted grip" title="Drag to reorder">⠿</span>
       <span class="muted small pos">#{{ pos }}</span>
@@ -95,6 +108,12 @@ const dropOff = computed(
     </div>
     <span class="muted small nowrap date" title="Date of Order/Queue">{{ dropOff }}</span>
     <span class="muted small nowrap techs">{{ techs }}</span>
+    <!-- The visible number is what screen readers get too; the row isn't
+         given role="progressbar" because that role hides its children
+         (the ticket links) from assistive tech. -->
+    <span v-if="showProgress" class="small nowrap pct progress-pct" :title="progress !== null ? `${progress}% complete` : null">
+      {{ progress !== null ? `${progress}%` : '' }}
+    </span>
   </div>
 </template>
 
@@ -104,6 +123,8 @@ const dropOff = computed(
   display: flex; align-items: baseline; gap: 12px;
   padding: 10px 2px; border-top: 1px solid var(--border);
 }
+
+.pct { width: 3.2em; flex: none; text-align: right; }
 .compact { --customer-w: 130px; }
 
 /* Fixed widths on everything left of the title, so customer names and the

@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useSettings } from '../stores';
 import { titleWithoutCustomer } from '../ticketNaming';
+import { progressOf, progressStyle } from '../progress';
 
 const props = defineProps({
   tickets: { type: Array, required: true },
@@ -31,6 +32,10 @@ const props = defineProps({
   // Off when every row is already known to share one status (each Queue
   // status box), where the column would just repeat the box's own header.
   showStatus: { type: Boolean, default: true },
+  // Progress bar (migration 066): fill rows green to progress_percent and
+  // show the number beside the title. Always on in queueLayout (the
+  // Queue's read-only fallback tables); opt-in elsewhere (the dashboard).
+  showProgress: { type: Boolean, default: false },
 });
 
 const router = useRouter();
@@ -101,6 +106,11 @@ function rowClass(statusKey) {
 // A row whose own status isn't the one its section is named after (a
 // Reservation inside the shared "Not Started" box) -- flagged inline when
 // the Status column is off, so it isn't mistaken for a ticket on hand.
+// Progress bar (migration 066): same green fill QueueCard.vue gives the
+// Queue's draggable rows (global .progress-fill), when this table shows it.
+const progressOn = computed(() => props.queueLayout || props.showProgress);
+const rowProgress = (t) => (progressOn.value ? progressOf(t) : null);
+
 const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.queue_section_status_key;
 </script>
 
@@ -150,7 +160,8 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
           </tr>
         <tr
           v-for="t in section.tickets" :key="t.id"
-          :class="['clickable', rowClass(section.statusKey)]" @click="open(t.id)"
+          :class="['clickable', rowClass(section.statusKey), { 'progress-fill': rowProgress(t) !== null }]"
+          :style="rowProgress(t) !== null ? progressStyle(t) : null" @click="open(t.id)"
         >
           <td v-if="queueLayout" class="ellipsis" :title="customerLabel(t)">
             <strong>{{ customerLabel(t) }}</strong>
@@ -159,6 +170,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
             <strong v-if="queueLayout">{{ titleWithoutCustomer(t.title, t.customer_name) || t.title }}</strong>
             <strong v-else>{{ t.title }}</strong>
             <span v-if="t.fast_track" class="tag fast-track-tag">Fast Track</span>
+            <span v-if="rowProgress(t) !== null" class="small progress-pct" style="margin-left: 6px">{{ rowProgress(t) }}%</span>
             <span
               v-if="!showStatus && statusDiffers(t)"
               :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 6px"

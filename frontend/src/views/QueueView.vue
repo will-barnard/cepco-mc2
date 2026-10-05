@@ -399,6 +399,9 @@ async function persistOrder(sectionKey, statusKey) {
 const showCustomer = computed(
   () => tickets.value.some((t) => t.customer_name || t.instrument_is_fleet),
 );
+// Progress column (migration 066): on for the whole page once any ticket
+// has a progress value, so the percentages line up in every box.
+const showProgress = computed(() => tickets.value.some((t) => t.progress_percent));
 
 </script>
 
@@ -588,7 +591,7 @@ const showCustomer = computed(
           <template v-else>
             <QueueCard
               v-for="row in sec.rows" :key="row.ticket.id"
-              :ticket="row.ticket" :pos="row.posInGroup" :show-customer="showCustomer"
+              :ticket="row.ticket" :pos="row.posInGroup" :show-customer="showCustomer" :show-progress="showProgress"
               :dragging="dragIndex === row.index"
               draggable="true"
               @dragstart="onDragStart(row.index, $event)"
@@ -616,7 +619,7 @@ const showCustomer = computed(
           <QueueCard
             v-for="row in sec.rows" :key="row.ticket.id"
             :ticket="row.ticket" :pos="canReorder ? row.posInGroup : null"
-            :show-customer="showCustomer" compact
+            :show-customer="showCustomer" :show-progress="showProgress" compact
             :dragging="dragIndex === row.index"
             :draggable="canReorder ? 'true' : 'false'"
             @dragstart="onDragStart(row.index, $event)"

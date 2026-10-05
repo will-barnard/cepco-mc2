@@ -3598,6 +3598,48 @@ queues, a cross-status drag persisting, a partial-section reorder being
 rejected, an arrived reservation keeping its place, new tickets joining at the back,
 and the sort=status / unassigned / detail queries.
 
+### 2.85 Per-ticket progress bar on the Queue
+
+Shop request: an optional "how far along" number per ticket, a whole
+number from 1 to 100. When it's set, the ticket's row on the Queue page becomes the
+bar: it fills left to right in green to that width and shows the
+percentage.
+
+- **Migration 066.** `tickets.progress_percent SMALLINT`, NULL = not
+  tracked, with a CHECK constraint for 1-100. Typed in by hand, never derived
+  from tasks or hours, and nothing changes it automatically (not even a move
+  to Done).
+- **API.** `PATCH /tickets/:id { progress_percent }` takes an integer
+  1-100, or a numeric string; `null` or `''` clears it; anything else is a 400. Comes
+  back on every ticket via `t.*`.
+- **Ticket page.** "Progress (optional)" in Details: a number box that
+  saves on change, a small green preview bar and a Clear button. An out-of-range
+  value shows an error and snaps back to the saved value.
+- **Queue.** QueueCard.vue (draggable rows) shades the whole row
+  translucent green to `--progress`, with a solid 3px green line along
+  the bottom to the same point, and a right-aligned green "NN%" column.
+  The column turns on for the whole page once any ticket has a value
+  (QueueView `showProgress`), so the percentages line up across boxes. The
+  read-only fallback tables (TicketTable `queueLayout`, used when dragging
+  is off) get the same fill, with the percentage beside the title. The fill
+  is translucent so the text stays readable. The row isn't given
+  `role="progressbar"`, because that role hides its links from screen
+  readers; the visible "NN%" text carries the value instead.
+- **Dashboard** (follow-up): "In-Progress Tickets" and "Unassigned"
+  (TicketTable `showProgress`) and the To-Dos card's ticket rows get the
+  same fill and percentage. Task rows in To-Dos don't, because a task has its own
+  checkbox and the bar belongs to the ticket.
+- **One implementation.** `frontend/src/progress.js` (`progressOf`,
+  `progressStyle`) plus the global `.progress-fill` / `.progress-pct` classes
+  in styles.css, used by QueueCard, TicketTable and DashboardView. The fill
+  is `background-image` only. To make that layer correctly, the table-row
+  hover and the dashboard's highlighted QC rows (`tbody tr:hover`,
+  `tr.row-highlight.*` in styles.css) now set `background-color` instead of
+  the `background` shorthand, which would otherwise have wiped the bar. A
+  highlighted QC row keeps its tint and left accent under the green.
+- Not on the New ticket form; it's set from the ticket page once the job is
+  under way.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -276,6 +276,24 @@ async function changeStatus(event) {
   statusNoteDraft.clear();
 }
 
+// Blank clears it; anything else has to be a whole number 1-100 (the
+// backend checks the same). A bad value snaps the box back to what's saved
+// rather than leaving an unsaved number sitting there looking saved.
+async function saveProgress(event) {
+  const raw = String(event.target.value).trim();
+  if (raw === '') {
+    if (ticket.value.progress_percent != null) await patch({ progress_percent: null });
+    return;
+  }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 100) {
+    error.value = 'Progress must be a whole number from 1 to 100, or blank.';
+    event.target.value = ticket.value.progress_percent ?? '';
+    return;
+  }
+  if (n !== ticket.value.progress_percent) await patch({ progress_percent: n });
+}
+
 async function saveStatusNotes() {
   savingStatusNotes.value = true;
   await patch({
@@ -499,6 +517,27 @@ const showProgressUpdate = computed(() => (
                  level, which this single ticket-wide field never could.
                  ticket.tech_level_key stays in the DB (costs nothing to
                  leave it there), it just isn't edited from here anymore. -->
+          </div>
+
+          <!-- Progress bar (migration 066): optional 1-100, a judgement call
+               typed in by hand. When set, this ticket's row on the Queue
+               fills green to that width. Blank = no bar. -->
+          <div class="field">
+            <label>Progress (optional)</label>
+            <div class="row progress-edit">
+              <input
+                type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="—"
+                :value="ticket.progress_percent ?? ''" style="width: 90px"
+                @change="saveProgress($event)"
+              />
+              <span class="muted">%</span>
+              <div v-if="ticket.progress_percent" class="progress-preview" :title="`${ticket.progress_percent}%`">
+                <div class="progress-preview-fill" :style="{ width: `${ticket.progress_percent}%` }" />
+              </div>
+              <button v-if="ticket.progress_percent" class="small" type="button" @click="patch({ progress_percent: null })">
+                Clear
+              </button>
+            </div>
           </div>
 
           <div class="field">
@@ -789,3 +828,14 @@ const showProgressUpdate = computed(() => (
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Progress (migration 066): same green fill the Queue rows use, as a small
+   preview beside the number. */
+.progress-edit { flex-wrap: nowrap; align-items: center; }
+.progress-preview {
+  flex: 1; min-width: 60px; max-width: 220px; height: 8px;
+  border-radius: 999px; background: var(--surface-2); overflow: hidden;
+}
+.progress-preview-fill { height: 100%; background: var(--green); border-radius: 999px; }
+</style>

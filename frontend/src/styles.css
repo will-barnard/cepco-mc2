@@ -327,7 +327,7 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 th { color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
-tbody tr:hover { background: var(--surface-2); }
+tbody tr:hover { background-color: var(--surface-2); }
 tbody tr.clickable { cursor: pointer; }
 
 /* --- highlighted table rows (TicketTable.vue's highlightStatus) -----------
@@ -338,13 +338,13 @@ tbody tr.clickable { cursor: pointer; }
    stays correct if a shop ever retints a status in Settings). Same
    10%-opacity convention as .alert's rgba backgrounds above; :hover comes
    after so the row still darkens like every other row on mouseover. */
-tbody tr.row-highlight.slate  { background: rgba(107, 114, 128, 0.10); box-shadow: inset 3px 0 0 var(--slate); }
-tbody tr.row-highlight.blue   { background: rgba(59, 130, 246, 0.10); box-shadow: inset 3px 0 0 var(--blue); }
-tbody tr.row-highlight.violet { background: rgba(139, 92, 246, 0.10); box-shadow: inset 3px 0 0 var(--violet); }
-tbody tr.row-highlight.amber  { background: rgba(245, 158, 11, 0.10); box-shadow: inset 3px 0 0 var(--amber); }
-tbody tr.row-highlight.green  { background: rgba(16, 185, 129, 0.10); box-shadow: inset 3px 0 0 var(--green); }
-tbody tr.row-highlight.red    { background: rgba(239, 68, 68, 0.10); box-shadow: inset 3px 0 0 var(--red); }
-tbody tr.row-highlight:hover  { background: var(--surface-2); }
+tbody tr.row-highlight.slate  { background-color: rgba(107, 114, 128, 0.10); box-shadow: inset 3px 0 0 var(--slate); }
+tbody tr.row-highlight.blue   { background-color: rgba(59, 130, 246, 0.10); box-shadow: inset 3px 0 0 var(--blue); }
+tbody tr.row-highlight.violet { background-color: rgba(139, 92, 246, 0.10); box-shadow: inset 3px 0 0 var(--violet); }
+tbody tr.row-highlight.amber  { background-color: rgba(245, 158, 11, 0.10); box-shadow: inset 3px 0 0 var(--amber); }
+tbody tr.row-highlight.green  { background-color: rgba(16, 185, 129, 0.10); box-shadow: inset 3px 0 0 var(--green); }
+tbody tr.row-highlight.red    { background-color: rgba(239, 68, 68, 0.10); box-shadow: inset 3px 0 0 var(--red); }
+tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
 
 /* --- pills ---------------------------------------------------------------- */
 .pill {
@@ -381,6 +381,23 @@ tbody tr.row-highlight:hover  { background: var(--surface-2); }
   border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2);
 }
 .gallery figcaption { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+/* --- progress bar (migration 066, progress.js) ---------------------------
+   The element itself is the bar: a translucent green wash from the left
+   edge to --progress, with a solid green line along the bottom to the same
+   point. background-*image* only, never the shorthand, so whatever
+   background-color the element already has -- a table row's hover, the
+   dashboard's highlighted QC rows -- still shows underneath. rgba is
+   --green (#10b981) at low alpha so text on top stays readable. */
+.progress-fill {
+  background-image:
+    linear-gradient(var(--green), var(--green)),
+    linear-gradient(to right, rgba(16, 185, 129, 0.2) var(--progress), transparent var(--progress));
+  background-size: var(--progress) 3px, 100% 100%;
+  background-position: left bottom, left top;
+  background-repeat: no-repeat;
+}
+.progress-pct { font-weight: 600; color: var(--green); }
 
 /* --- checklist ------------------------------------------------------------ */
 .checklist { list-style: none; margin: 0; padding: 0; }
