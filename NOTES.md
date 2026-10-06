@@ -3640,6 +3640,38 @@ percentage.
 - Not on the New ticket form; it's set from the ticket page once the job is
   under way.
 
+### 2.86 Fix: a status box showing up twice on the Queue
+
+Reported as "In Progress shows up twice on an instrument type's queue,
+once at the top and again at the bottom." Reproduced on production:
+switching All instruments → Rhodes gave In Progress 10 / On Hold 1 / In
+Progress 10 / Not Started 34. Both In Progress boxes held the same ten
+cards. The data was fine; GET /tickets returned each section as one run.
+
+Cause (QueueView.vue): picking an instrument type changes `filters`
+straight away, but `tickets` still holds the previous view's list until
+the new fetch lands. The layout computeds (isQueueOrdered, canReorder,
+the split view, splitsASection) all read the live `filters`. So for that
+moment the old "All instruments" list, which is priority-sorted with its
+statuses interleaved, was cut into status boxes, repeating the same section
+key several times. The duplicate `v-for` keys then left a stale box in the
+DOM after the correct list arrived. Overlapping fetches could also land out
+of order.
+
+Fix:
+- `shownFilters` records the filters the tickets on screen were actually
+  fetched with. All layout decisions, and persistOrder's reorder scope,
+  read that (`layoutFilters`) instead of the live filters.
+- A request sequence number drops any response that isn't the latest, so a
+  slow "All instruments" fetch can't overwrite a newer queue.
+- Section boxes get a unique `uid` key even if a section ever arrives in two
+  runs, so stale DOM can't be left behind again.
+
+Checked against a local copy with production's exact status/instrument
+sequence: the old QueueView reproduced the duplicate box every time and the
+new one didn't. A filter click during the first page load doesn't leave
+the page stuck on "Loading…".
+
 ## 4. Suggested first moves after deploy
 
 

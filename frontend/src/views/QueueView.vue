@@ -97,22 +97,54 @@ const dragIndex = ref(null);
 // tickets comes in.
 const refreshing = ref(false);
 
+// Bug fix (Oct 2026): "In Progress" showing up twice on an instrument
+// type's queue. Clicking e.g. "Rhodes" changes `filters` instantly, but
+// `tickets` still holds the previous view's list (say "All instruments",
+// sorted by priority, so statuses interleave) until the new fetch lands.
+// Everything that decides the *layout* -- grouped boxes or not, which
+// boxes, drag scope -- used to read the live `filters`, so for that moment
+// the old interleaved list got chopped into boxes: In Progress, On Hold,
+// In Progress, ... with the same status key repeated. Duplicate v-for keys
+// then left a stale box behind in the DOM even after the right list
+// arrived. Reproduced on production by clicking All instruments ->
+// Rhodes.
+//
+// So: `shownFilters` is the filter set the tickets on screen were actually
+// fetched with, and the layout reads that instead of `filters`. And a
+// response that's no longer the latest request (a slow "All instruments"
+// fetch finishing after a quick "Rhodes" one) is dropped rather than
+// overwriting the newer list.
+const shownFilters = ref(null);
+let loadSeq = 0;
+
 async function load(silent = false) {
+  const seq = ++loadSeq;
+  const requested = JSON.parse(JSON.stringify(filters.value));
   if (silent) refreshing.value = true; else loading.value = true;
   error.value = '';
   try {
-    tickets.value = await api.get('/tickets', {
-      ...filters.value,
-      archived: filters.value.archived ? 'true' : '',
-      fast_track: filters.value.fast_track ? 'true' : '',
-      hide_status: filters.value.hide_status.join(','),
+    const rows = await api.get('/tickets', {
+      ...requested,
+      archived: requested.archived ? 'true' : '',
+      fast_track: requested.fast_track ? 'true' : '',
+      hide_status: requested.hide_status.join(','),
     });
+    if (seq !== loadSeq) return;
+    tickets.value = rows;
+    shownFilters.value = requested;
   } catch (err) {
-    error.value = err.message;
+    if (seq === loadSeq) error.value = err.message;
   } finally {
-    if (silent) refreshing.value = false; else loading.value = false;
+    // The first full-page load can be superseded by a quick filter click
+    // (a silent load); it still has to clear its own "Loading..." or the
+    // page would sit on it forever. A superseded silent load leaves the
+    // dimming to the newer one that's still in flight.
+    if (!silent) loading.value = false;
+    else if (seq === loadSeq) refreshing.value = false;
   }
 }
+// What the layout computeds below read -- see shownFilters above.
+const layoutFilters = computed(() => shownFilters.value || filters.value);
 
 // Keep filters in the URL so a filtered/queued view can be bookmarked or
 // shared — same as the old Tickets page.
@@ -193,7 +225,7 @@ onBeforeUnmount(() => {
 // priority/updated_at fallback. Used to group the read-only table by
 // status even when dragging itself is disabled (see canReorder below).
 const isQueueOrdered = computed(() => {
-  const f = filters.value;
+  const f = layoutFilters.value;
   if (f.sort === 'status') return true;
   // An explicit date sort wins over the queue order on the backend (GET /
   // checks ?sort first), so the rows don't arrive status-sorted and
@@ -221,7 +253,7 @@ const isQueueOrdered = computed(() => {
 // visual order it produces has nothing to do with the persisted queue
 // position, so dragging a row wouldn't mean what it looks like it means.
 const canReorder = computed(() => {
-  const f = filters.value;
+  const f = layoutFilters.value;
   const singleScope = Boolean(f.category) !== Boolean(f.instrument_family);
   return singleScope && !f.technician_id && f.sort !== 'status' && f.sort !== 'date'
     && f.q === '' && f.priority === '' && !f.archived && !f.fast_track
@@ -229,7 +261,7 @@ const canReorder = computed(() => {
 });
 
 const splitsASection = computed(() => {
-  const f = filters.value;
+  const f = layoutFilters.value;
   const hidden = new Set(f.hide_status);
   const bySection = new Map();
   for (const row of settings.data.ticket_status || []) {
@@ -274,7 +306,7 @@ const rowInfo = computed(() => {
 // single-status filter already excludes — so the column doesn't fill up
 // with "None" placeholders for statuses the user asked not to see.
 const sideKeys = computed(() => {
-  const f = filters.value;
+  const f = layoutFilters.value;
   if (!canReorder.value && !isQueueOrdered.value) return [];
   return settings.queueSideStatuses
     .filter((k) => !f.hide_status.includes(k) && (!f.status || f.status === k));
@@ -298,12 +330,20 @@ const mainTickets = computed(() => mainRows.value.map((r) => r.ticket));
 // list is grouped at all — this is only used when it is.
 const mainSections = computed(() => {
   const out = [];
+  const seen = new Map();
   for (const row of mainRows.value) {
     const last = out[out.length - 1];
     if (last && last.key === sectionOf(row.ticket)) last.rows.push(row);
     else {
+      const key = sectionOf(row.ticket);
+      // Belt and braces for the fix above: if a section ever does come back
+      // in two runs, it gets two boxes with distinct v-for keys rather than
+      // duplicate keys that leave stale DOM behind.
+      const n = (seen.get(key) || 0) + 1;
+      seen.set(key, n);
       out.push({
-        key: sectionOf(row.ticket),
+        key,
+        uid: n === 1 ? key : `${key}#${n}`,
         statusKey: row.ticket.queue_section_status_key || row.ticket.status_key,
         label: row.ticket.queue_section_label || row.ticket.status_label || row.ticket.status_label_snapshot,
         rows: [row],
@@ -376,12 +416,15 @@ async function persistOrder(sectionKey, statusKey) {
   saving.value = true;
   try {
     const ticketIds = tickets.value.filter((t) => sectionOf(t) === sectionKey).map((t) => t.id);
-    const body = filters.value.category
+    // The queue these tickets were loaded for, not whatever the filters say
+    // this instant (see shownFilters).
+    const f = layoutFilters.value;
+    const body = f.category
       ? {
-        scope: 'category', category_key: filters.value.category, status_key: statusKey, ticket_ids: ticketIds,
+        scope: 'category', category_key: f.category, status_key: statusKey, ticket_ids: ticketIds,
       }
       : {
-        scope: 'family', family: filters.value.instrument_family, status_key: statusKey, ticket_ids: ticketIds,
+        scope: 'family', family: f.instrument_family, status_key: statusKey, ticket_ids: ticketIds,
       };
     await api.post('/tickets/reorder-queue', body);
   } catch (err) {
@@ -580,7 +623,7 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
              it isn't (see canReorder), the same read-only table as before,
              just one per box. -->
         <template v-else>
-        <section v-for="sec in mainSections" :key="sec.key" class="card tight queue-section">
+        <section v-for="sec in mainSections" :key="sec.uid" class="card tight queue-section">
           <div class="queue-section-head">
             <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
             <span class="muted small">{{ sec.rows.length }}</span>
