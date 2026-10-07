@@ -232,23 +232,28 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { rows } = await query(
     `UPDATE instruments SET
        family = COALESCE($2, family), model = COALESCE($3, model),
-       year = COALESCE($4, year), serial_no = COALESCE($5, serial_no),
+       year = CASE WHEN $16::boolean THEN $4 ELSE year END,
+       serial_no = CASE WHEN $17::boolean THEN $5 ELSE serial_no END,
        identifying_notes = COALESCE($6, identifying_notes),
        customer_id = CASE WHEN $7::boolean THEN $8 ELSE customer_id END,
        is_fleet = COALESCE($9, is_fleet),
        fleet_last_qc = COALESCE($10, fleet_last_qc),
-       nickname = COALESCE($11, nickname),
+       nickname = CASE WHEN $18::boolean THEN $11 ELSE nickname END,
        last_qc_at = CASE WHEN $12::boolean THEN $13 ELSE last_qc_at END,
        qc_interval_months = CASE WHEN $14::boolean THEN $15 ELSE qc_interval_months END
      WHERE id = $1 RETURNING *`,
-    [req.params.id, b.family || null, b.model || null, b.year || null, b.serial_no || null,
+    [req.params.id, b.family || null, b.model ? String(b.model).trim() : null,
+      b.year || null, b.serial_no ? String(b.serial_no).trim() : null,
       b.identifying_notes === undefined ? null : b.identifying_notes,
       b.customer_id !== undefined, b.customer_id || null,
       b.is_fleet === undefined ? null : b.is_fleet,
       b.fleet_last_qc === undefined ? null : b.fleet_last_qc,
-      b.nickname || null,
+      b.nickname ? String(b.nickname).trim() : null,
       b.last_qc_at !== undefined, b.last_qc_at || null,
-      b.qc_interval_months !== undefined, b.qc_interval_months || null],
+      b.qc_interval_months !== undefined, b.qc_interval_months || null,
+      // Customers page instrument editor: year / serial / nickname can be
+      // blanked (a sent '' or null clears them); left unmentioned they stay.
+      b.year !== undefined, b.serial_no !== undefined, b.nickname !== undefined],
   );
   if (!rows[0]) throw notFound('Instrument not found');
   res.json(rows[0]);

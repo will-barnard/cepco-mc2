@@ -1309,6 +1309,60 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 
 // ---------------------------------------------------------------------------
+// Rename (ticket page -> "Rename" button)
+//
+// For legacy tickets whose title predates the current naming scheme. PATCH's
+// own naming logic deliberately leaves a hand-typed title alone on a
+// "suggest" category but regenerates on a "standardize" one, so a manual
+// rename can't ride on PATCH (a typed title on a standardized ticket would
+// be overwritten with the template). These two routes are explicit instead:
+//   GET  /:id/suggested-title   what the naming conventions would call it now
+//   POST /:id/rename            { title } sets it exactly; { auto: true }
+//                               sets it to the suggested title
+// Open to any signed-in user, same as PATCH.
+// ---------------------------------------------------------------------------
+async function suggestedTitleFor(ticket) {
+  const category = await settings.resolve('ticket_category', ticket.category_key);
+  const subcategory = ticket.subcategory_key
+    ? await settings.resolve('ticket_category', ticket.subcategory_key)
+    : null;
+  const naming = namingFor(category, subcategory);
+  return composeTicketTitle(
+    ticket.customer_id, ticket.instrument_id, naming.template,
+    { categoryLabel: category.label, ticketName: ticket.ticket_name || '' },
+  );
+}
+
+router.get('/:id/suggested-title', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw notFound('Ticket not found');
+  res.json({ title: await suggestedTitleFor(rows[0]), current: rows[0].title });
+}));
+
+router.post('/:id/rename', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const { rows } = await query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
+  const existing = rows[0];
+  if (!existing) throw notFound('Ticket not found');
+
+  let title;
+  if (b.auto) {
+    title = await suggestedTitleFor(existing);
+    if (!title) throw badRequest('Nothing to build a name from -- this ticket has no customer or instrument.');
+  } else {
+    title = String(b.title || '').trim();
+    if (!title) throw badRequest('Title is required');
+  }
+  if (title.length > 300) throw badRequest('Title is too long (300 characters max)');
+
+  const { rows: updated } = await query(
+    'UPDATE tickets SET title = $2 WHERE id = $1 RETURNING id, title',
+    [req.params.id, title],
+  );
+  res.json(updated[0]);
+}));
+
+// ---------------------------------------------------------------------------
 // Queue reordering — open to any signed-in user (per NOTES.md: this used to
 // be admin-only via one-step up/down swaps; the dedicated Queue view
 // (frontend QueueView.vue) replaced that with drag-and-drop, which needs a

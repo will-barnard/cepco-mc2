@@ -3790,6 +3790,41 @@ click left 0 service workers and 0 caches, kept the localStorage value,
 re-fetched index.html with no-cache, loaded `/account?keep=me&_r=...`, and
 dropped `_r` afterwards. Not tested on an actual iOS Home Screen app.
 
+### 2.90 Edit instrument names (Customers page) + ticket "Rename" button
+
+Asked for: (a) edit an instrument's name from the customer view; (b) a
+top-row button on a ticket to rename legacy tickets, either by hand or
+automatically from the naming conventions.
+
+(a) Customers page -> Instruments list: each instrument has an **Edit**
+button that opens an inline form (Nickname, Model, Brand, Year, Serial #;
+Save/Cancel). The list now shows `"Nickname" Model` with brand / year /
+serial underneath. Uses the existing `PATCH /instruments/:id`, which could
+not blank year / serial / nickname (COALESCE kept the old value); those
+three now clear when sent as `''`/null and are left alone when omitted, so
+FleetView's QC-only patches are unaffected. Editing an instrument does
+**not** rewrite titles of tickets already opened on it (a title is a
+snapshot) -- the form says so and points at Rename.
+
+(b) Ticket page header: **Rename** button (any signed-in user, like PATCH)
+-> small popover with
+- a manual title box + "Save name", and
+- the title the naming conventions would give it right now, with a
+  "Rename automatically" button (disabled when it already matches, or when
+  there's no customer/instrument to build from).
+Backend: `GET /tickets/:id/suggested-title` and `POST /tickets/:id/rename`
+(`{title}` or `{auto:true}`), using the ticket's own category/sub-category
+template (`namingFor` + `composeTicketTitle`, so Pre-fill/Standardize
+templates, `{category}` and `{ticket_name}` all work). This is a separate
+route on purpose: PATCH regenerates the title of a Standardize ticket
+whenever a title is sent, so a hand-typed rename could not ride on it.
+Titles already pushed into Xero notes (`[MC2 Ticket #N: old title]`) are not
+rewritten.
+
+Files: `routes/tickets.js`, `routes/instruments.js`,
+`views/TicketDetailView.vue`, `views/CustomersView.vue`, `styles.css`
+(`.rename-*`). No migration.
+
 ## 4. Suggested first moves after deploy
 
 

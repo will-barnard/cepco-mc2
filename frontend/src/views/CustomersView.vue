@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import api from '../api';
-import { useAuth, useSettings } from '../stores';
+import { useAuth, useSettings, useRefData } from '../stores';
 import AddressFields from '../components/AddressFields.vue';
 import XeroHistory from '../components/XeroHistory.vue';
 import {
@@ -11,6 +11,7 @@ import {
 
 const auth = useAuth();
 const settings = useSettings();
+const refData = useRefData();
 const route = useRoute();
 
 const customers = ref([]);
@@ -221,6 +222,53 @@ async function saveCustomerEdit() {
     error.value = err.message;
   } finally {
     savingCustomer.value = false;
+  }
+}
+
+// Instrument editor: nickname / model / year / serial / family, edited in
+// place in the Instruments list. One instrument open at a time. Saving goes
+// through PATCH /instruments/:id; existing ticket titles are NOT rewritten
+// (a title is a snapshot) -- the ticket page's Rename button does that.
+const editingInstrumentId = ref(null);
+const instrumentForm = ref({ nickname: '', model: '', year: '', serial_no: '', family: '' });
+const savingInstrument = ref(false);
+const instrumentError = ref('');
+
+function startEditInstrument(i) {
+  instrumentForm.value = {
+    nickname: i.nickname || '',
+    model: i.model || '',
+    year: i.year || '',
+    serial_no: i.serial_no || '',
+    family: i.family,
+  };
+  instrumentError.value = '';
+  editingInstrumentId.value = i.id;
+}
+
+function cancelEditInstrument() {
+  editingInstrumentId.value = null;
+  instrumentError.value = '';
+}
+
+async function saveInstrument(i) {
+  instrumentError.value = '';
+  savingInstrument.value = true;
+  try {
+    const f = instrumentForm.value;
+    const updated = await api.patch(`/instruments/${i.id}`, {
+      nickname: f.nickname.trim(),
+      model: f.model.trim() || undefined,
+      year: f.year.trim(),
+      serial_no: f.serial_no.trim(),
+      family: f.family,
+    });
+    Object.assign(i, updated);
+    editingInstrumentId.value = null;
+  } catch (err) {
+    instrumentError.value = err.message;
+  } finally {
+    savingInstrument.value = false;
   }
 }
 
@@ -453,8 +501,60 @@ const when = (ts) => new Date(ts).toLocaleString();
         <div v-if="!selected.instruments.length" class="muted small">None recorded.</div>
         <ul v-else class="timeline">
           <li v-for="i in selected.instruments" :key="i.id">
-            <strong>{{ i.model || i.family }}</strong>
-            <div class="muted small">{{ i.family }}<span v-if="i.year"> · {{ i.year }}</span></div>
+            <form v-if="editingInstrumentId === i.id" class="instrument-edit" @submit.prevent="saveInstrument(i)">
+              <div class="field-row">
+                <div class="field">
+                  <label>Nickname</label>
+                  <input v-model="instrumentForm.nickname" placeholder="e.g. Old Betsy" />
+                </div>
+                <div class="field">
+                  <label>Model</label>
+                  <input v-model="instrumentForm.model" placeholder="e.g. Stage 73" />
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label>Brand</label>
+                  <select v-model="instrumentForm.family">
+                    <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Year</label>
+                  <input v-model="instrumentForm.year" />
+                </div>
+                <div class="field">
+                  <label>Serial #</label>
+                  <input v-model="instrumentForm.serial_no" />
+                </div>
+              </div>
+              <div v-if="instrumentError" class="alert" style="margin-bottom: 8px">{{ instrumentError }}</div>
+              <div class="row">
+                <button class="primary small" type="submit" :disabled="savingInstrument">
+                  {{ savingInstrument ? 'Saving…' : 'Save' }}
+                </button>
+                <button class="small" type="button" :disabled="savingInstrument" @click="cancelEditInstrument">
+                  Cancel
+                </button>
+              </div>
+              <p class="muted small" style="margin-top: 6px">
+                Tickets already opened keep their title — use <em>Rename</em> on the ticket to refresh it.
+              </p>
+            </form>
+            <template v-else>
+              <div class="row">
+                <strong>
+                  <template v-if="i.nickname">“{{ i.nickname }}” </template>{{ i.model || refData.familyLabel(i.family) }}
+                </strong>
+                <span class="spacer" />
+                <button class="small" type="button" :aria-label="`Edit instrument ${i.model || i.family}`" @click="startEditInstrument(i)">
+                  Edit
+                </button>
+              </div>
+              <div class="muted small">
+                {{ refData.familyLabel(i.family) }}<span v-if="i.year"> · {{ i.year }}</span><span v-if="i.serial_no"> · S/N {{ i.serial_no }}</span>
+              </div>
+            </template>
           </li>
         </ul>
 

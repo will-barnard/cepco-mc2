@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import api from '../api';
 import { useAuth, useSettings, useRefData } from '../stores';
@@ -198,13 +198,65 @@ async function createAndAttachInstrument() {
     creatingInstrument.value = false;
   }
 }
+// Rename popover (top-row "Rename" button). For legacy tickets whose title
+// predates the current naming scheme: type a new title by hand, or let the
+// ticket's category naming template (Settings -> Ticket naming) rebuild it
+// from the current customer/instrument. Both go through POST
+// /tickets/:id/rename, which -- unlike PATCH -- never second-guesses a
+// hand-typed title on a Standardize category.
+const renameOpen = ref(false);
+const renameEl = ref(null);
+const renameInputEl = ref(null);
+const renameDraft = ref('');
+const renameSuggestion = ref(null); // null = still loading; '' = nothing to build from
+const renameBusy = ref(false);
+const renameError = ref('');
+
+async function toggleRename() {
+  if (renameOpen.value) { renameOpen.value = false; return; }
+  renameDraft.value = ticket.value.title || '';
+  renameSuggestion.value = null;
+  renameError.value = '';
+  renameOpen.value = true;
+  nextTick(() => renameInputEl.value?.focus());
+  try {
+    const r = await api.get(`/tickets/${ticket.value.id}/suggested-title`);
+    renameSuggestion.value = r.title || '';
+  } catch (err) {
+    renameSuggestion.value = '';
+    renameError.value = err.message;
+  }
+}
+
+async function submitRename(payload) {
+  renameBusy.value = true;
+  renameError.value = '';
+  try {
+    const r = await api.post(`/tickets/${ticket.value.id}/rename`, payload);
+    ticket.value.title = r.title;
+    renameOpen.value = false;
+  } catch (err) {
+    renameError.value = err.message;
+  } finally {
+    renameBusy.value = false;
+  }
+}
+const renameManual = () => submitRename({ title: renameDraft.value });
+const renameAuto = () => submitRename({ auto: true });
+
 function onDocumentClick(event) {
   if (customerMenuOpen.value && customerMenuEl.value && !customerMenuEl.value.contains(event.target)) {
     closeCustomerMenu();
   }
+  if (renameOpen.value && renameEl.value && !renameEl.value.contains(event.target)) {
+    renameOpen.value = false;
+  }
 }
 function onDocumentKeydown(event) {
-  if (event.key === 'Escape') closeCustomerMenu();
+  if (event.key === 'Escape') {
+    closeCustomerMenu();
+    renameOpen.value = false;
+  }
 }
 
 // Below 640px -- the breakpoint styles.css already uses elsewhere (e.g.
@@ -452,6 +504,42 @@ const showProgressUpdate = computed(() => (
           v-if="!isShipping && auth.isSenior && !ticket.invoices.length" class="small"
           @click="createInvoice"
         >Create invoice record</button>
+
+        <!-- Rename: manual title, or rebuild it from the naming conventions. -->
+        <div ref="renameEl" class="rename-wrap">
+          <button
+            class="small" type="button" aria-haspopup="true"
+            :aria-expanded="renameOpen" @click="toggleRename"
+          >Rename</button>
+          <div v-if="renameOpen" class="rename-menu" role="dialog" aria-label="Rename ticket">
+            <form class="rename-section" @submit.prevent="renameManual">
+              <label for="rename-title">Rename manually</label>
+              <input
+                id="rename-title" ref="renameInputEl" v-model="renameDraft"
+                maxlength="300" autocomplete="off"
+              />
+              <button
+                class="primary small" type="submit"
+                :disabled="renameBusy || !renameDraft.trim() || renameDraft.trim() === ticket.title"
+              >Save name</button>
+            </form>
+            <div class="rename-section rename-auto">
+              <label>Or use the naming conventions</label>
+              <div v-if="renameSuggestion === null" class="muted small">Working out the name…</div>
+              <template v-else-if="renameSuggestion">
+                <div class="rename-suggestion">{{ renameSuggestion }}</div>
+                <button
+                  class="small" type="button"
+                  :disabled="renameBusy || renameSuggestion === ticket.title" @click="renameAuto"
+                >{{ renameSuggestion === ticket.title ? 'Already named this way' : 'Rename automatically' }}</button>
+              </template>
+              <div v-else class="muted small">
+                Nothing to build a name from — add a customer or instrument first.
+              </div>
+            </div>
+            <div v-if="renameError" class="alert">{{ renameError }}</div>
+          </div>
+        </div>
 
         <span class="row" style="border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px">
           <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
