@@ -272,6 +272,32 @@ async function saveInstrument(i) {
   }
 }
 
+// Delete (admins only -- the button is hidden otherwise and the API enforces
+// it). Looks up how many tickets use the instrument so the confirm can say
+// they'll just lose the link; rentals/purchases are refused by the API.
+const deletingInstrument = ref(false);
+async function deleteInstrument(i) {
+  instrumentError.value = '';
+  deletingInstrument.value = true;
+  try {
+    const full = await api.get(`/instruments/${i.id}`);
+    const n = (full.tickets || []).length;
+    const label = i.nickname ? `"${i.nickname}" ${i.model || ''}`.trim() : (i.model || refData.familyLabel(i.family));
+    const detail = n
+      ? `\n\n${n} ticket${n === 1 ? '' : 's'} on it will keep ${n === 1 ? 'its' : 'their'} title but no longer be linked to an instrument.`
+      : '';
+    if (!confirm(`Delete ${label}? This can't be undone.${detail}`)) return;
+    await api.del(`/instruments/${i.id}`);
+    editingInstrumentId.value = null;
+    await select(selected.value.id);
+    await load(); // instrument count in the list
+  } catch (err) {
+    instrumentError.value = err.message;
+  } finally {
+    deletingInstrument.value = false;
+  }
+}
+
 const when = (ts) => new Date(ts).toLocaleString();
 </script>
 
@@ -536,6 +562,11 @@ const when = (ts) => new Date(ts).toLocaleString();
                 <button class="small" type="button" :disabled="savingInstrument" @click="cancelEditInstrument">
                   Cancel
                 </button>
+                <span class="spacer" />
+                <button
+                  v-if="auth.isAdmin" class="small danger" type="button"
+                  :disabled="savingInstrument || deletingInstrument" @click="deleteInstrument(i)"
+                >{{ deletingInstrument ? 'Deleting…' : 'Delete' }}</button>
               </div>
               <p class="muted small" style="margin-top: 6px">
                 Tickets already opened keep their title — use <em>Rename</em> on the ticket to refresh it.

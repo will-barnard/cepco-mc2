@@ -3821,6 +3821,13 @@ whenever a title is sent, so a hand-typed rename could not ride on it.
 Titles already pushed into Xero notes (`[MC2 Ticket #N: old title]`) are not
 rewritten.
 
+(c) Delete: the instrument editor has a red **Delete** (admins only), and
+`DELETE /instruments/:id` is `requireAdmin`. Tickets, estimate lines and
+shipment items on it are detached (FKs are SET NULL; the ticket keeps its
+title, `family_queue_position` is cleared) -- the confirm says how many
+tickets. Instruments with rentals or purchase records are refused with a
+409, because those FKs are ON DELETE CASCADE and would be wiped silently.
+
 Files: `routes/tickets.js`, `routes/instruments.js`,
 `views/TicketDetailView.vue`, `views/CustomersView.vue`, `styles.css`
 (`.rename-*`). No migration.

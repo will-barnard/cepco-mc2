@@ -3,7 +3,7 @@
 const express = require('express');
 const { query, withTransaction } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
-const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -257,6 +257,41 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   );
   if (!rows[0]) throw notFound('Instrument not found');
   res.json(rows[0]);
+}));
+
+// Customers page -> Instruments -> Edit -> Delete. Admin only (same bar as
+// deleting a ticket). Tickets, estimate lines and shipment items that point
+// at the instrument just lose the link (their FKs are ON DELETE SET NULL, and
+// the ticket keeps its title); family_queue_position is cleared with it since
+// that queue is keyed on the instrument's family. Rentals and purchase
+// records, though, are CASCADE -- deleting would silently destroy them -- so
+// an instrument that has any is refused with a 409 saying what to remove first.
+router.delete('/:id', requireAdmin, asyncHandler(async (req, res) => {
+  const result = await withTransaction(async (client) => {
+    const { rows } = await client.query('SELECT id FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!rows[0]) throw notFound('Instrument not found');
+
+    const { rows: counts } = await client.query(
+      `SELECT (SELECT count(*)::int FROM instrument_rentals WHERE instrument_id = $1) AS rentals,
+              (SELECT count(*)::int FROM instrument_purchases WHERE instrument_id = $1) AS purchases`,
+      [req.params.id],
+    );
+    const { rentals, purchases } = counts[0];
+    if (rentals || purchases) {
+      const bits = [];
+      if (rentals) bits.push(`${rentals} rental record${rentals === 1 ? '' : 's'}`);
+      if (purchases) bits.push(`${purchases} purchase record${purchases === 1 ? '' : 's'}`);
+      throw conflict(`Can't delete: this instrument has ${bits.join(' and ')}. Remove those first.`);
+    }
+
+    const detached = await client.query(
+      'UPDATE tickets SET instrument_id = NULL, family_queue_position = NULL WHERE instrument_id = $1',
+      [req.params.id],
+    );
+    await client.query('DELETE FROM instruments WHERE id = $1', [req.params.id]);
+    return { deleted: true, tickets_detached: detached.rowCount };
+  });
+  res.json(result);
 }));
 
 module.exports = router;
