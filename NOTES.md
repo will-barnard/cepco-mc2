@@ -3672,6 +3672,38 @@ sequence: the old QueueView reproduced the duplicate box every time and the
 new one didn't. A filter click during the first page load doesn't leave
 the page stuck on "Loading…".
 
+### 2.87 Fix: Queue rows squished on an iPad
+
+Reported as "things are getting smushed" on the Queue page on an iPad: titles
+wrapped one word per line, and the order date was drawn on top of the title.
+
+Cause: a Queue row (QueueCard.vue) is made of fixed-width columns (grip,
+position, customer 190px, date, techs 140px, %) that add up to about 610px
+before the title gets any room. The only responsive rule was a *viewport*
+media query at 640px, but an iPad is a wide viewport (820-1180px) and the
+split view (migration 063) still leaves the left column ~560px and
+the right column ~360px. So the title column collapsed to nothing. The
+read-only table fallback (TicketTable.vue `queue-layout`) had the same
+problem: its fixed columns total 560px.
+
+Fix: layout now follows the width of the *box* a row sits in, not the
+viewport. Every Queue box (`.queue-box` in QueueView.vue) is a container
+named `queue-box`, and QueueCard/TicketTable use `@container` rules:
+- under 760px: the date and techs columns drop out and show on a line under
+  the title instead (the same `.sub` line the right column always used);
+  the customer column narrows to 150px.
+- under 520px (the right-hand column on an iPad, phones): the customer gets
+  its own line with the % at the right end, and the title takes the full
+  row below it.
+- 760px and up (wide desktop): unchanged.
+Browsers without container queries (before iPadOS 16) keep the old
+640px-viewport phone layout via `@supports not (container-type: inline-size)`.
+
+No data or backend changes. Checked by rendering the real QueueView with mock
+data in headless Chromium at iPad portrait/landscape widths (820, 1024,
+1180), a phone (390) and desktop (1440): the cards view, the section tables
+(a filter that turns dragging off) and the flat "All instruments" table.
+
 ## 4. Suggested first moves after deploy
 
 

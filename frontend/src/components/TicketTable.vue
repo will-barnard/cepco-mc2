@@ -124,19 +124,19 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
            switching between the two (e.g. toggling Fast Track) doesn't
            reshuffle the page. Priority/hours live on the ticket page. -->
       <colgroup v-if="queueLayout">
-        <col style="width: 190px" />
+        <col class="c-customer" />
         <col />
-        <col v-if="showStatus" style="width: 130px" />
-        <col style="width: 100px" />
-        <col style="width: 140px" />
+        <col v-if="showStatus" class="c-status" />
+        <col class="c-date" />
+        <col class="c-tech" />
       </colgroup>
       <thead v-if="queueLayout">
         <tr>
           <th>Customer</th>
           <th>Ticket</th>
           <th v-if="showStatus">Status</th>
-          <th class="nowrap">Order date</th>
-          <th class="right">Tech</th>
+          <th class="nowrap c-date">Order date</th>
+          <th class="right c-tech">Tech</th>
         </tr>
       </thead>
       <thead v-else>
@@ -175,6 +175,9 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
               v-if="!showStatus && statusDiffers(t)"
               :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 6px"
             >{{ t.status_label || t.status_label_snapshot }}</span>
+            <!-- queueLayout, narrow box: the date/tech columns are hidden
+                 (see the container queries below) and live here instead. -->
+            <div v-if="queueLayout" class="sub muted small">{{ dropOff(t) }} · {{ techNames(t) }}</div>
             <div v-if="t.instrument_family && !queueLayout" class="muted small">
               {{ t.instrument_family }}<span v-if="t.instrument_model"> · {{ t.instrument_model }}</span>
               <span v-if="t.attachment_count" class="tag" style="margin-left: 6px">
@@ -190,8 +193,8 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
             </span>
           </td>
           <template v-if="queueLayout">
-            <td class="nowrap small muted">{{ dropOff(t) }}</td>
-            <td class="small muted right ellipsis">{{ techNames(t) }}</td>
+            <td class="nowrap small muted c-date">{{ dropOff(t) }}</td>
+            <td class="small muted right ellipsis c-tech">{{ techNames(t) }}</td>
           </template>
           <template v-else>
             <td class="small">{{ t.priority_label || t.priority_label_snapshot }}</td>
@@ -212,4 +215,23 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
    positions — auto layout would size each table to its own contents. */
 .queue-layout-table { table-layout: fixed; width: 100%; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.queue-layout-table col.c-customer { width: 190px; }
+.queue-layout-table col.c-status { width: 130px; }
+.queue-layout-table col.c-date { width: 100px; }
+.queue-layout-table col.c-tech { width: 140px; }
+.queue-layout-table .sub { display: none; }
+
+/* Same idea as QueueCard.vue: these fixed columns add up to 560px, which left
+   the title nothing in a ~560px iPad column. Sized by the Queue box
+   (QueueView's .queue-box container), not the viewport. */
+@container queue-box (max-width: 759px) {
+  .queue-layout-table col.c-customer { width: 150px; }
+  .queue-layout-table .c-date, .queue-layout-table .c-tech { display: none; }
+  .queue-layout-table .sub { display: block; }
+}
+@container queue-box (max-width: 519px) {
+  .queue-layout-table col.c-customer { width: 110px; }
+  .queue-layout-table col.c-status { width: 100px; }
+}
 </style>

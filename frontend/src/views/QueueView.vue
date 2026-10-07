@@ -609,7 +609,7 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
       <div class="queue-main">
         <!-- Not one queue's order at all (e.g. "All instruments" sorted by
              priority) — the plain flat table, as before. -->
-        <div v-if="!canReorder && !isQueueOrdered" class="card tight">
+        <div v-if="!canReorder && !isQueueOrdered" class="card tight queue-box">
           <TicketTable
             :tickets="mainTickets" queue-layout
           />
@@ -623,7 +623,7 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
              it isn't (see canReorder), the same read-only table as before,
              just one per box. -->
         <template v-else>
-        <section v-for="sec in mainSections" :key="sec.uid" class="card tight queue-section">
+        <section v-for="sec in mainSections" :key="sec.uid" class="card tight queue-section queue-box">
           <div class="queue-section-head">
             <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
             <span class="muted small">{{ sec.rows.length }}</span>
@@ -653,7 +653,7 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
            doesn't fit a side column. Draggable exactly when the main
            column is. Empty boxes stay, showing "None". -->
       <aside v-if="splitActive" class="queue-side">
-        <section v-for="sec in sideSections" :key="sec.key" class="card tight queue-section">
+        <section v-for="sec in sideSections" :key="sec.key" class="card tight queue-section queue-box">
           <div class="queue-section-head">
             <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
             <span class="muted small">{{ sec.rows.length }}</span>
@@ -686,6 +686,13 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
   gap: 16px; align-items: start;
 }
 .queue-section { padding-bottom: 4px; }
+
+/* Every box is a size container named "queue-box": QueueCard and TicketTable
+   pick their layout from the width of the box they sit in, not from the
+   viewport. An iPad is a wide viewport, but the split view still leaves each
+   column narrow, so a viewport media query can't tell the cards they're
+   being squeezed. */
+.queue-box { container: queue-box / inline-size; }
 .queue-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 
 /* Phones/tablets: one column, right column first. */

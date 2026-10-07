@@ -146,9 +146,32 @@ const dropOff = computed(
 .compact .sub { display: block; }
 .compact .date, .compact .techs { display: none; }
 
-@media (max-width: 640px) {
-  .queue-card { --customer-w: 104px; gap: 8px; }
+/* The row adapts to the width of its box (QueueView's .queue-box container),
+   not the viewport -- on an iPad the split view leaves the main column
+   ~560px wide, and the fixed columns above need ~610px before the title gets
+   any room at all (it wrapped a word per line, with the date drawn over it).
+     - under 760px: date and techs move under the title (the .sub line);
+     - under 520px (the right-hand column, phones): the customer gets its own
+       line with the % beside it, and the title takes the full row below. */
+@container queue-box (max-width: 759px) {
+  .queue-card:not(.compact) { --customer-w: 150px; }
   .sub { display: block; }
   .date, .techs { display: none; }
+}
+@container queue-box (max-width: 519px) {
+  .queue-card { flex-wrap: wrap; row-gap: 2px; }
+  .customer { flex: 1 1 0; width: auto; min-width: 0; }
+  .pct { order: 1; margin-left: auto; }
+  .rest { order: 2; flex: 1 1 100%; }
+}
+
+/* Browsers without container queries (pre-iPadOS 16) keep the old
+   viewport-based phone layout. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 640px) {
+    .queue-card { --customer-w: 104px; gap: 8px; }
+    .sub { display: block; }
+    .date, .techs { display: none; }
+  }
 }
 </style>
