@@ -96,6 +96,13 @@ function closeCustomerMenu() {
   customerMenuOpen.value = false;
 }
 
+// "(312) 555-0142 ext 3" -> "tel:3125550142" -- keep digits and a leading +
+// so tapping the number on an iPad/phone dials it.
+function telHref(phone) {
+  const digits = String(phone || '').replace(/(?!^\+)[^\d]/g, '');
+  return `tel:${digits}`;
+}
+
 // Customer/instrument used to be set once at intake and never touched
 // again -- a ticket created without one (or with the wrong one) had no way
 // to fix that short of editing the DB directly. Both follow the same
@@ -540,35 +547,99 @@ const showProgressUpdate = computed(() => (
             </div>
           </div>
 
-          <div class="field">
-            <div class="row" style="margin-bottom: 4px">
-              <label style="margin: 0">Assigned technicians</label>
-              <span v-if="!showTechnicians" class="muted small">
-                {{ ticket.technicians.map((t) => t.name).join(', ') }}
-              </span>
-              <div class="spacer" />
-              <button
-                v-if="assignedTechIds.length" class="small"
-                @click="showTechnicians = !showTechnicians"
-              >{{ showTechnicians ? 'Hide' : 'Show' }}</button>
-            </div>
-            <TechnicianPicker
-              v-if="showTechnicians"
-              :model-value="assignedTechIds"
-              @update:model-value="(ids) => patch({ technician_ids: ids })"
-            />
-          </div>
-
-          <div class="field-row">
-            <div>
-              <div class="row" style="margin-bottom: 4px">
-                <label style="margin: 0">Customer</label>
-                <div class="spacer" />
-                <button class="small" @click="toggleEditCustomer">
-                  {{ editingCustomer ? 'Cancel' : 'Change' }}
-                </button>
+          <!-- Who / what / where, as one key-value list: label, value, and a
+               quiet action on the right, instead of a scatter of fields with
+               a boxed "Change" button each. The customer's name is a real
+               button (outlined, "Contact info ▾") that opens their email /
+               phone / address; the Xero contact and the full profile live in
+               that popover rather than as loose buttons under the name. -->
+          <div class="detail-rows">
+            <div class="detail-row">
+              <span class="detail-label">Technicians</span>
+              <div class="detail-value">
+                <span v-if="ticket.technicians.length">{{ ticket.technicians.map((t) => t.name).join(', ') }}</span>
+                <span v-else class="muted">Unassigned</span>
               </div>
-              <div v-if="editingCustomer">
+              <button
+                v-if="assignedTechIds.length" type="button" class="detail-action"
+                @click="showTechnicians = !showTechnicians"
+              >{{ showTechnicians ? 'Done' : 'Change' }}</button>
+              <div v-if="showTechnicians" class="detail-extra">
+                <TechnicianPicker
+                  :model-value="assignedTechIds"
+                  @update:model-value="(ids) => patch({ technician_ids: ids })"
+                />
+              </div>
+            </div>
+
+            <div class="detail-row">
+              <span class="detail-label">Customer</span>
+              <div class="detail-value">
+                <div
+                  v-if="ticket.customer_id && !editingCustomer" ref="customerMenuEl"
+                  class="customer-contact-field"
+                >
+                  <button
+                    type="button" class="customer-contact-toggle" aria-haspopup="true"
+                    :aria-expanded="customerMenuOpen" title="Show this customer's contact info"
+                    @click="customerMenuOpen = !customerMenuOpen"
+                  >
+                    <svg
+                      class="customer-contact-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    >
+                      <circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" />
+                    </svg>
+                    <span class="customer-contact-name">{{ ticket.customer_name }}</span>
+                    <span class="customer-contact-hint">
+                      <span class="customer-contact-hint-text">Contact info</span>
+                      <span class="customer-contact-caret">▾</span>
+                    </span>
+                  </button>
+                  <div v-if="customerMenuOpen" class="customer-contact-menu">
+                    <div class="customer-contact-menu-name">{{ ticket.customer_name }}</div>
+                    <div v-if="ticket.customer_email" class="customer-contact-item">
+                      <span class="muted small">Email</span>
+                      <a :href="`mailto:${ticket.customer_email}`">{{ ticket.customer_email }}</a>
+                    </div>
+                    <div v-if="ticket.customer_phone" class="customer-contact-item">
+                      <span class="muted small">Phone</span>
+                      <a :href="telHref(ticket.customer_phone)">{{ ticket.customer_phone }}</a>
+                    </div>
+                    <div v-if="ticket.customer_address" class="customer-contact-item">
+                      <span class="muted small">Address</span>
+                      <span>{{ ticket.customer_address }}</span>
+                    </div>
+                    <p
+                      v-if="!ticket.customer_email && !ticket.customer_phone && !ticket.customer_address"
+                      class="muted small" style="margin: 0"
+                    >
+                      No contact info on file.
+                    </p>
+                    <!-- xeroUrl is only set for a customer linked to a Xero
+                         contact (the nightly sync / Customers page link them);
+                         see xeroLinks.js. -->
+                    <div class="customer-contact-actions">
+                      <RouterLink
+                        :to="`/customers?id=${ticket.customer_id}`" class="btn small"
+                        @click="closeCustomerMenu"
+                      >Full profile →</RouterLink>
+                      <a
+                        v-if="xeroUrl" class="btn small" :href="xeroUrl" target="_blank" rel="noopener"
+                        title="Open this customer's contact in Xero"
+                      >Open in Xero ↗</a>
+                    </div>
+                  </div>
+                </div>
+                <span v-else-if="editingCustomer" class="muted">Choose a customer below</span>
+                <span v-else class="muted">
+                  {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : 'None' }}
+                </span>
+              </div>
+              <button type="button" class="detail-action" @click="toggleEditCustomer">
+                {{ editingCustomer ? 'Cancel' : 'Change' }}
+              </button>
+              <div v-if="editingCustomer" class="detail-extra">
                 <CustomerSearchSelect
                   v-model="customerEditValue"
                   placeholder="Search customers (leave blank for internal / fleet)…"
@@ -577,56 +648,20 @@ const showProgressUpdate = computed(() => (
                   Save
                 </button>
               </div>
-              <template v-else>
-                <div v-if="ticket.customer_id" ref="customerMenuEl" class="customer-contact-field">
-                  <button
-                    type="button" class="customer-contact-toggle"
-                    @click="customerMenuOpen = !customerMenuOpen"
-                  >
-                    <span>{{ ticket.customer_name }}</span>
-                    <span class="customer-contact-caret">▾</span>
-                  </button>
-                  <div v-if="customerMenuOpen" class="customer-contact-menu">
-                    <div v-if="ticket.customer_email"><span class="muted small">Email</span><br />{{ ticket.customer_email }}</div>
-                    <div v-if="ticket.customer_phone"><span class="muted small">Phone</span><br />{{ ticket.customer_phone }}</div>
-                    <div v-if="ticket.customer_address"><span class="muted small">Address</span><br />{{ ticket.customer_address }}</div>
-                    <p
-                      v-if="!ticket.customer_email && !ticket.customer_phone && !ticket.customer_address"
-                      class="muted small"
-                    >
-                      No contact info on file.
-                    </p>
-                    <RouterLink
-                      :to="`/customers?id=${ticket.customer_id}`" class="small"
-                      style="margin-top: 4px" @click="closeCustomerMenu"
-                    >
-                      View full profile →
-                    </RouterLink>
-                  </div>
-                </div>
-                <!-- Only for a customer linked to a Xero contact (the nightly
-                     sync / Customers page links them); see xeroLinks.js. -->
-                <a
-                  v-if="ticket.customer_id && xeroUrl" class="btn small" style="margin-top: 6px"
-                  :href="xeroUrl" target="_blank" rel="noopener"
-                  title="Open this customer's contact in Xero"
-                >Xero contact ↗</a>
-                <p v-else style="margin: 0">
-                  <span class="muted">
-                    {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : '—' }}
-                  </span>
-                </p>
-              </template>
             </div>
-            <div>
-              <div class="row" style="margin-bottom: 4px">
-                <label style="margin: 0">Instrument</label>
-                <div class="spacer" />
-                <button class="small" @click="toggleEditInstrument">
-                  {{ editingInstrument ? 'Cancel' : 'Change' }}
-                </button>
+
+            <div class="detail-row">
+              <span class="detail-label">Instrument</span>
+              <div class="detail-value">
+                <span v-if="ticket.instrument_family">
+                  {{ refData.familyLabel(ticket.instrument_family) }} · {{ ticket.instrument_model }}
+                </span>
+                <span v-else class="muted">None</span>
               </div>
-              <div v-if="editingInstrument">
+              <button type="button" class="detail-action" @click="toggleEditInstrument">
+                {{ editingInstrument ? 'Cancel' : 'Change' }}
+              </button>
+              <div v-if="editingInstrument" class="detail-extra">
                 <select
                   :value="ticket.instrument_id || ''"
                   :disabled="loadingInstrumentOptions || addingInstrument"
@@ -693,25 +728,23 @@ const showProgressUpdate = computed(() => (
                   Set a customer above before adding a new instrument for them.
                 </p>
               </div>
-              <p v-else style="margin: 0">
-                <span v-if="ticket.instrument_family">
-                  {{ ticket.instrument_family }} · {{ ticket.instrument_model }}
+            </div>
+
+            <div class="detail-row">
+              <span class="detail-label">Shop contact</span>
+              <div class="detail-value">
+                <span v-if="ticket.shop_contact_name || ticket.shop_contact_raw">
+                  {{ ticket.shop_contact_name || ticket.shop_contact_raw }}
                 </span>
                 <span v-else class="muted">—</span>
-              </p>
+              </div>
             </div>
-            <div>
-              <label>Shop contact</label>
-              <p style="margin: 0">
-                {{ ticket.shop_contact_name || ticket.shop_contact_raw || '—' }}
-              </p>
-            </div>
+
+            <TicketLinks :ticket="ticket" @changed="load(true)" />
           </div>
 
           <!-- Imported vendor_tracks moved into the Vendor work card
                (TicketVendorWork.vue, migration 064), editable now. -->
-
-          <TicketLinks :ticket="ticket" @changed="load(true)" />
 
           <!-- Published notes (migration 061) — replaced the live-edited
                textarea; also posted to / read from the customer's Xero

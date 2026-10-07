@@ -3704,6 +3704,51 @@ data in headless Chromium at iPad portrait/landscape widths (820, 1024,
 1180), a phone (390) and desktop (1440): the cards view, the section tables
 (a filter that turns dragging off) and the flat "All instruments" table.
 
+### 2.88 Ticket page: the customer / instrument / links block simplified
+
+Shop feedback: the middle of the ticket page's Details card (Assigned
+technicians, Customer, Instrument, Shop contact, Links) was cluttered, and it
+wasn't obvious that the customer's name opens their contact info.
+
+What it was: a scatter of separate fields: a boxed "Change" button on each
+of Customer and Instrument, an unlabeled "Xero contact" button under the
+name, a three-line Links header, and the customer's name as small orange
+text with a tiny caret.
+
+Now it's one bordered list (`.detail-rows` / `.detail-row`, styles.css),
+every row `label | value | quiet action`, so values line up:
+- Technicians: names, "Change" / "Done" toggles the picker (was "Show"/"Hide").
+- Customer: the name is an outlined button with a person icon and
+  "Contact info ▾". It opens the same popover as before, now with email and
+  phone as tap-to-mail / tap-to-call links, and "Full profile →" and
+  "Open in Xero ↗" as buttons inside it (the Xero button no longer sits loose
+  under the name). "Change" is a plain text action on the right.
+- Instrument: brand (now via `refData.familyLabel`, so "Wurlitzer" rather
+  than "wurlitzer") · model, "Change" on the right.
+- Shop contact: read-only value.
+- Links (TicketLinks.vue is now just another row): the links, "+ Add" on the
+  right; the add/edit form opens full-width under the row; "None yet" when
+  empty.
+Anything an action opens (technician picker, customer search, instrument
+select / add-instrument card, link form) appears full-width under its row
+(`.detail-extra`). Behaviour is unchanged; only the layout moved.
+
+Also fixed: with a customer who had no Xero contact, the template's `v-else`
+(attached to the Xero button) printed a stray "—" under the customer name.
+With no customer, the value now reads "CEPCo fleet (internal)" or "None".
+
+Like the Queue (§2.87), the list lays out by its own width (container query),
+not the viewport, since on an iPad the ticket page is two columns and the
+card is narrow even on a wide screen: under ~540px the label sits above the
+value, and under ~420px the "Contact info" words drop away (the outlined
+button, icon and ▾ stay) so the name keeps its room.
+
+Checked by rendering the real TicketDetailView (child cards stubbed) in
+headless Chromium at iPad portrait/landscape, iPad Pro landscape and phone
+widths: with and without contact info / a Xero contact / a customer /
+technicians / links, with the popover open, and with the customer, link
+and technician editors open.
+
 ## 4. Suggested first moves after deploy
 
 

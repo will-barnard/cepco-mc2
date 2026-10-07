@@ -288,24 +288,98 @@ label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 
 .customer-search-menu li.highlighted, .customer-search-menu li:hover { background: var(--surface-2); }
 .customer-search-empty { padding: 14px 10px; }
 
-/* --- customer contact popover (TicketDetailView.vue) -----------------------
-   A ticket's customer contact info inline, instead of navigating to the
-   customer page just to read a phone number — same click-outside/Escape
-   popover convention as the hide-statuses menu above. */
-.customer-contact-field { position: relative; }
-.customer-contact-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 0; min-height: 0; background: none; border: none;
-  color: var(--accent); font: inherit; cursor: pointer;
+/* --- ticket "details" key/value list (TicketDetailView.vue, TicketLinks.vue)
+   Technicians / Customer / Instrument / Shop contact / Links as one bordered
+   list: a label column, the value, and a quiet text action at the right
+   ("Change", "+ Add"). Whatever an action opens (a picker, a search box, a
+   form) goes in .detail-extra, full width underneath its row. Every row has
+   the same columns, so the values all start at the same x. */
+.detail-rows {
+  border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px;
+  /* Rows lay themselves out by the width of this list, not the viewport: on
+     an iPad the ticket page is two columns, so the card is narrow even on a
+     wide screen. */
+  container: detail-rows / inline-size;
 }
-.customer-contact-toggle:hover { text-decoration: underline; }
-.customer-contact-caret { font-size: 11px; text-decoration: none; }
+.detail-row {
+  display: grid; grid-template-columns: 112px minmax(0, 1fr) auto;
+  align-items: center; column-gap: 12px; row-gap: 6px;
+  padding: 6px 12px; min-height: 52px;
+}
+.detail-row + .detail-row { border-top: 1px solid var(--border); }
+.detail-row.top { align-items: start; padding-top: 12px; padding-bottom: 10px; }
+.detail-label { color: var(--text-dim); font-size: 13px; }
+.detail-value { min-width: 0; overflow-wrap: anywhere; }
+.detail-action {
+  justify-self: end; background: none; border: none; color: var(--accent);
+  min-height: 36px; padding: 4px 6px; font-size: 14px;
+}
+.detail-action:hover:not(:disabled) { background: none; text-decoration: underline; }
+.detail-row.top .detail-action { margin-top: -6px; }
+.detail-extra { grid-column: 1 / -1; padding-bottom: 8px; }
+/* Narrow list (under ~540px): the label gets its own line above value + action. */
+@container detail-rows (max-width: 539px) {
+  .detail-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .detail-label { grid-column: 1 / -1; margin-bottom: -4px; }
+  .detail-row.top .detail-label { margin-bottom: 0; }
+}
+/* Browsers without container queries (pre-iPadOS 16): viewport-based. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 520px) {
+    .detail-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .detail-label { grid-column: 1 / -1; margin-bottom: -4px; }
+    .detail-row.top .detail-label { margin-bottom: 0; }
+  }
+}
+
+/* --- customer contact popover (TicketDetailView.vue) -----------------------
+   The customer's name is an outlined button reading "Contact info ▾", so it's
+   obvious it opens something; the popover shows their email / phone / address
+   inline (instead of navigating to /customers just to read a phone number),
+   with the full profile and the Xero contact as buttons at the bottom. Same
+   click-outside/Escape convention as the hide-statuses menu above. */
+.customer-contact-field { position: relative; display: inline-block; max-width: 100%; }
+.customer-contact-toggle {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  padding: 6px 12px 6px 10px; min-height: 40px; text-align: left;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--accent); font: inherit; font-weight: 600; cursor: pointer;
+}
+.customer-contact-toggle:hover:not(:disabled),
+.customer-contact-toggle[aria-expanded="true"] { border-color: var(--accent); background: #303540; }
+.customer-contact-icon { flex: none; width: 18px; height: 18px; }
+.customer-contact-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.customer-contact-hint {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-dim); font-size: 12px; font-weight: 400; white-space: nowrap;
+  padding-left: 8px; border-left: 1px solid var(--border);
+}
+.customer-contact-caret { font-size: 11px; transition: transform 0.15s; }
+.customer-contact-toggle[aria-expanded="true"] .customer-contact-caret { transform: rotate(180deg); }
 .customer-contact-menu {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 25;
-  min-width: 220px; max-width: 320px;
-  display: flex; flex-direction: column; gap: 8px;
+  min-width: 260px; max-width: min(340px, calc(100vw - 48px));
+  display: flex; flex-direction: column; gap: 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.customer-contact-menu-name { font-weight: 600; }
+.customer-contact-item { display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.customer-contact-actions {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding-top: 12px; border-top: 1px solid var(--border);
+}
+/* Narrow list: drop the words, keep the outlined button + icon + caret, so the
+   customer's name keeps its room. */
+@container detail-rows (max-width: 419px) {
+  .customer-contact-hint-text { display: none; }
+  .customer-contact-hint { padding-left: 0; border-left: none; }
+}
+@supports not (container-type: inline-size) {
+  @media (max-width: 420px) {
+    .customer-contact-hint-text { display: none; }
+    .customer-contact-hint { padding-left: 0; border-left: none; }
+  }
 }
 
 /* --- status category checkboxes (SettingsView.vue) ------------------------
