@@ -10,6 +10,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
+import { STATUS_COLORS } from '../statusColors';
 import { useSettings, useRefData } from '../stores';
 import RefreshAppButton from '../components/RefreshAppButton.vue';
 
@@ -393,6 +394,20 @@ async function toggleHighlightTasks(row) {
   }
 }
 
+// Status color picker (ticket_status and vendor_status rows): stores the
+// color's name in meta.color, which every pill / row highlight reads
+// (stores.js's colorFor, statusColors.js for the palette).
+async function setStatusColor(row, color) {
+  if ((row.meta?.color || 'slate') === color) return;
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, color } });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Per-status "Unlocks tasks" flag (migration 022, NOTES.md §2.28) — whether
 // a ticket sitting in this status has its tasks surfaced on anyone's
 // dashboard (stores.js's unlocksTasks). Same on/off-meta-flag pattern as
@@ -682,6 +697,7 @@ onMounted(refresh);
                   title="Statuses with the same name share one box on the Queue, ordered together"
                 >Queue section</th>
                 <th v-if="category === 'priority_tier'">Highlight in tasks</th>
+                <th v-if="category === 'ticket_status' || category === 'vendor_status'">Color</th>
                 <th>Order</th><th>State</th><th />
               </tr>
             </thead>
@@ -828,6 +844,19 @@ onMounted(refresh);
                       @change="toggleHighlightTasks(row)"
                     />
                   </label>
+                </td>
+
+                <td v-if="category === 'ticket_status' || category === 'vendor_status'">
+                  <div class="color-swatches" role="radiogroup" :aria-label="`Color for ${row.label}`">
+                    <button
+                      v-for="c in STATUS_COLORS" :key="c.key" type="button"
+                      :class="['color-swatch', { selected: (row.meta?.color || 'slate') === c.key }]"
+                      :style="{ '--swatch': `var(--${c.key})` }"
+                      role="radio" :aria-checked="(row.meta?.color || 'slate') === c.key"
+                      :title="c.label" :aria-label="c.label"
+                      @click="setStatusColor(row, c.key)"
+                    />
+                  </div>
                 </td>
 
                 <td class="nowrap">

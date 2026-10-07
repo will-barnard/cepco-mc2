@@ -3844,6 +3844,22 @@ sub-tickets just lose their link) and returns to the Queue.
 invoice created in Xero. Notes already pushed to Xero stay in Xero.
 Files: `routes/tickets.js`, `views/TicketDetailView.vue`.
 
+### 2.92 Status color picker (Settings)
+
+Settings -> Ticket statuses (and Vendor work statuses) has a new **Color**
+column: click a swatch to set the status's color. Before this the colors
+were only whatever the seed migrations put in `meta.color` (no UI). The
+palette grew from 6 to 11 named colors (added cyan, teal, lime, orange,
+pink; `statusColors.js`, `--<name>` vars, `.pill.<name>`,
+`tr.row-highlight.<name>`, vendor `.pill-select.<name>` in styles.css).
+Stored as the color's name in `meta.color`, so every existing pill / queue
+section header / row highlight picks it up with no other change. Not a
+free-form hex picker: pills, row accents and the vendor dropdown are all
+class-based, so arbitrary hex would mean touching ~20 call sites. A status
+with no color set shows gray (as before). No migration.
+Files: `statusColors.js`, `views/SettingsView.vue`, `styles.css`,
+`components/TicketVendorWork.vue`.
+
 ## 4. Suggested first moves after deploy
 
 

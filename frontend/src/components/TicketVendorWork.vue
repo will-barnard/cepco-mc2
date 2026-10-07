@@ -167,6 +167,11 @@ defineExpose({ openForm });
 .pill-select.amber  { color: var(--amber); }
 .pill-select.green  { color: var(--green); }
 .pill-select.red    { color: var(--red); }
+.pill-select.cyan   { color: var(--cyan); }
+.pill-select.teal   { color: var(--teal); }
+.pill-select.lime   { color: var(--lime); }
+.pill-select.orange { color: var(--orange); }
+.pill-select.pink   { color: var(--pink); }
 
 @media (max-width: 640px) {
   .vendor-row { grid-template-columns: minmax(0, 1fr) auto; }
