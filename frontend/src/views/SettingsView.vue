@@ -11,6 +11,7 @@ import { ref, computed, onMounted } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
+import RefreshAppButton from '../components/RefreshAppButton.vue';
 
 const settings = useSettings();
 const refData = useRefData();
@@ -568,6 +569,9 @@ onMounted(refresh);
         <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'ticket-naming' }">Ticket naming →</RouterLink>
+        <span class="row" style="border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px">
+          <RefreshAppButton compact />
+        </span>
       </div>
     </div>
 

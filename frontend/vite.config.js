@@ -3,6 +3,9 @@ import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
   plugins: [vue()],
+  // When this build was made -- shown by the "Refresh app" button (appRefresh.js)
+  // so it's easy to tell whether a device is running an old copy.
+  define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
   server: {
     host: true,
     port: 5173,

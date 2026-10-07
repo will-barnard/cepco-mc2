@@ -3749,6 +3749,47 @@ widths: with and without contact info / a Xero contact / a customer /
 technicians / links, with the popover open, and with the customer, link
 and technician editors open.
 
+### 2.89 "Refresh app" button (iOS Home Screen app not updating)
+
+Reported: someone running Mission Control as an iOS Home Screen web app
+("Open as Web App") wasn't getting updates.
+
+Why: there is no service worker or manifest, so it isn't a caching layer
+we built. iOS keeps a Home Screen web app suspended in the background and
+resumes it without reloading, so it can sit on old JavaScript for days. And
+index.html, the one file that names the current hashed bundles, was served
+with no Cache-Control at all (nginx only sent Last-Modified), which lets a
+browser reuse a stored copy on its own estimate, so even a normal reload
+could come back stale.
+
+What's there now:
+- `RefreshAppButton.vue` + `appRefresh.js`: "↻ Refresh app" unregisters any
+  service worker, clears Cache Storage, re-fetches `/index.html` and `/`
+  with `cache: 'reload'`, then navigates to the same URL plus a throwaway
+  `_r=<time>` param (main.js strips it again once the router is ready; other
+  query params are kept). It touches caches only: the session cookie and
+  localStorage (drafts, kiosk setting) are untouched, so nobody is signed out.
+- Where: the Settings header (next to the sub-page links; Settings is
+  admin-only) and a new "App version" card on the Account page, which every
+  signed-in user can reach. A non-admin couldn't have seen a Settings-only
+  button.
+- `vite.config.js` injects `__BUILD_TIME__`; the Account card and the button's
+  tooltip show "This copy was built <date>", the quickest way to tell whether
+  a device is running an old copy.
+- `nginx.conf`: `location = /index.html` sends `Cache-Control: no-cache`
+  (revalidate every load; still a cheap 304). Assets under /assets/ stay
+  immutable. This needs the frontend container redeployed to take effect.
+
+Not done: nothing yet notices on its own that a newer build exists (e.g. on
+resume, compare the running bundle's hash to a fresh index.html and offer a
+refresh). The button is the manual version of that.
+
+Checked in headless Chromium against a server with an SPA fallback: with a
+service worker registered, a populated cache and a localStorage value, one
+click left 0 service workers and 0 caches, kept the localStorage value,
+re-fetched index.html with no-cache, loaded `/account?keep=me&_r=...`, and
+dropped `_r` afterwards. Not tested on an actual iOS Home Screen app.
+
 ## 4. Suggested first moves after deploy
 
 

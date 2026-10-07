@@ -2,9 +2,12 @@
 import { ref } from 'vue';
 import api from '../api';
 import { useAuth, useKiosk } from '../stores';
+import RefreshAppButton from '../components/RefreshAppButton.vue';
+import { builtLabel } from '../appRefresh';
 
 const auth = useAuth();
 const kiosk = useKiosk();
+const built = builtLabel();
 
 const currentPassword = ref('');
 const newPassword = ref('');
@@ -127,6 +130,19 @@ async function submit() {
           {{ busy ? 'Changing…' : 'Change password' }}
         </button>
       </form>
+    </div>
+
+    <div class="card" style="margin-top: 24px">
+      <h2>App version</h2>
+      <p class="muted small">
+        Using Mission Control from the Home Screen on an iPhone or iPad? iOS keeps the app
+        open in the background and doesn't always pick up updates by itself. If something
+        looks out of date or a fix hasn't shown up, refresh it here. You stay signed in.
+      </p>
+      <div class="row">
+        <RefreshAppButton />
+        <span v-if="built" class="muted small">This copy was built {{ built }}</span>
+      </div>
     </div>
 
     <div v-if="auth.isAdmin" class="card" style="margin-top: 24px">
