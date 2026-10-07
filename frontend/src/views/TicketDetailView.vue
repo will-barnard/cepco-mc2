@@ -416,6 +416,37 @@ async function createShippingTicket() {
   }
 }
 
+async function unarchive() {
+  await patch({ archived: false });
+}
+
+// Permanent delete of an archived ticket (errors / duplicates only). The
+// confirm spells out what goes with it; the API refuses if it has a
+// sent/paid/Xero invoice.
+async function deleteTicket() {
+  const t = ticket.value;
+  const gone = [
+    [t.hours_log, 'hours entr', 'y', 'ies'],
+    [t.estimates, 'estimate', '', 's'],
+    [t.attachments, 'attachment', '', 's'],
+    [t.invoices, 'invoice record', '', 's'],
+  ].filter(([list]) => list?.length)
+    .map(([list, word, one, many]) => `${list.length} ${word}${list.length === 1 ? one : many}`);
+  const kids = t.child_tickets?.length || 0;
+  const msg = `Permanently delete #${t.id} "${t.title}"? This can't be undone.`
+    + (gone.length ? `\n\nIt will also delete: ${gone.join(', ')}, plus its notes, tasks and history.` : '')
+    + (kids ? `\n\n${kids} sub-ticket${kids === 1 ? '' : 's'} will stay but lose the link to this one.` : '')
+    + '\n\nNotes already pushed to Xero stay in Xero.';
+  if (!confirm(msg)) return;
+  error.value = '';
+  try {
+    await api.del(`/tickets/${t.id}`);
+    router.push({ name: 'queue' });
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function archive() {
   if (!confirm('Archive this ticket? It stays searchable under "Show archived".')) return;
   await patch({ archived: true });
@@ -480,6 +511,7 @@ const showProgressUpdate = computed(() => (
         <span :class="['pill', settings.colorFor(ticket.status_key)]">
           {{ ticket.status_label }}
         </span>
+        <span v-if="ticket.archived" class="pill slate">Archived</span>
 
         <!-- Quick actions, consolidated here from their own cards below
              (NOTES.md-style rationale: those cards were cumbersome to have
@@ -542,7 +574,11 @@ const showProgressUpdate = computed(() => (
         </div>
 
         <span class="row" style="border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px">
-          <button v-if="auth.isAdmin" class="small" @click="archive">Archive</button>
+          <button v-if="auth.isAdmin && !ticket.archived" class="small" @click="archive">Archive</button>
+          <button v-if="auth.isAdmin && ticket.archived" class="small" @click="unarchive">Unarchive</button>
+          <button v-if="auth.isAdmin && ticket.archived" class="small danger" @click="deleteTicket">
+            Delete…
+          </button>
         </span>
       </div>
     </div>

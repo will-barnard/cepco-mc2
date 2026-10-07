@@ -3832,6 +3832,18 @@ Files: `routes/tickets.js`, `routes/instruments.js`,
 `views/TicketDetailView.vue`, `views/CustomersView.vue`, `styles.css`
 (`.rename-*`). No migration.
 
+### 2.91 Delete archived tickets (errors / duplicates)
+
+Ticket page, admins only: an archived ticket now shows an "Archived" pill,
+**Unarchive**, and a red **Delete…** (the Archive button only shows on
+unarchived tickets). Delete confirms with what goes with it (hours,
+estimates, attachments, invoice records, plus notes/tasks/history;
+sub-tickets just lose their link) and returns to the Queue.
+`DELETE /tickets/:id` already existed (admin only); it now also refuses
+(409) a ticket that isn't archived, or one with a sent/paid invoice or an
+invoice created in Xero. Notes already pushed to Xero stay in Xero.
+Files: `routes/tickets.js`, `views/TicketDetailView.vue`.
+
 ## 4. Suggested first moves after deploy
 
 

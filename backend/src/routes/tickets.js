@@ -3,7 +3,7 @@
 const express = require('express');
 const { query, withTransaction } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
 const { FAMILIES, FAMILY_LABELS } = require('./instruments');
@@ -1575,10 +1575,27 @@ router.post('/:id/create-shipping-ticket', asyncHandler(async (req, res) => {
   res.status(201).json(created);
 }));
 
+// Permanent delete -- meant for errors and duplicates only, so it is admin-
+// only and the ticket must already be archived (archive is the normal "done
+// with this" path; this is the second, deliberate step). Hours, estimates,
+// QC, attachments, notes, tasks etc. go with it (their FKs CASCADE);
+// sub-tickets and shipment/quote links just lose their link. A ticket with a
+// sent/paid invoice or one that exists in Xero is refused: that's a real
+// financial record, void it in Xero rather than losing it here.
 router.delete('/:id', asyncHandler(async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-  const { rowCount } = await query('DELETE FROM tickets WHERE id = $1', [req.params.id]);
-  if (!rowCount) throw notFound('Ticket not found');
+  const { rows } = await query('SELECT archived FROM tickets WHERE id = $1', [req.params.id]);
+  if (!rows[0]) throw notFound('Ticket not found');
+  if (!rows[0].archived) throw conflict('Archive this ticket first -- only archived tickets can be deleted.');
+  const { rows: inv } = await query(
+    `SELECT count(*)::int AS n FROM invoices
+      WHERE ticket_id = $1 AND (xero_invoice_id IS NOT NULL OR status IN ('sent', 'paid'))`,
+    [req.params.id],
+  );
+  if (inv[0].n) {
+    throw conflict("Can't delete: this ticket has an invoice that was sent, paid, or created in Xero.");
+  }
+  await query('DELETE FROM tickets WHERE id = $1', [req.params.id]);
   return res.json({ deleted: true });
 }));
 
