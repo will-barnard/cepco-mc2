@@ -71,6 +71,10 @@ const dailyTodoTickets = ref([]);
 const priorityTickets = ref([]);
 const dailyTodoTasks = ref([]);
 const priorityTasks = ref([]);
+// Standalone tasks assigned to you -- the "+ New" page's New Task tab
+// (migration 054): no ticket_id, so no category or priority either, which
+// is why neither group above can ever claim one.
+const ticketlessTasks = ref([]);
 
 const flaggedPriorityKeys = computed(() => (settings.data.priority_tier || [])
   .filter((r) => r.meta?.highlight_in_tasks)
@@ -107,6 +111,9 @@ async function loadPriorityAndTodos() {
     (t) => t.category_key !== 'daily_todo' && flaggedKeys.has(t.priority_key),
   );
   const priorityTaskTicketIds = new Set(priorityTasks.value.map((t) => t.ticket_id));
+  // Disjoint from both groups above by construction: those two filter on
+  // a ticket's category/priority, and a ticket-less task has neither.
+  ticketlessTasks.value = myTasks.filter((t) => t.ticket_id === null);
 
   // A finished job (status meta.terminal, e.g. 'done') is done, not
   // outstanding -- exclude it even though nothing ever archived it. A
@@ -259,14 +266,14 @@ onMounted(async () => {
 
       <div
         v-if="dailyTodoTickets.length || priorityTickets.length
-          || dailyTodoTasks.length || priorityTasks.length"
+          || dailyTodoTasks.length || priorityTasks.length || ticketlessTasks.length"
         class="card"
         style="margin-bottom: 24px; border-color: var(--red)"
       >
         <h2>To-Dos</h2>
         <p class="muted small" style="margin: 0 0 10px">
           Yours — today's Daily To-Do's, plus anything of yours at a priority level flagged to
-          stand out (Settings → Priority tiers).
+          stand out (Settings → Priority tiers), plus any standalone tasks assigned to you.
         </p>
         <template v-if="dailyTodoTasks.length || dailyTodoTickets.length">
           <p class="muted small" style="margin: 0 0 10px"><strong>Daily To-Do's</strong></p>
@@ -332,6 +339,18 @@ onMounted(async () => {
                     {{ t.status_label || t.status_label_snapshot }}
                   </span>
                 </div>
+              </div>
+            </li>
+          </ul>
+        </template>
+        <template v-if="ticketlessTasks.length">
+          <p class="muted small" style="margin: 14px 0 10px"><strong>Tasks</strong></p>
+          <ul class="checklist">
+            <li v-for="task in ticketlessTasks" :key="`task-${task.id}`">
+              <input type="checkbox" :checked="task.done" @change="toggleTodoTask(task)" />
+              <div style="flex: 1; min-width: 0">
+                {{ task.title }}
+                <div class="muted small">Not tied to a ticket</div>
               </div>
             </li>
           </ul>

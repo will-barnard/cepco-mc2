@@ -349,7 +349,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   const [
     estimates, hours, qc, attachments, history, shipmentRows, invoiceRows, childRows, siblingRows,
-    linkRows, noteRows, vendorWorkRows,
+    linkRows, noteRows, vendorWorkRows, qcTaskReviewRows,
   ] = await Promise.all([
     query(`SELECT e.*, emp.name AS created_by_name
              FROM estimates e LEFT JOIN employees emp ON emp.id = e.created_by
@@ -449,6 +449,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
              LEFT JOIN employees emp ON emp.id = w.updated_by
             WHERE w.ticket_id = $1
             ORDER BY tr.sort_order NULLS LAST, w.id`, [req.params.id]),
+    // QC task reviews (migration 067): the pass/fail/N-A mark each QC round
+    // has put on a completed task. Flat list across all of the ticket's
+    // rounds; TicketQc.vue groups it by qc_check_id.
+    query(`SELECT r.qc_check_id, r.ticket_task_id, r.status, r.comment, r.reviewed_at,
+                  r.reviewed_by, emp.name AS reviewed_by_name
+             FROM qc_task_reviews r
+             JOIN qc_checks q ON q.id = r.qc_check_id
+             LEFT JOIN employees emp ON emp.id = r.reviewed_by
+            WHERE q.ticket_id = $1`, [req.params.id]),
   ]);
 
   res.json({
@@ -456,6 +465,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     estimates: estimates.rows,
     hours_log: hours.rows,
     qc_checks: qc.rows,
+    qc_task_reviews: qcTaskReviewRows.rows,
     attachments: attachments.rows,
     status_history: history.rows,
     shipments: shipmentRows.rows,

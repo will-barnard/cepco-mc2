@@ -125,6 +125,44 @@ async function main() {
   const after = await call('GET', `/api/attachments/ticket/${tid}`);
   check('gallery reflects the deletion', after.body.length === 1);
 
+  // --- QC photos: attached to a round, separate from the ticket gallery ----
+  const round = await call('POST', '/api/qc/checks', { ticket_id: tid });
+  const qcForm = new FormData();
+  qcForm.append('caption', 'tine before');
+  qcForm.append('files', new Blob([PNG], { type: 'image/png' }), 'qc-before.png');
+  const qcUp = await call('POST', `/api/qc/checks/${round.body.id}/attachments`, qcForm);
+  check('a QC photo uploads to a round', qcUp.status === 201 && qcUp.body.length === 1, JSON.stringify(qcUp.body));
+  check('QC photo is keyed under the ticket\'s qc/ folder',
+    qcUp.body?.[0]?.storage_key.startsWith(`tickets/${tid}/qc/`));
+  const qcBad = new FormData();
+  qcBad.append('files', new Blob(['#!/bin/sh'], { type: 'application/x-sh' }), 'evil.sh');
+  check('non-image QC upload is rejected',
+    (await call('POST', `/api/qc/checks/${round.body.id}/attachments`, qcBad)).status === 400);
+
+  const qcList = await call('GET', `/api/qc/checks/${round.body.id}/attachments`);
+  check('QC gallery lists the photo with its uploader',
+    qcList.body.length === 1 && !!qcList.body[0].uploader_name);
+  const generalAfterQc = await call('GET', `/api/attachments/ticket/${tid}`);
+  check('QC photos do not appear in the ticket\'s general gallery', generalAfterQc.body.length === 1);
+
+  const qcUrl = await call('GET', `/api/qc/attachments/${qcList.body[0].id}/url`);
+  const qcFile = await fetch(BASE + qcUrl.body.url, { headers: { cookie } });
+  check('QC photo serves back byte-identical through the file proxy',
+    qcFile.status === 200 && Buffer.from(await qcFile.arrayBuffer()).equals(PNG), `${qcFile.status}`);
+  check('QC photo is not served without a session', (await fetch(BASE + qcUrl.body.url)).status === 401);
+
+  const qcCaption = await call('PATCH', `/api/qc/attachments/${qcList.body[0].id}`, { caption: 'tine after' });
+  check('QC photo caption can be edited', qcCaption.body.caption === 'tine after');
+
+  // A signed-off round is closed to new photos and deletions.
+  await call('POST', `/api/qc/checks/${round.body.id}/sign-off`, { passed: true });
+  const lateForm = new FormData();
+  lateForm.append('files', new Blob([PNG], { type: 'image/png' }), 'late.png');
+  check('a signed-off round rejects new photos',
+    (await call('POST', `/api/qc/checks/${round.body.id}/attachments`, lateForm)).status === 400);
+  check('a signed-off round rejects photo deletion',
+    (await call('DELETE', `/api/qc/attachments/${qcList.body[0].id}`)).status === 400);
+
   console.log(`\n${passed} passed, ${failed} failed\n`);
   process.exit(failed === 0 ? 0 : 1);
 }

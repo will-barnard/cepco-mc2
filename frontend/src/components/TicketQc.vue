@@ -23,10 +23,26 @@
  * headings instead of one flat list. An item with no category (every
  * pre-Q4 template item, until someone assigns one from Settings -> QC
  * templates) falls into a catch-all "General" group rather than vanishing.
+ *
+ * Migration 067 reworks the round's body into three stacked sections, one
+ * column wide:
+ *   1. Checklist — each item has pass (check) / fail (X) / N/A ("/") boxes
+ *      (QcMarks.vue). N/A strikes the item through. Pressing the active box
+ *      again clears it, so every mark can be changed after it's set. This
+ *      replaces Q4's single highlight toggle and the 3-column layout.
+ *   2. Completed tasks — the ticket's done tasks (TicketTasks.vue), each
+ *      reviewed with the same three boxes, per round (qc_task_reviews).
+ *   3. Photos — QcPhotos.vue, attached to this round, separate from the
+ *      ticket's general Photos card.
+ * Marks are applied optimistically against a local copy of the ticket's
+ * rounds (the parent only reloads on sign-off / new round), and rolled back
+ * if the server refuses. A signed-off round is read-only.
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import api from '../api';
 import { useAuth } from '../stores';
+import QcMarks from './QcMarks.vue';
+import QcPhotos from './QcPhotos.vue';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -59,24 +75,148 @@ function groupedResults(check) {
     .filter((g) => g.items.length);
 }
 
-/** Q4: toggling an item now persists — a full replacement of check.results
- * with just this one item's `checked` flipped, same "PATCH /checks/:id
- * already accepts a replacement array" mechanism saveNotes() below uses
- * for the notes field. Open to anyone still working the round (same as
- * notes/reportIssue), not gated to senior — ticking off what's been
- * checked isn't a sign-off. */
-async function toggleItem(check, index) {
-  error.value = '';
-  const results = check.results.map((r, i) => (i === index ? { ...r, checked: !r.checked } : r));
+// Local, mutable copy of the ticket's rounds. The parent hands us a fresh
+// `ticket` object on every reload, so this re-syncs whenever that happens;
+// between reloads, marks are applied to this copy the instant they're
+// clicked (optimistic) so the checklist never waits on the network.
+const checks = ref([]);
+watch(
+  () => props.ticket.qc_checks,
+  (rounds) => {
+    checks.value = (rounds || []).map((c) => ({ ...c, results: (c.results || []).map((r) => ({ ...r })) }));
+  },
+  { immediate: true },
+);
+
+// Round-by-round task verdicts, flattened to "checkId:taskId" -> status.
+const taskMarks = ref({});
+// Same keys -> the explanation typed under a failed task.
+const taskComments = ref({});
+watch(
+  () => props.ticket.qc_task_reviews,
+  (rows) => {
+    const m = {};
+    const c = {};
+    (rows || []).forEach((r) => {
+      const key = `${r.qc_check_id}:${r.ticket_task_id}`;
+      m[key] = r.status;
+      c[key] = r.comment || '';
+    });
+    taskMarks.value = m;
+    taskComments.value = c;
+  },
+  { immediate: true },
+);
+
+// Tasks aren't part of GET /tickets/:id (same as TicketTasks.vue), so this
+// panel fetches its own list, and re-fetches when the parent reloads the
+// ticket — TicketTasks emits `changed` when a task is checked off, which is
+// exactly when a task becomes (or stops being) reviewable here.
+const tasks = ref([]);
+async function loadTasks() {
   try {
-    await api.patch(`/qc/checks/${check.id}`, { results });
-    emit('changed');
+    tasks.value = await api.get('/tasks', { ticket_id: props.ticket.id });
   } catch (err) {
     error.value = err.message;
   }
 }
+onMounted(loadTasks);
+watch(() => props.ticket, loadTasks);
 
-const checks = computed(() => props.ticket.qc_checks || []);
+// Completed work is what gets reviewed, in the order it was finished.
+const doneTasks = computed(() => tasks.value
+  .filter((t) => t.done)
+  .sort((a, b) => String(a.done_at || '').localeCompare(String(b.done_at || ''))));
+const openTaskCount = computed(() => tasks.value.filter((t) => !t.done).length);
+
+// Photo upload capabilities (storage driver) — one fetch shared by every
+// round's QcPhotos rather than each of them asking.
+const caps = ref(null);
+onMounted(async () => {
+  try { caps.value = await api.get('/attachments/capabilities'); } catch { /* QcPhotos falls back to multipart */ }
+});
+
+/** Pressing the active box clears the mark; any other box sets it. */
+const nextMark = (current, pressed) => (current === pressed ? null : pressed);
+
+async function markItem(check, index, pressed) {
+  if (check.signed_off_at) return;
+  error.value = '';
+  const item = check.results[index];
+  const previous = item.status ?? null;
+  const next = nextMark(previous, pressed);
+  item.status = next;
+  try {
+    await api.put(`/qc/checks/${check.id}/items/${index}`, { status: next });
+  } catch (err) {
+    item.status = previous;
+    error.value = err.message;
+  }
+}
+
+const taskMark = (check, task) => taskMarks.value[`${check.id}:${task.id}`] ?? null;
+const taskComment = (check, task) => taskComments.value[`${check.id}:${task.id}`] || '';
+
+/** A fail's explanation. Optional — the box appears under the failed line
+ * and saves when the tech clicks away (change event), so nothing blocks
+ * marking. The text survives a mark moving off fail and back, but is only
+ * shown while the mark is a fail. */
+async function saveItemComment(check, index, value) {
+  if (check.signed_off_at) return;
+  error.value = '';
+  const item = check.results[index];
+  const text = value.trim();
+  if (text === (item.comment || '')) return;
+  const previous = item.comment;
+  item.comment = text || null;
+  try {
+    await api.put(`/qc/checks/${check.id}/items/${index}`, { status: 'fail', comment: text });
+  } catch (err) {
+    item.comment = previous;
+    error.value = err.message;
+  }
+}
+
+async function saveTaskComment(check, task, value) {
+  if (check.signed_off_at) return;
+  error.value = '';
+  const key = `${check.id}:${task.id}`;
+  const text = value.trim();
+  const previous = taskComments.value[key] || '';
+  if (text === previous) return;
+  taskComments.value = { ...taskComments.value, [key]: text };
+  try {
+    await api.put(`/qc/checks/${check.id}/task-reviews/${task.id}`, { status: 'fail', comment: text });
+  } catch (err) {
+    taskComments.value = { ...taskComments.value, [key]: previous };
+    error.value = err.message;
+  }
+}
+
+async function markTask(check, task, pressed) {
+  if (check.signed_off_at) return;
+  error.value = '';
+  const key = `${check.id}:${task.id}`;
+  const previous = taskMarks.value[key] ?? null;
+  const next = nextMark(previous, pressed);
+  taskMarks.value = { ...taskMarks.value, [key]: next };
+  try {
+    await api.put(`/qc/checks/${check.id}/task-reviews/${task.id}`, { status: next });
+  } catch (err) {
+    taskMarks.value = { ...taskMarks.value, [key]: previous };
+    error.value = err.message;
+  }
+}
+
+/** "9 of 12 marked · 1 failed" — a glanceable progress line per section. */
+function tally(statuses) {
+  const marked = statuses.filter(Boolean).length;
+  const failed = statuses.filter((x) => x === 'fail').length;
+  const text = `${marked} of ${statuses.length} marked`;
+  return { text: failed ? `${text} · ${failed} failed` : text, failed };
+}
+const itemTally = (check) => tally(check.results.map((r) => r.status ?? null));
+const taskTally = (check) => tally(doneTasks.value.map((t) => taskMark(check, t)));
 
 // Q5: "what needs doing before this passes" — one draft string per open
 // round, keyed by check id (a plain object inside a ref stays reactive for
@@ -193,29 +333,99 @@ async function reportIssue(check) {
         </span>
       </div>
 
-      <!-- Q4: grouped by service category (Tuning/Action/Electronics/
-           Cosmetics), each item a real toggle button whose checked state
-           is actually persisted (routes/qc.js) rather than a reload-reset
-           highlight — a tech records *what* they found in the notes field
-           below, this just tracks which checks were done. -->
-      <div v-for="group in groupedResults(check)" :key="group.key || 'general'" style="margin-top: 10px">
-        <p class="muted small" style="margin: 0 0 2px; text-transform: uppercase; letter-spacing: .04em">
-          {{ group.label }}
+      <!-- 1. Checklist. One column; each item has pass / fail / N/A boxes
+           (QcMarks). Still grouped under the boss's Tuning/Action/
+           Electronics/Cosmetics headings (Q4). N/A strikes the text. -->
+      <section class="qc-section">
+        <div class="row qc-section-head">
+          <h3>Checklist</h3>
+          <div class="spacer" />
+          <span v-if="check.results.length" :class="['small', itemTally(check).failed ? 'qc-has-fail' : 'muted']">
+            {{ itemTally(check).text }}
+          </span>
+        </div>
+        <p v-if="!check.results.length" class="muted small" style="margin: 0">
+          No checklist items for this round yet (Settings → QC checklist templates).
         </p>
-        <ul class="qc-checklist">
-          <li v-for="r in group.items" :key="r.index">
-            <button
-              type="button"
-              :class="['qc-item', { active: r.checked }]"
-              :disabled="!!check.signed_off_at"
-              @click="toggleItem(check, r.index)"
-            >
-              {{ r.label }}
-              <span v-if="r.note" class="item-note">{{ r.note }}</span>
-            </button>
+        <div v-for="group in groupedResults(check)" :key="group.key || 'general'" style="margin-top: 8px">
+          <p class="muted small qc-group-label">{{ group.label }}</p>
+          <ul class="qc-list">
+            <li v-for="r in group.items" :key="r.index" :class="['qc-row', r.status && `is-${r.status}`]">
+              <QcMarks
+                :status="r.status" :label="r.label" :disabled="!!check.signed_off_at"
+                @pick="markItem(check, r.index, $event)"
+              />
+              <span :class="['qc-text', { struck: r.status === 'na' }]">
+                {{ r.label }}
+                <span v-if="r.note" class="item-note">{{ r.note }}</span>
+              </span>
+              <!-- A fail opens an explanation box under the line. -->
+              <div v-if="r.status === 'fail'" class="qc-explain">
+                <p v-if="check.signed_off_at" class="qc-explain-text">
+                  {{ r.comment || 'No explanation was given.' }}
+                </p>
+                <textarea
+                  v-else :value="r.comment || ''" rows="2" maxlength="2000"
+                  placeholder="What failed? (optional)"
+                  @change="saveItemComment(check, r.index, $event.target.value)"
+                />
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- 2. Completed tasks. Every task on the ticket that's been checked
+           off gets the same three boxes, scoped to this round. -->
+      <section class="qc-section">
+        <div class="row qc-section-head">
+          <h3>Completed tasks</h3>
+          <div class="spacer" />
+          <span v-if="doneTasks.length" :class="['small', taskTally(check).failed ? 'qc-has-fail' : 'muted']">
+            {{ taskTally(check).text }}
+          </span>
+        </div>
+        <p v-if="!doneTasks.length" class="muted small" style="margin: 0">
+          No completed tasks on this ticket yet — each one shows up here to review once it's checked off.
+        </p>
+        <ul v-else class="qc-list">
+          <li v-for="t in doneTasks" :key="t.id" :class="['qc-row', taskMark(check, t) && `is-${taskMark(check, t)}`]">
+            <QcMarks
+              :status="taskMark(check, t)" :label="t.title" :disabled="!!check.signed_off_at"
+              @pick="markTask(check, t, $event)"
+            />
+            <span :class="['qc-text', { struck: taskMark(check, t) === 'na' }]">
+              {{ t.title }}
+              <span v-if="t.done_by_name || t.logged_hours" class="item-note">
+                <template v-if="t.done_by_name">Done by {{ t.done_by_name }}</template>
+                <template v-if="t.done_by_name && t.logged_hours"> · </template>
+                <template v-if="t.logged_hours">{{ t.logged_hours }} h</template>
+              </span>
+            </span>
+            <div v-if="taskMark(check, t) === 'fail'" class="qc-explain">
+              <p v-if="check.signed_off_at" class="qc-explain-text">
+                {{ taskComment(check, t) || 'No explanation was given.' }}
+              </p>
+              <textarea
+                v-else :value="taskComment(check, t)" rows="2" maxlength="2000"
+                placeholder="What failed? (optional)"
+                @change="saveTaskComment(check, t, $event.target.value)"
+              />
+            </div>
           </li>
         </ul>
-      </div>
+        <p v-if="openTaskCount" class="muted small" style="margin: 6px 0 0">
+          {{ openTaskCount }} more task(s) still open — they can be reviewed once they're done.
+        </p>
+      </section>
+
+      <!-- 3. Photos for this round — separate from the ticket's Photos card. -->
+      <section class="qc-section">
+        <div class="row qc-section-head">
+          <h3>Photos</h3>
+        </div>
+        <QcPhotos :check-id="check.id" :locked="!!check.signed_off_at" :caps="caps" />
+      </section>
 
       <template v-if="!check.signed_off_at">
         <div class="field" style="margin-top: 12px">
@@ -279,17 +489,28 @@ async function reportIssue(check) {
 </template>
 
 <style scoped>
-.qc-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  min-height: 0;
-  padding: 3px 6px;
-  border-radius: var(--radius);
+.qc-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.qc-section-head { margin-bottom: 6px; }
+.qc-section-head h3 { margin: 0; }
+.qc-group-label { margin: 0 0 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.qc-has-fail { color: var(--red); font-weight: 600; }
+
+/* One column: the boxes, then the text. align-items:flex-start keeps the
+   boxes pinned to the first line when a long label wraps. */
+.qc-list { list-style: none; margin: 0; padding: 0; }
+.qc-row {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px;
+  padding: 5px 6px; border-radius: var(--radius);
 }
-.qc-item:hover { background: var(--surface-2); }
-.qc-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
-.qc-item.active { background: rgba(212, 129, 63, 0.12); border-color: var(--accent-dim); }
+.qc-row.is-fail { background: rgba(239, 68, 68, 0.1); }
+.qc-text { flex: 1; min-width: 0; padding-top: 5px; overflow-wrap: anywhere; }
+/* The explanation drops onto its own line, lined up under the label (3 boxes
+   of 34px + 2 gaps of 4px + the row gap = 120px); full width on a phone,
+   where that much indent would squeeze the box. */
+.qc-explain { flex: 0 0 100%; padding-left: 120px; }
+.qc-explain textarea { min-height: 0; font-size: 14px; resize: vertical; }
+.qc-explain-text { margin: 0; font-size: 14px; white-space: pre-wrap; color: var(--text); }
+@media (max-width: 640px) { .qc-explain { padding-left: 0; } }
+.qc-text.struck { text-decoration: line-through; color: var(--text-dim); }
+.qc-text .item-note { display: block; font-size: 12px; color: var(--text-dim); text-decoration: none; }
 </style>

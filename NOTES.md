@@ -3860,6 +3860,66 @@ with no color set shows gray (as before). No migration.
 Files: `statusColors.js`, `views/SettingsView.vue`, `styles.css`,
 `components/TicketVendorWork.vue`.
 
+### 2.93 QC: pass / fail / N/A marks, task review, QC photos (migration 067)
+
+The QC panel (`TicketQc.vue`) is one column now (the 3-column layout and
+the highlight toggle are gone). Every checklist item has three square
+boxes: check = pass, X = fail, "/" = N/A (strikes the item through).
+Pressing the active box again clears it, so a mark can always be changed
+while the round is open. Items are stored as `qc_checks.results[].status`
+(`pass` | `fail` | `na` | null); the old boolean `checked` is dropped and
+anything that was highlighted is backfilled as `pass`. Marks go through
+`PUT /api/qc/checks/:id/items/:index` (one atomic `jsonb_set`, so two techs
+marking different items on the same round can't overwrite each other);
+each mark also stamps `status_by` / `status_at` on the item.
+
+Below the checklist, each round lists the ticket's **completed tasks**
+with the same three boxes (`qc_task_reviews`, one row per round + task,
+`PUT /api/qc/checks/:id/task-reviews/:taskId`). Per round on purpose:
+round 1 and round 2 are separate passes. The list is the ticket's live
+done tasks, not a snapshot, so a task finished after the round opened is
+still reviewable; unchecking a task hides it from the list but leaves its
+review row, which comes back if it's re-completed.
+
+**QC photos** (`qc_attachments`, `QcPhotos.vue`, routes under
+`/api/qc/checks/:id/attachments` and `/api/qc/attachments/:id`) attach to a
+round and are separate from the ticket's Photos card. Same storage driver,
+same upload paths, same browser-side image pipeline. Objects are keyed
+`tickets/<id>/qc/...`. The local-driver file proxy
+(`GET /api/attachments/file/*`) looks in both tables. No clipboard paste
+here: `TicketPhotos` owns the page-wide paste handler and a second one
+would double-upload.
+
+A signed-off round is read-only (marks, task reviews, photo add/delete);
+photo captions stay editable. Nothing blocks sign-off on a `fail` or an
+unreviewed item yet — the marks are advisory.
+Files: `database/migrations/067_*.sql`, `routes/qc.js`, `routes/tickets.js`
+(`qc_task_reviews` in the ticket payload), `routes/attachments.js`,
+`components/TicketQc.vue`, `QcMarks.vue`, `QcPhotos.vue`, `styles.css`,
+`test/smoke.mjs`, `test/photos.mjs`.
+
+### 2.94 Dashboard: standalone tasks assigned to you show in To-Dos
+
+Will: tasks assigned to a user should appear on the dashboard. They had
+stopped. §2.79 replaced "My tasks" with the To-Dos card, which sorts your
+open `ticket_tasks` into Daily To-Do's and Priority by their *ticket's*
+category / priority tier. A standalone task (the "+ New" page's New Task
+tab, migration 054) has no ticket, so no category or priority, so it
+matched neither group and was silently dropped, even though the New Task
+tab still told people it would show up on the dashboard.
+
+`DashboardView.vue` now also keeps `myTasks.filter(t => t.ticket_id === null)`
+as `ticketlessTasks` and renders them as a third "Tasks" group in the same
+card, with the same done-checkbox (`PATCH /tasks/:id`, which non-admins may
+already do for a ticket-less task). No backend change: `GET /tasks?unlocked_only=true`
+already returns ticket-less tasks (they have no status to gate on). The New
+Task tab's help text now says "To-Dos" instead of "My tasks".
+
+Not changed: a task on an ordinary ticket (not a Daily To-Do, not a flagged
+priority tier) still doesn't appear in To-Dos; that was the boss's §2.79
+decision, and its ticket shows under In-Progress Tickets instead.
+Files: `views/DashboardView.vue`, `components/NewTaskPanel.vue`.
+
 ## 4. Suggested first moves after deploy
 
 

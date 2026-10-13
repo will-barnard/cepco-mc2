@@ -7,8 +7,8 @@
  * ticket_tasks row a real ticket's task list already uses, just with no
  * ticket_id -- a shop-wide scratch to-do list for things that don't
  * belong on a customer's job ("restock solder", "call the landlord about
- * the leak"). One assigned to you also shows up in the Dashboard's "My
- * tasks" box (DashboardView.vue) right alongside real ticket tasks.
+ * the leak"). One assigned to you also shows up in the Dashboard's
+ * "To-Dos" card (DashboardView.vue), in its own "Tasks" group.
  *
  * This tab sits on a page every signed-in user opens from the dashboard,
  * so adding a task is open to everyone now (routes/tasks.js's POST /
@@ -121,7 +121,7 @@ async function removeTask(task) {
   <div>
     <p class="muted small" style="margin: 0 0 14px">
       A shop-wide scratch to-do list for work that isn't tied to any ticket. Assign one to
-      yourself and it also shows up in your Dashboard "My tasks" box.
+      yourself and it also shows up in your Dashboard "To-Dos" card.
     </p>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>

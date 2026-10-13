@@ -188,9 +188,66 @@ async function main() {
     roundOne.status === 201 && roundOne.body.round_number === 1 && roundOne.body.results.length === 17,
     `round ${roundOne.body.round_number}, ${roundOne.body.results?.length} items`);
 
+  // --- QC marks: pass / fail / N/A on items and on completed tasks (067) ---
+  check('QC items start unreviewed', roundOne.body.results.every((r) => r.status === null));
+  const item0 = `/api/qc/checks/${roundOne.body.id}/items/0`;
+  const markPass = await call('PUT', item0, { status: 'pass' });
+  check('an item can be marked pass', markPass.status === 200 && markPass.body.item.status === 'pass',
+    JSON.stringify(markPass.body));
+  const markFail = await call('PUT', item0, { status: 'fail' });
+  check('a mark can be changed after it is set', markFail.body.item?.status === 'fail');
+  check('a comment is refused on anything but a fail',
+    (await call('PUT', item0, { status: 'pass', comment: 'nope' })).status === 400);
+  const failNote = await call('PUT', item0, { status: 'fail', comment: '  Hammer 12 still rubs.  ' });
+  check('a fail can carry an explanation (trimmed)', failNote.body.item?.comment === 'Hammer 12 still rubs.',
+    JSON.stringify(failNote.body));
+  const remarkFail = await call('PUT', item0, { status: 'fail' });
+  check('re-marking without a comment keeps the explanation', remarkFail.body.item?.comment === 'Hammer 12 still rubs.');
+  const markNa = await call('PUT', item0, { status: 'na' });
+  check('an item can be marked N/A', markNa.body.item?.status === 'na');
+  const markClear = await call('PUT', item0, { status: null });
+  check('a mark can be cleared', markClear.status === 200 && markClear.body.item.status === null);
+  check('an unknown status is rejected',
+    (await call('PUT', item0, { status: 'maybe' })).status === 400);
+  check('an out-of-range item is a 404',
+    (await call('PUT', `/api/qc/checks/${roundOne.body.id}/items/9999`, { status: 'pass' })).status === 404);
+  await call('PUT', item0, { status: 'pass' });
+  const afterMarks = await call('GET', `/api/tickets/${tid}`);
+  check('item marks persist on the ticket payload',
+    afterMarks.body.qc_checks[0].results[0].status === 'pass');
+
+  const doneTask = await call('POST', '/api/tasks', { ticket_id: tid, title: 'Replace hammer tips' });
+  const openTask = await call('POST', '/api/tasks', { ticket_id: tid, title: 'Polish cabinet' });
+  const taskUrl = (id) => `/api/qc/checks/${roundOne.body.id}/task-reviews/${id}`;
+  check('an unfinished task cannot be reviewed',
+    (await call('PUT', taskUrl(openTask.body.id), { status: 'pass' })).status === 400);
+  await call('PATCH', `/api/tasks/${doneTask.body.id}`, { done: true });
+  const reviewPass = await call('PUT', taskUrl(doneTask.body.id), { status: 'pass' });
+  check('a completed task can be marked pass', reviewPass.status === 200 && reviewPass.body.status === 'pass');
+  const reviewFail = await call('PUT', taskUrl(doneTask.body.id), { status: 'fail' });
+  check('a task mark can be changed', reviewFail.body.status === 'fail');
+  const reviewNote = await call('PUT', taskUrl(doneTask.body.id), { status: 'fail', comment: 'Tips glued crooked.' });
+  check('a failed task can carry an explanation', reviewNote.body.comment === 'Tips glued crooked.',
+    JSON.stringify(reviewNote.body));
+  const reviewKeep = await call('PUT', taskUrl(doneTask.body.id), { status: 'fail' });
+  check('re-marking a task keeps its explanation', reviewKeep.body.comment === 'Tips glued crooked.');
+  const withReview = await call('GET', `/api/tickets/${tid}`);
+  check('task reviews appear on the ticket payload',
+    withReview.body.qc_task_reviews.length === 1 && withReview.body.qc_task_reviews[0].status === 'fail',
+    JSON.stringify(withReview.body.qc_task_reviews));
+  await call('PUT', taskUrl(doneTask.body.id), { status: 'na' });
+  const clearedReview = await call('PUT', taskUrl(doneTask.body.id), { status: null });
+  const noReviews = await call('GET', `/api/tickets/${tid}`);
+  check('clearing a task mark removes the review',
+    clearedReview.status === 200 && noReviews.body.qc_task_reviews.length === 0);
+
   await call('PATCH', `/api/qc/checks/${roundOne.body.id}`, { notes: 'Round 1 looks good.' });
   const signOffRound1 = await call('POST', `/api/qc/checks/${roundOne.body.id}/sign-off`, { passed: true });
   check('round 1 signs off', signOffRound1.status === 200 && signOffRound1.body.check.passed);
+  check('a signed-off round locks its item marks',
+    (await call('PUT', item0, { status: 'fail' })).status === 400);
+  check('a signed-off round locks its task reviews',
+    (await call('PUT', taskUrl(doneTask.body.id), { status: 'pass' })).status === 400);
   check('one passing round is not enough on its own anymore (2 are required)',
     signOffRound1.body.ticket_qc_passed === false && signOffRound1.body.rounds_passed === 1,
     JSON.stringify(signOffRound1.body));
