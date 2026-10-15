@@ -99,6 +99,7 @@ const dropOff = computed(
         {{ rest || ticket.title }}
       </RouterLink>
       <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Fast Track">Fast Track</span>
+      <span v-if="ticket.custom_shop" class="tag custom-shop-tag" title="Custom Shop">Custom Shop</span>
       <span
         v-if="ticket.shipping_direction" class="tag direction-tag"
         :title="ticket.shipping_direction === 'inbound' ? 'Inbound shipment' : 'Outbound shipment'"

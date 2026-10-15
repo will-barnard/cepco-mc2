@@ -630,6 +630,13 @@ const showProgressUpdate = computed(() => (
                   />
                   <span>Fast Track</span>
                 </label>
+                <label class="checkbox nowrap" style="margin: 0">
+                  <input
+                    type="checkbox" :checked="!!ticket.custom_shop"
+                    @change="patch({ custom_shop: $event.target.checked })"
+                  />
+                  <span>Custom Shop</span>
+                </label>
               </div>
             </div>
             <div class="field">

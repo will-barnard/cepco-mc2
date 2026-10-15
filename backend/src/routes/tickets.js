@@ -199,6 +199,8 @@ router.get('/', asyncHandler(async (req, res) => {
   // Queue page's "Fast Track" quick filter (migration 063). Only the TRUE
   // side is a filter — there's no "show me the non-fast-track ones" view.
   if (req.query.fast_track === 'true') clauses.push('t.fast_track = TRUE');
+  // Same shape for the Custom Shop quick filter (migration 070).
+  if (req.query.custom_shop === 'true') clauses.push('t.custom_shop = TRUE');
   if (req.query.q) {
     params.push(`%${req.query.q}%`);
     // Published notes (migration 061) are searched alongside the old
@@ -627,9 +629,10 @@ async function insertTicketRow(client, b, resolved, createdById) {
        notes, drop_off_date, due_date, multi_instrument, vendor_tracks,
        shopify_order_id, qc_required, created_by,
        category_queue_position, source_ticket_id, source_estimate_id,
-       family_queue_position, is_shipping, recurring_ticket_template_id, fast_track
+       family_queue_position, is_shipping, recurring_ticket_template_id, fast_track,
+       custom_shop
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-               COALESCE($21,'{}'::jsonb),$22,COALESCE($23,TRUE),$24,$25,$26,$27,$28,$29,$30,$31)
+               COALESCE($21,'{}'::jsonb),$22,COALESCE($23,TRUE),$24,$25,$26,$27,$28,$29,$30,$31,$32)
      RETURNING *`,
     [
       String(b.title).trim(),
@@ -675,6 +678,8 @@ async function insertTicketRow(client, b, resolved, createdById) {
       // callers that build their own object (Shopify webhook, purchases,
       // recurring templates) never set it, so they stay FALSE.
       b.fast_track === true,
+      // Migration 070 — same strict === true posture as fast_track above.
+      b.custom_shop === true,
     ],
   );
   const created = rows[0];
@@ -1223,7 +1228,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          service_done_notes      = COALESCE($33, service_done_notes),
          service_needed_notes    = COALESCE($34, service_needed_notes),
          fast_track              = COALESCE($36, fast_track),
-         progress_percent        = CASE WHEN $37::boolean THEN $38::smallint ELSE progress_percent END
+         progress_percent        = CASE WHEN $37::boolean THEN $38::smallint ELSE progress_percent END,
+         custom_shop             = COALESCE($39, custom_shop)
        WHERE id = $1
        RETURNING *`,
       [
@@ -1261,6 +1267,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         // stray string/number can't flip the flag.
         typeof b.fast_track === 'boolean' ? b.fast_track : null,
         progressTouched, progressPercent,
+        // Migration 070 — same boolean-only rule as fast_track.
+        typeof b.custom_shop === 'boolean' ? b.custom_shop : null,
       ],
     );
 

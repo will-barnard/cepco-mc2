@@ -48,7 +48,8 @@
  * Fast Track (same migration): a per-ticket flag with its own quick-filter
  * button. It combines with the instrument/category buttons (e.g. Fast Track
  * Wurlitzers) and, like search or priority, hides part of a status section
- * — so it turns dragging off.
+ * — so it turns dragging off. Custom Shop (migration 070) is the same kind of
+ * flag and behaves identically.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
@@ -72,6 +73,8 @@ const filters = ref({
   archived: route.query.archived === 'true',
   // "Fast Track" quick-filter button (migration 063).
   fast_track: route.query.fast_track === 'true',
+  // "Custom Shop" quick-filter button (migration 070).
+  custom_shop: route.query.custom_shop === 'true',
   // '' = the usual priority/queue order; 'status' = ordered by each
   // status's own position in the shop's workflow (Settings -> Ticket
   // statuses), i.e. status progression rather than alphabetical.
@@ -127,6 +130,7 @@ async function load(silent = false) {
       ...requested,
       archived: requested.archived ? 'true' : '',
       fast_track: requested.fast_track ? 'true' : '',
+      custom_shop: requested.custom_shop ? 'true' : '',
       hide_status: requested.hide_status.join(','),
     });
     if (seq !== loadSeq) return;
@@ -161,7 +165,7 @@ watch(filters, (f) => {
 function reset() {
   filters.value = {
     q: '', status: '', category: '', priority: '',
-    instrument_family: '', technician_id: '', archived: false, fast_track: false, sort: '',
+    instrument_family: '', technician_id: '', archived: false, fast_track: false, custom_shop: false, sort: '',
     hide_status: [],
   };
 }
@@ -256,7 +260,7 @@ const canReorder = computed(() => {
   const f = layoutFilters.value;
   const singleScope = Boolean(f.category) !== Boolean(f.instrument_family);
   return singleScope && !f.technician_id && f.sort !== 'status' && f.sort !== 'date'
-    && f.q === '' && f.priority === '' && !f.archived && !f.fast_track
+    && f.q === '' && f.priority === '' && !f.archived && !f.fast_track && !f.custom_shop
     && !splitsASection.value;
 });
 
@@ -510,6 +514,12 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
             :aria-pressed="filters.fast_track" @click="filters.fast_track = !filters.fast_track"
           >
             Fast Track
+          </button>
+          <button
+            type="button" class="small" :class="{ primary: filters.custom_shop }"
+            :aria-pressed="filters.custom_shop" @click="filters.custom_shop = !filters.custom_shop"
+          >
+            Custom Shop
           </button>
         </div>
       </div>

@@ -3959,6 +3959,32 @@ Files: `database/migrations/069_shipment_direction.sql`,
 `components/TicketShipment.vue`, `components/QueueCard.vue`,
 `components/TicketTable.vue`, `styles.css`.
 
+### 2.96 Custom Shop checkbox (migration 070)
+
+Will: a checkbox like Fast Track, but for "custom shop". Built as an exact
+sibling of Fast Track (§ migration 063): `tickets.custom_shop BOOLEAN NOT
+NULL DEFAULT FALSE`, so every existing ticket starts unchecked.
+
+- `routes/tickets.js`: `insertTicketRow` writes `b.custom_shop === true`
+  (callers that build their own object — Shopify webhook, purchases,
+  recurring templates — never set it, so stay FALSE); `PATCH /tickets/:id`
+  accepts a real boolean only; `GET /tickets?custom_shop=true` filters.
+- `NewTicketForm.vue`: checkbox beside Fast Track under Priority, carried
+  onto additional-instrument sibling tickets like Fast Track is.
+  `TicketDetailView.vue`: same checkbox beside Priority, patches on change.
+- `QueueView.vue`: a "Custom Shop" quick-filter button next to Fast Track
+  (combines with it and with the instrument/category buttons; turns
+  dragging off like Fast Track does; kept in the URL). `QueueCard.vue` and
+  `TicketTable.vue` show a blue "Custom Shop" tag (Fast Track stays orange).
+
+Separate from the existing "Custom Shop" *sub-category* under Repairs &
+Restoration (§2.30), which is untouched — the flag works on any ticket
+regardless of category, and neither one sets the other.
+Files: `database/migrations/070_ticket_custom_shop_flag.sql`,
+`routes/tickets.js`, `components/NewTicketForm.vue`,
+`components/QueueCard.vue`, `components/TicketTable.vue`,
+`views/TicketDetailView.vue`, `views/QueueView.vue`, `styles.css`.
+
 ## 4. Suggested first moves after deploy
 
 
