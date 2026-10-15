@@ -170,6 +170,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
             <strong v-if="queueLayout">{{ titleWithoutCustomer(t.title, t.customer_name) || t.title }}</strong>
             <strong v-else>{{ t.title }}</strong>
             <span v-if="t.fast_track" class="tag fast-track-tag">Fast Track</span>
+            <span v-if="t.shipping_direction" class="tag direction-tag">{{ t.shipping_direction === 'inbound' ? 'Inbound' : 'Outbound' }}</span>
             <span v-if="rowProgress(t) !== null" class="small progress-pct" style="margin-left: 6px">{{ rowProgress(t) }}%</span>
             <span
               v-if="!showStatus && statusDiffers(t)"

@@ -9,6 +9,8 @@ const router = express.Router();
 router.use(requireAuth);
 
 const TYPES = ['basic', 'deep_pack'];
+// Migration 069: outbound = leaving the shop (default), inbound = coming in.
+const DIRECTIONS = ['inbound', 'outbound'];
 
 // Shared by POST / (a shipment created on its own, e.g. from a ticket's
 // Shipment card) and routes/tickets.js's "Create shipping ticket" button,
@@ -19,6 +21,9 @@ const TYPES = ['basic', 'deep_pack'];
 async function createShipment(client, b) {
   if (!b.ticketId) throw badRequest('ticket_id is required');
   if (b.type && !TYPES.includes(b.type)) throw badRequest(`type must be one of: ${TYPES.join(', ')}`);
+  if (b.direction && !DIRECTIONS.includes(b.direction)) {
+    throw badRequest(`direction must be one of: ${DIRECTIONS.join(', ')}`);
+  }
 
   // Seed the checklist from a shipping template for the instrument's family.
   let checklist = b.checklist;
@@ -36,10 +41,12 @@ async function createShipment(client, b) {
 
   const { rows } = await client.query(
     `INSERT INTO shipments (ticket_id, type, method, contact_info, international,
-                            scheduled_date, tracking_number, checklist, notes)
-     VALUES ($1, COALESCE($2,'basic'), $3, $4, COALESCE($5,FALSE), $6, $7, $8, $9) RETURNING *`,
+                            scheduled_date, tracking_number, checklist, notes, direction)
+     VALUES ($1, COALESCE($2,'basic'), $3, $4, COALESCE($5,FALSE), $6, $7, $8, $9,
+             COALESCE($10,'outbound')) RETURNING *`,
     [b.ticketId, b.type, b.method || null, b.contactInfo || null, b.international,
-      b.scheduledDate || null, b.trackingNumber || null, JSON.stringify(checklist), b.notes || null],
+      b.scheduledDate || null, b.trackingNumber || null, JSON.stringify(checklist), b.notes || null,
+      b.direction || null],
   );
   return rows[0];
 }
@@ -73,6 +80,7 @@ router.post('/', asyncHandler(async (req, res) => {
     trackingNumber: b.tracking_number,
     checklist: b.checklist,
     notes: b.notes,
+    direction: b.direction,
   }));
   res.status(201).json(shipment);
 }));
@@ -80,6 +88,9 @@ router.post('/', asyncHandler(async (req, res) => {
 router.patch('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (b.type && !TYPES.includes(b.type)) throw badRequest(`type must be one of: ${TYPES.join(', ')}`);
+  if (b.direction && !DIRECTIONS.includes(b.direction)) {
+    throw badRequest(`direction must be one of: ${DIRECTIONS.join(', ')}`);
+  }
   const { rows } = await query(
     `UPDATE shipments SET
        type = COALESCE($2, type), method = COALESCE($3, method),
@@ -89,6 +100,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
        tracking_number = COALESCE($7, tracking_number),
        checklist = COALESCE($8, checklist),
        notes = COALESCE($9, notes),
+       direction = COALESCE($11, direction),
        shipped_at = CASE WHEN $10::boolean THEN now() ELSE shipped_at END
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.type || null, b.method || null,
@@ -97,7 +109,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       b.scheduled_date || null, b.tracking_number || null,
       b.checklist === undefined ? null : JSON.stringify(b.checklist),
       b.notes === undefined ? null : b.notes,
-      b.mark_shipped === true],
+      b.mark_shipped === true, b.direction || null],
   );
   if (!rows[0]) throw notFound('Shipment not found');
   res.json(rows[0]);

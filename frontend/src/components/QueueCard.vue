@@ -100,6 +100,10 @@ const dropOff = computed(
       </RouterLink>
       <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Fast Track">Fast Track</span>
       <span
+        v-if="ticket.shipping_direction" class="tag direction-tag"
+        :title="ticket.shipping_direction === 'inbound' ? 'Inbound shipment' : 'Outbound shipment'"
+      >{{ ticket.shipping_direction === 'inbound' ? 'Inbound' : 'Outbound' }}</span>
+      <span
         v-if="otherStatus" :class="['pill', 'status-pill', settings.colorFor(ticket.status_key)]"
       >{{ ticket.status_label || ticket.status_label_snapshot }}</span>
       <!-- Under the title in the narrow right column and on phones; the

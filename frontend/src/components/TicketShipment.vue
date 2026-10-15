@@ -30,6 +30,9 @@ const emit = defineEmits(['changed']);
 const shipment = computed(() => props.ticket.shipments?.[0]);
 const items = computed(() => shipment.value?.items || []);
 const locked = computed(() => !!shipment.value?.shipped_at);
+// Migration 069. Anything but 'inbound' reads as outbound, so a shipment
+// payload from before the column existed behaves exactly as it always did.
+const inbound = computed(() => shipment.value?.direction === 'inbound');
 const doneCount = computed(() => (shipment.value?.checklist || []).filter((i) => i.checked).length);
 
 async function patchShipment(payload) {
@@ -100,7 +103,7 @@ async function toggleItem(index) {
 }
 
 async function markShipped() {
-  if (!confirm('Mark this shipment as shipped? Its details lock after that.')) return;
+  if (!confirm(`Mark this shipment as ${inbound.value ? 'received' : 'shipped'}? Its details lock after that.`)) return;
   await patchShipment({ mark_shipped: true });
 }
 </script>
@@ -111,9 +114,24 @@ async function markShipped() {
       <h2 style="margin: 0">Shipment</h2>
       <div class="spacer" />
       <span v-if="shipment.shipped_at" class="pill green">
-        Shipped {{ new Date(shipment.shipped_at).toLocaleDateString() }}
+        {{ inbound ? 'Received' : 'Shipped' }} {{ new Date(shipment.shipped_at).toLocaleDateString() }}
       </span>
-      <span v-else class="pill amber">Not yet shipped</span>
+      <span v-else class="pill amber">{{ inbound ? 'Not yet received' : 'Not yet shipped' }}</span>
+    </div>
+
+    <div class="field">
+      <label>Direction</label>
+      <div class="row">
+        <button
+          type="button" class="small" :class="{ primary: !inbound }" :disabled="locked"
+          @click="!inbound || patchShipment({ direction: 'outbound' })"
+        >Outbound</button>
+        <button
+          type="button" class="small" :class="{ primary: inbound }" :disabled="locked"
+          @click="inbound || patchShipment({ direction: 'inbound' })"
+        >Inbound</button>
+        <span class="muted small">{{ inbound ? 'Coming to the shop' : 'Leaving the shop' }}</span>
+      </div>
     </div>
 
     <div class="field-row">
@@ -148,10 +166,10 @@ async function markShipped() {
 
     <div class="field-row">
       <div class="field" style="flex: 2">
-        <label>Contact info</label>
+        <label>{{ inbound ? 'Sender contact info' : 'Contact info' }}</label>
         <input
           :value="shipment.contact_info" :disabled="locked"
-          placeholder="Recipient name, address, phone"
+          :placeholder="inbound ? 'Sender name, address, phone' : 'Recipient name, address, phone'"
           @change="patchShipment({ contact_info: $event.target.value })"
         />
       </div>
@@ -262,6 +280,6 @@ async function markShipped() {
       </div>
     </div>
 
-    <button v-if="!locked" class="primary" @click="markShipped">Mark shipped</button>
+    <button v-if="!locked" class="primary" @click="markShipped">{{ inbound ? 'Mark received' : 'Mark shipped' }}</button>
   </div>
 </template>

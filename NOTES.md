@@ -3920,6 +3920,45 @@ priority tier) still doesn't appear in To-Dos; that was the boss's §2.79
 decision, and its ticket shows under In-Progress Tickets instead.
 Files: `views/DashboardView.vue`, `components/NewTaskPanel.vue`.
 
+### 2.95 Shipping tickets: Inbound / Outbound toggle (migration 069)
+
+Will: tickets that have to do with shipping should have a toggle for whether
+they're inbound or outbound. Until now every shipping ticket was implicitly
+outbound ("Ship this instrument"), with the inbound case only half-mentioned
+in a comment on the New Ticket form (an Orders & Shipping ticket opened for
+something coming *to* the shop, with no existing ticket to launch from).
+
+The direction lives on the shipment record, not the ticket:
+`shipments.direction` (`'inbound' | 'outbound'`, NOT NULL, default
+`'outbound'` — which backfills every existing shipment correctly). The
+shipment is already where a shipping ticket's logistics live, and every
+`is_shipping` ticket gets one, so there's no second flag on `tickets`.
+
+- `routes/shipments.js`: `createShipment` and `PATCH /shipments/:id` accept
+  `direction`, validated against the two values (400 otherwise).
+- `routes/tickets.js`: `POST /tickets` takes `shipping_direction` next to
+  `shipping_contact_info` (only meaningful under Orders & Shipping);
+  `TICKET_SELECT` exposes `shipping_direction` (NULL for non-shipping
+  tickets) so lists can tag it without loading shipments.
+  `create-shipping-ticket` is untouched and stays outbound.
+- `NewTicketForm.vue`: Outbound / Inbound buttons under Orders & Shipping
+  (default Outbound); the contact field reads "Shipping to" or "Shipping
+  from"; copied onto additional-instrument sibling tickets with the contact.
+- `TicketShipment.vue`: the same toggle on the Shipment card (locked once
+  the shipment is marked shipped/received). For inbound the wording flips:
+  "Sender contact info", "Mark received", "Received <date>" /
+  "Not yet received". `shipped_at` is reused as the received timestamp.
+- Queue rows (`QueueCard.vue`) and the ticket table (`TicketTable.vue`) show
+  a grey Inbound / Outbound tag on shipping tickets.
+
+Not changed: the packing checklist (seeded from the shipping-kind QC
+template) still appears on inbound shipments, and there's no
+inbound-specific receiving checklist; the Settings status set is unchanged.
+Files: `database/migrations/069_shipment_direction.sql`,
+`routes/shipments.js`, `routes/tickets.js`, `components/NewTicketForm.vue`,
+`components/TicketShipment.vue`, `components/QueueCard.vue`,
+`components/TicketTable.vue`, `styles.css`.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -670,6 +670,10 @@ tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
   .folder-tab-panel { padding: 14px; }
 }
 
+/* Inbound / Outbound tag on shipping tickets (migration 069). Plain .tag grey
+   on purpose — Fast Track's accent colour stays the louder of the two. */
+.tag.direction-tag { margin-left: 6px; vertical-align: middle; }
+
 /* --- Fast Track (migration 063) ------------------------------------------ */
 /* Accent-tinted so it reads as distinct from the plain grey .tag used for
    photo counts etc. Shared by QueueCard.vue and TicketTable.vue. */

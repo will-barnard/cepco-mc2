@@ -111,6 +111,10 @@ const form = ref({
   // this instrument" from) carry a destination the same as one spun off
   // that way.
   shipping_contact_info: '',
+  // Migration 069: which way the shipment is headed. Outbound is what every
+  // shipping ticket was before this existed, so it stays the default; the
+  // inbound case is the one this form's comment above describes.
+  shipping_direction: 'outbound',
   // Naming panel (migration 057): the {ticket_name} slot a Standardize
   // category's template can fold in alongside {category} -- e.g.
   // "Housekeeping: Mop the floors". Only shown/used when usesTicketName
@@ -150,6 +154,7 @@ function pickCategory(key) {
     // doesn't leave a stale destination the user never actually confirmed
     // under the new category.
     form.value.shipping_contact_info = '';
+    form.value.shipping_direction = 'outbound';
   }
 }
 
@@ -632,6 +637,7 @@ async function submit() {
             multi_instrument: true,
             qc_required: payload.qc_required,
             shipping_contact_info: payload.shipping_contact_info,
+            shipping_direction: payload.shipping_direction,
             source_ticket_id: ticket.id,
           });
         } catch (err) {
@@ -891,13 +897,29 @@ async function submit() {
            shipment, where there's no existing ticket yet to launch that
            from. -->
       <div v-if="isShippingCategory" class="field">
-        <label>Shipping to / contact info</label>
+        <label>Direction</label>
+        <div class="row" style="margin-bottom: 10px">
+          <button
+            type="button" class="small" :class="{ primary: form.shipping_direction !== 'inbound' }"
+            @click="form.shipping_direction = 'outbound'"
+          >Outbound</button>
+          <button
+            type="button" class="small" :class="{ primary: form.shipping_direction === 'inbound' }"
+            @click="form.shipping_direction = 'inbound'"
+          >Inbound</button>
+          <span class="muted small">
+            {{ form.shipping_direction === 'inbound' ? 'Coming to the shop' : 'Leaving the shop' }}
+          </span>
+        </div>
+        <label>{{ form.shipping_direction === 'inbound' ? 'Shipping from' : 'Shipping to' }} / contact info</label>
         <input
           v-model="form.shipping_contact_info"
-          placeholder="Name, address, phone — whatever this destination needs"
+          :placeholder="form.shipping_direction === 'inbound'
+            ? 'Name, address, phone — whoever is sending it in'
+            : 'Name, address, phone — whatever this destination needs'"
         />
         <p v-if="form.multi_instrument" class="muted small" style="margin: 4px 0 0">
-          Copied onto every additional instrument's ticket below too, since they're going to the same place.
+          Direction and contact info are copied onto every additional instrument's ticket below too, since they're going to / coming from the same place.
         </p>
       </div>
 

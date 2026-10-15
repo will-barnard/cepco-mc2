@@ -86,7 +86,12 @@ const TICKET_SELECT = `
          COALESCE(techs.technicians, '[]'::json) AS technicians,
          ip.id AS purchase_id, ip.seller_name, ip.seller_email, ip.seller_phone,
          ip.seller_address, ip.price AS purchase_price, ip.purchase_date,
-         ip.notes AS purchase_notes, ip.receipt_sent_at
+         ip.notes AS purchase_notes, ip.receipt_sent_at,
+         -- Migration 069: 'inbound' / 'outbound' for a shipping ticket (read off
+         -- its shipment record), NULL for everything else — lets the Queue and
+         -- ticket lists tag the direction without loading shipments.
+         (SELECT sd.direction FROM shipments sd
+           WHERE sd.ticket_id = t.id ORDER BY sd.created_at, sd.id LIMIT 1) AS shipping_direction
     FROM tickets t
     LEFT JOIN customers   c   ON c.id = t.customer_id
     LEFT JOIN instruments i   ON i.id = t.instrument_id
@@ -997,6 +1002,9 @@ router.post('/', asyncHandler(async (req, res) => {
       const shipment = await createShipment(client, {
         ticketId: created.id,
         contactInfo: b.shipping_contact_info || null,
+        // Invalid values are rejected inside createShipment (400). Omitted =
+        // outbound, same as every shipping ticket before migration 069.
+        direction: b.shipping_direction || null,
       });
       return { ...created, shipments: [shipment] };
     }
