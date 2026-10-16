@@ -15,6 +15,7 @@ import TicketVendorOrders from '../components/TicketVendorOrders.vue';
 import TicketVendorWork from '../components/TicketVendorWork.vue';
 import TicketServiceLog from '../components/TicketServiceLog.vue';
 import { xeroContactUrl } from '../xeroLinks';
+import { shopDate } from '../dates';
 import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
 import TicketNotes from '../components/TicketNotes.vue';
@@ -326,6 +327,45 @@ async function patch(payload) {
     await load(true);
   } catch (err) {
     error.value = err.message;
+  }
+}
+
+// "Date of Order/Queue" (drop_off_date, a plain 'YYYY-MM-DD'). Blank clears
+// it. The Queue shows and sorts by it.
+async function saveDropOff(event) {
+  const next = event.target.value || null;
+  if (next === (ticket.value.drop_off_date || null)) return;
+  xeroDateMessage.value = '';
+  await patch({ drop_off_date: next });
+}
+
+// Only offered while the date is blank and the customer is linked to Xero:
+// takes the earliest *note* in the customer's Xero History & Notes (not
+// Xero's own activity entries) as the day the job came in. It's the whole
+// contact's history, so for a repeat customer it can predate this job --
+// the field stays editable for that reason.
+const pullingXeroDate = ref(false);
+const xeroDateMessage = ref('');
+async function pullDropOffFromXero() {
+  pullingXeroDate.value = true;
+  xeroDateMessage.value = '';
+  try {
+    const res = await api.get(`/customers/${ticket.value.customer_id}/xero-history`);
+    if (res.error) {
+      xeroDateMessage.value = `Couldn't reach Xero: ${res.error}`;
+      return;
+    }
+    const notes = (res.records || []).filter((r) => r.kind === 'note' && r.at);
+    if (!notes.length) {
+      xeroDateMessage.value = 'No notes found in this customer\'s Xero history.';
+      return;
+    }
+    const earliest = notes.reduce((a, b) => (String(b.at) < String(a.at) ? b : a));
+    await patch({ drop_off_date: shopDate(earliest.at) });
+  } catch (err) {
+    xeroDateMessage.value = err.message;
+  } finally {
+    pullingXeroDate.value = false;
   }
 }
 
@@ -655,6 +695,24 @@ const showProgressUpdate = computed(() => (
                  level, which this single ticket-wide field never could.
                  ticket.tech_level_key stays in the DB (costs nothing to
                  leave it there), it just isn't edited from here anymore. -->
+          </div>
+
+          <!-- Date of Order/Queue: what the Queue's date column shows. -->
+          <div class="field">
+            <label>Date of Order/Queue</label>
+            <div class="row">
+              <input
+                type="date" :value="ticket.drop_off_date || ''" style="width: 170px"
+                @change="saveDropOff($event)"
+              />
+              <button
+                v-if="!ticket.drop_off_date && ticket.customer_xero_contact_id"
+                type="button" class="small" :disabled="pullingXeroDate"
+                title="Use the earliest note in this customer's Xero history"
+                @click="pullDropOffFromXero"
+              >{{ pullingXeroDate ? 'Checking Xero…' : 'Pull from Xero' }}</button>
+              <span v-if="xeroDateMessage" class="muted small">{{ xeroDateMessage }}</span>
+            </div>
           </div>
 
           <!-- Progress bar (migration 066): optional 1-100, a judgement call

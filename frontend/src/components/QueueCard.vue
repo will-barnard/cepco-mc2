@@ -10,7 +10,7 @@
  * separated by rules.
  *
  * Laid out as fixed columns so the page reads down cleanly (shop feedback,
- * Oct 2026): grip, position, then the customer in a fixed-width column so
+ * Oct 2026): grip, then the customer in a fixed-width column so
  * every name starts at the same x, then the rest of the title (with the
  * customer stripped off it — see ticketNaming.js's titleWithoutCustomer)
  * starting at the same x too. Priority isn't shown here any more; it's
@@ -21,13 +21,14 @@
  * the root element (none of them are declared as props or emits), so this
  * component never needs to know which index it sits at in the parent's
  * list. `pos` doubles as the "is this a reorderable queue" switch — null
- * hides the grip and the #n position, for a read-only row.
+ * hides the grip, for a read-only row.
  */
 import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
 import { titleWithoutCustomer } from '../ticketNaming';
 import { useSettings } from '../stores';
 import { progressOf, progressStyle } from '../progress';
+import { formatYmd } from '../dates';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -73,9 +74,7 @@ const rest = computed(() => (props.showCustomer
 const techs = computed(
   () => (props.ticket.technicians || []).map((x) => x.name).join(', ') || 'unassigned',
 );
-const dropOff = computed(
-  () => (props.ticket.drop_off_date ? new Date(props.ticket.drop_off_date).toLocaleDateString() : '—'),
-);
+const dropOff = computed(() => formatYmd(props.ticket.drop_off_date));
 </script>
 
 <template>
@@ -85,7 +84,6 @@ const dropOff = computed(
   >
     <template v-if="pos !== null">
       <span class="muted grip" title="Drag to reorder">⠿</span>
-      <span class="muted small pos">#{{ pos }}</span>
     </template>
     <RouterLink
       v-if="showCustomer" :to="{ name: 'ticket', params: { id: ticket.id } }"
@@ -135,7 +133,6 @@ const dropOff = computed(
 /* Fixed widths on everything left of the title, so customer names and the
    title text each start at the same x on every row, across boxes too. */
 .grip { width: 14px; flex: none; font-size: 16px; line-height: 1; cursor: grab; }
-.pos { width: 2.4em; flex: none; }
 .customer {
   width: var(--customer-w); flex: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

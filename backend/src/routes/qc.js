@@ -30,6 +30,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const storage = require('../storage');
 const config = require('../config');
+const { insertNote } = require('../services/ticketNotes');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -99,6 +100,69 @@ function validateItems(items) {
     }
     return { label: i.label, note: i.note || null, category: i.category || null };
   });
+}
+
+/** A round's checklist items: snapshot of a template's items, unmarked.
+ * Q4 supersedes the earlier "reference list only" decision: items snapshot
+ * their template's category (Tuning/Action/Electronics/Cosmetics) so the
+ * checklist can group by it. Migration 067 replaced the boolean `checked`
+ * with a three-way `status` (pass/fail/na, null until reviewed) — see
+ * PUT /checks/:id/items/:index below. */
+function resultsFromTemplate(template) {
+  return (template ? template.items : []).map((i) => ({
+    label: i.label, note: i.note || null, category: i.category || null, status: null,
+  }));
+}
+
+/**
+ * Which checklist a round should use, given what was asked for (migration
+ * 071) and the round's standard template. `requestedId` null/''/undefined
+ * means "the standard one". A different template has to be an active QC
+ * checklist (any family, any round number — that's the point of the
+ * override). Returns the template whose items to copy and the value for
+ * qc_checks.checklist_template_id (NULL when it's just the standard one).
+ */
+async function resolveChecklist(db, requestedId, standard) {
+  if (requestedId === undefined || requestedId === null || requestedId === '') {
+    return { source: standard, overrideId: null };
+  }
+  const id = Number(requestedId);
+  if (!Number.isInteger(id) || id < 1) throw badRequest('template_id must be a template id, or null');
+  if (standard && standard.id === id) return { source: standard, overrideId: null };
+  const { rows } = await db.query(
+    "SELECT * FROM qc_templates WHERE id = $1 AND kind = 'qc' AND active = TRUE", [id],
+  );
+  if (!rows[0]) throw badRequest('That is not an active QC checklist');
+  return { source: rows[0], overrideId: rows[0].id };
+}
+
+/** Move marks from a round's old results onto a new checklist's items,
+ * matching on label (case/spacing-insensitive, each old item used once). */
+function carryMarks(oldResults, newResults) {
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const pool = new Map();
+  (oldResults || []).forEach((r) => {
+    const key = norm(r.label);
+    if (!pool.has(key)) pool.set(key, []);
+    pool.get(key).push(r);
+  });
+  let carried = 0;
+  const results = newResults.map((item) => {
+    const match = (pool.get(norm(item.label)) || []).shift();
+    if (match && (match.status || match.comment)) {
+      if (match.status) carried += 1;
+      return {
+        ...item,
+        status: match.status ?? null,
+        ...(match.status_by !== undefined ? { status_by: match.status_by } : {}),
+        ...(match.status_at !== undefined ? { status_at: match.status_at } : {}),
+        ...(match.comment ? { comment: match.comment } : {}),
+      };
+    }
+    return item;
+  });
+  const markedBefore = (oldResults || []).filter((r) => r.status).length;
+  return { results, carried, dropped: markedBefore - carried };
 }
 
 // --- templates -------------------------------------------------------------
@@ -221,21 +285,101 @@ router.post('/checks', asyncHandler(async (req, res) => {
   );
   const template = templateRows[0] || null;
 
-  // Q4 supersedes the earlier "reference list only" decision: items now
-  // snapshot their template's category (Tuning/Action/Electronics/
-  // Cosmetics) so the checklist can group by it. Migration 067 replaced the
-  // boolean `checked` with a three-way `status` (pass/fail/na, null until
-  // reviewed) — see PUT /checks/:id/items/:index below.
-  const results = (template ? template.items : []).map((i) => ({
-    label: i.label, note: i.note || null, category: i.category || null, status: null,
-  }));
+  // Optional override (migration 071): start this round on a different
+  // checklist than the standard one. `template` above stays the round's
+  // standard template either way — it's what decides the signature count.
+  const { source, overrideId } = await resolveChecklist({ query }, b.checklist_template_id, template);
 
   const { rows } = await query(
-    `INSERT INTO qc_checks (ticket_id, template_id, round_number, reviewer_id, results)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [b.ticket_id, template ? template.id : null, roundNumber, b.reviewer_id || req.user.id, JSON.stringify(results)],
+    `INSERT INTO qc_checks (ticket_id, template_id, round_number, reviewer_id, results, checklist_template_id)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [b.ticket_id, template ? template.id : null, roundNumber, b.reviewer_id || req.user.id,
+      JSON.stringify(resultsFromTemplate(source)), overrideId],
   );
   res.status(201).json(rows[0]);
+}));
+
+/**
+ * Switch an open round onto a different QC checklist (migration 071) — open
+ * to anyone working the round, like marking items. `template_id: null`
+ * goes back to the round's standard checklist. Marks already made carry
+ * over to any item in the new checklist with the same label (so switching
+ * between two near-identical lists doesn't throw the work away); marks on
+ * items the new list doesn't have are dropped, and the response says how
+ * many of each. Locked once the round is signed off — an admin can reopen
+ * it first (POST /tickets/:ticketId/reset). The standard template stays on
+ * template_id, so the number of signatures the round needs doesn't change.
+ */
+router.put('/checks/:id/checklist', asyncHandler(async (req, res) => {
+  if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'template_id')) {
+    throw badRequest("template_id is required (a template id, or null for this round's standard checklist)");
+  }
+  const result = await withTransaction(async (client) => {
+    const { rows } = await client.query('SELECT * FROM qc_checks WHERE id = $1 FOR UPDATE', [req.params.id]);
+    const check = rows[0];
+    if (!check) throw notFound('QC check not found');
+    if (check.signed_off_at) throw badRequest('This QC round is already signed off');
+
+    let standard = null;
+    if (check.template_id) {
+      const { rows: stdRows } = await client.query('SELECT * FROM qc_templates WHERE id = $1', [check.template_id]);
+      standard = stdRows[0] || null;
+    }
+    const { source, overrideId } = await resolveChecklist(client, req.body.template_id, standard);
+
+    const { results, carried, dropped } = carryMarks(check.results, resultsFromTemplate(source));
+    const { rows: updated } = await client.query(
+      'UPDATE qc_checks SET results = $2, checklist_template_id = $3 WHERE id = $1 RETURNING *',
+      [check.id, JSON.stringify(results), overrideId],
+    );
+    return { check: updated[0], marks_carried: carried, marks_dropped: dropped };
+  });
+  res.json(result);
+}));
+
+/**
+ * Admin: reset a ticket's QC status.
+ * Every round on the ticket is reopened: its signatures are cleared and it's
+ * no longer signed off, and the ticket goes back to "QC outstanding"
+ * (tickets.qc_passed_at = NULL), so the rounds have to be signed again. The
+ * work is kept — checklist marks, task reviews, notes and photos all stay —
+ * so a reset is "this needs another look," not "throw the QC away." A note
+ * on the ticket records who did it (no author, so it isn't posted to Xero).
+ */
+router.post('/tickets/:ticketId/reset', requireRole('admin'), asyncHandler(async (req, res) => {
+  const result = await withTransaction(async (client) => {
+    const { rows: ticketRows } = await client.query(
+      'SELECT id, qc_passed_at FROM tickets WHERE id = $1 FOR UPDATE', [req.params.ticketId],
+    );
+    const ticket = ticketRows[0];
+    if (!ticket) throw notFound('Ticket not found');
+
+    const { rows: rounds } = await client.query(
+      'SELECT id, signed_off_at FROM qc_checks WHERE ticket_id = $1', [ticket.id],
+    );
+    const ids = rounds.map((r) => r.id);
+    let signatures = 0;
+    if (ids.length) {
+      const del = await client.query('DELETE FROM qc_check_signoffs WHERE qc_check_id = ANY($1)', [ids]);
+      signatures = del.rowCount;
+      await client.query(
+        'UPDATE qc_checks SET passed = NULL, signed_off_at = NULL WHERE ticket_id = $1', [ticket.id],
+      );
+    }
+    await client.query('UPDATE tickets SET qc_passed_at = NULL WHERE id = $1', [ticket.id]);
+
+    const reopened = rounds.filter((r) => r.signed_off_at).length;
+    await insertNote(client, {
+      ticketId: ticket.id,
+      body: `QC status reset by ${req.user.name}: ${reopened} signed-off round(s) reopened, `
+        + `${signatures} signature(s) cleared. QC needs to be signed off again.`,
+      createdBy: null,
+    });
+    return {
+      ticket_id: ticket.id, rounds_reopened: reopened, signatures_cleared: signatures, ticket_qc_passed: false,
+    };
+  });
+  res.json(result);
 }));
 
 router.patch('/checks/:id', asyncHandler(async (req, res) => {

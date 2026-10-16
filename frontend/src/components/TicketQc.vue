@@ -34,6 +34,14 @@
  *      reviewed with the same three boxes, per round (qc_task_reviews).
  *   3. Photos — QcPhotos.vue, attached to this round, separate from the
  *      ticket's general Photos card.
+ * Checklist override (migration 071): anyone can switch an open round onto a
+ * different QC checklist (the picker in the round's Checklist header, or
+ * before starting a round). Marks carry over to items worded the same; the
+ * round's standard template still decides how many signatures it needs.
+ * Admins also get a "Reset QC" button that reopens every round on the ticket
+ * and returns it to "QC outstanding" (routes/qc.js, POST
+ * /qc/tickets/:ticketId/reset) — the marks, notes and photos are kept.
+ *
  * Marks are applied optimistically against a local copy of the ticket's
  * rounds (the parent only reloads on sign-off / new round), and rolled back
  * if the server refuses. A signed-off round is read-only.
@@ -136,6 +144,80 @@ onMounted(async () => {
   try { caps.value = await api.get('/attachments/capabilities'); } catch { /* QcPhotos falls back to multipart */ }
 });
 
+// QC checklists anyone can switch a round onto (every active QC template,
+// any instrument family). Fetched once; the picker lists this ticket's own
+// instrument family first.
+const templates = ref([]);
+onMounted(async () => {
+  try { templates.value = await api.get('/qc/templates', { kind: 'qc' }); } catch { /* picker just stays empty */ }
+});
+const family = computed(() => props.ticket.instrument_family || null);
+const familyTemplates = computed(() => templates.value.filter((t) => !t.family || t.family === family.value));
+const otherTemplates = computed(() => templates.value.filter((t) => t.family && t.family !== family.value));
+const templateLabel = (t) => (t.family && t.family !== family.value ? `${t.name} (${t.family})` : t.name);
+
+/** The checklist a round is on: the override if there is one, else its
+ * standard template (which is null for a round nothing was set up for). */
+const currentChecklistId = (check) => check.checklist_template_id ?? check.template_id ?? '';
+/** The current one might be retired since — still shown, under its own name,
+ * rather than the select going blank. */
+const currentMissing = (check) => {
+  const id = currentChecklistId(check);
+  return id !== '' && !templates.value.some((t) => t.id === id);
+};
+const currentName = (check) => check.checklist_override_name || check.template_name || 'Current checklist';
+
+async function switchChecklist(check, event) {
+  const raw = event.target.value;
+  const next = raw === '' ? null : Number(raw);
+  const previous = currentChecklistId(check);
+  if ((next ?? '') === previous) return;
+  const marked = check.results.filter((r) => r.status).length;
+  if (marked && !confirm(
+    `Switch this round to a different checklist? Marks on items worded the same carry over; `
+    + `marks on the other ${marked === 1 ? 'item' : 'items'} are cleared.`,
+  )) {
+    event.target.value = previous;
+    return;
+  }
+  error.value = '';
+  busy.value = true;
+  try {
+    const res = await api.put(`/qc/checks/${check.id}/checklist`, { template_id: next });
+    if (res.marks_dropped) {
+      error.value = `Checklist switched. ${res.marks_carried} mark(s) carried over, `
+        + `${res.marks_dropped} cleared (no matching item).`;
+    }
+    emit('changed');
+  } catch (err) {
+    event.target.value = previous;
+    error.value = err.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+// Admin-only: reopen every round and put the ticket back to QC outstanding.
+const canResetQc = computed(() => auth.isAdmin
+  && (props.ticket.qc_passed_at || checks.value.some((c) => c.signed_off_at || (c.signoffs || []).length)));
+
+async function resetQc() {
+  if (!confirm(
+    'Reset QC for this ticket?\n\nEvery round is reopened and all signatures are cleared, so the rounds '
+    + 'have to be signed off again. Checklist marks, notes and photos are kept.',
+  )) return;
+  error.value = '';
+  busy.value = true;
+  try {
+    await api.post(`/qc/tickets/${props.ticket.id}/reset`);
+    emit('changed');
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 /** Pressing the active box clears the mark; any other box sets it. */
 const nextMark = (current, pressed) => (current === pressed ? null : pressed);
 
@@ -224,11 +306,18 @@ const taskTally = (check) => tally(doneTasks.value.map((t) => taskMark(check, t)
 // needing a full replace each time).
 const issueDrafts = ref({});
 
+// '' = the checklist standardized for this round and instrument type.
+const startChecklistId = ref('');
+
 async function startRound() {
   error.value = '';
   busy.value = true;
   try {
-    await api.post('/qc/checks', { ticket_id: props.ticket.id });
+    await api.post('/qc/checks', {
+      ticket_id: props.ticket.id,
+      ...(startChecklistId.value !== '' ? { checklist_template_id: Number(startChecklistId.value) } : {}),
+    });
+    startChecklistId.value = '';
     emit('changed');
   } catch (err) {
     error.value = err.message;
@@ -309,12 +398,16 @@ async function reportIssue(check) {
       <span v-if="ticket.qc_passed_at" class="pill green">QC passed</span>
       <span v-else-if="!ticket.qc_required" class="pill slate">QC not required</span>
       <span v-else class="pill amber">QC outstanding</span>
+      <button
+        v-if="canResetQc" type="button" class="small danger" :disabled="busy"
+        title="Admin: reopen every round and clear all signatures" @click="resetQc"
+      >Reset QC</button>
     </div>
     <p class="muted small" style="margin: 0 0 12px">
       Rounds always happen in order — Round 2 can't start before Round 1 is open, and each
-      round's checklist is standardized for this instrument type. Every ticket needs 2 rounds
-      passed to clear QC; how many people need to sign each round (1 or 2) depends on that
-      round's template.
+      round's checklist is standardized for this instrument type, though anyone can switch an
+      open round onto a different checklist. Every ticket needs 2 rounds passed to clear QC; how
+      many people need to sign each round (1 or 2) depends on that round's standard template.
     </p>
 
     <div v-if="error" class="alert" style="margin-bottom: 12px">{{ error }}</div>
@@ -344,6 +437,28 @@ async function reportIssue(check) {
             {{ itemTally(check).text }}
           </span>
         </div>
+        <!-- Anyone can switch an open round to another checklist; a signed-off
+             round just names the one it used. -->
+        <div v-if="!check.signed_off_at" class="row qc-checklist-pick">
+          <label class="muted small" :for="`qc-checklist-${check.id}`">Checklist</label>
+          <select
+            :id="`qc-checklist-${check.id}`" :value="currentChecklistId(check)" :disabled="busy"
+            @change="switchChecklist(check, $event)"
+          >
+            <option v-if="currentChecklistId(check) === ''" value="">— none set up for this round —</option>
+            <option v-if="currentMissing(check)" :value="currentChecklistId(check)">{{ currentName(check) }}</option>
+            <optgroup v-if="familyTemplates.length" :label="family ? `${family} / general` : 'General'">
+              <option v-for="t in familyTemplates" :key="t.id" :value="t.id">{{ templateLabel(t) }}</option>
+            </optgroup>
+            <optgroup v-if="otherTemplates.length" label="Other instrument types">
+              <option v-for="t in otherTemplates" :key="t.id" :value="t.id">{{ templateLabel(t) }}</option>
+            </optgroup>
+          </select>
+          <span v-if="check.checklist_template_id" class="pill amber small">Overridden</span>
+        </div>
+        <p v-else-if="check.checklist_override_name" class="muted small" style="margin: 0 0 4px">
+          Checklist: {{ check.checklist_override_name }} (overridden)
+        </p>
         <p v-if="!check.results.length" class="muted small" style="margin: 0">
           No checklist items for this round yet (Settings → QC checklist templates).
         </p>
@@ -480,9 +595,22 @@ async function reportIssue(check) {
         <div class="spacer" />
         <button :disabled="busy" @click="startRound">Start round {{ checks.length + 1 }}</button>
       </div>
+      <div class="row" style="margin-top: 8px">
+        <label class="muted small" for="qc-start-checklist">Checklist</label>
+        <select id="qc-start-checklist" v-model="startChecklistId">
+          <option value="">Standard for round {{ checks.length + 1 }} on this instrument type</option>
+          <optgroup v-if="familyTemplates.length" :label="family ? `${family} / general` : 'General'">
+            <option v-for="t in familyTemplates" :key="t.id" :value="t.id">{{ templateLabel(t) }}</option>
+          </optgroup>
+          <optgroup v-if="otherTemplates.length" label="Other instrument types">
+            <option v-for="t in otherTemplates" :key="t.id" :value="t.id">{{ templateLabel(t) }}</option>
+          </optgroup>
+        </select>
+      </div>
       <p class="muted small" style="margin: 8px 0 0">
-        Pulls whatever checklist is standardized for round {{ checks.length + 1 }} on this
-        instrument type (Settings → QC checklist templates) — blank if none is set up yet.
+        By default pulls whatever checklist is standardized for round {{ checks.length + 1 }} on this
+        instrument type (Settings → QC checklist templates) — blank if none is set up yet. Pick
+        another above to start the round on a different checklist.
       </p>
     </div>
   </div>
@@ -494,6 +622,8 @@ async function reportIssue(check) {
 .qc-section-head h3 { margin: 0; }
 .qc-group-label { margin: 0 0 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 .qc-has-fail { color: var(--red); font-weight: 600; }
+.qc-checklist-pick { margin: 0 0 6px; gap: 8px; flex-wrap: nowrap; }
+.qc-checklist-pick select { flex: 1; min-width: 0; }
 
 /* One column: the boxes, then the text. align-items:flex-start keeps the
    boxes pinned to the first line when a long label wraps. */

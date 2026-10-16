@@ -3985,6 +3985,81 @@ Files: `database/migrations/070_ticket_custom_shop_flag.sql`,
 `components/QueueCard.vue`, `components/TicketTable.vue`,
 `views/TicketDetailView.vue`, `views/QueueView.vue`, `styles.css`.
 
+### 2.97 Queue: no position number; editable order date with "Pull from Xero"
+
+Will, three related changes:
+
+- **Position number removed from the Queue.** `QueueCard.vue` no longer
+  draws the `#n` column (and its CSS). The grip stays: `pos` is still the
+  "this list is reorderable" switch, it just isn't displayed. Ordering
+  itself is unchanged.
+- **Date of Order/Queue editable on the ticket page.** A date input in the
+  Details card (`TicketDetailView.vue`) patches `drop_off_date`. Backend:
+  `PATCH /tickets/:id` used `COALESCE`, so a date could be changed but never
+  cleared; it now takes an explicit "was it sent" flag, so `null`/`''`
+  clears it, and anything else must be a real `YYYY-MM-DD` (400 otherwise).
+- **"Pull from Xero" button** beside the date, shown only while the date is
+  blank and the customer is linked to Xero. It reads the customer's Xero
+  History & Notes (the existing `GET /customers/:id/xero-history`, nothing
+  new on the server), takes the earliest record of kind `note` (not Xero's
+  own activity entries), converts it to the shop's calendar day
+  (America/Chicago, `dates.js#shopDate`) and saves it. It's the whole
+  contact's history, so for a repeat customer it can predate this job; the
+  field stays editable for that reason. Messages for "no notes" / Xero
+  unreachable show beside the button.
+
+Also fixed along the way: `QueueCard.vue` and `TicketTable.vue` formatted
+the date with `new Date('YYYY-MM-DD')`, which parses as UTC midnight and
+displays the *previous day* for anyone in Central time (§2.13 warned about
+this; `db.js` returns DATEs as plain strings on purpose). New
+`frontend/src/dates.js#formatYmd` builds the date from its parts and both
+now use it. Other `toLocaleDateString()` call sites on DATE columns weren't
+audited.
+Files: `routes/tickets.js`, `components/QueueCard.vue`,
+`components/TicketTable.vue`, `views/TicketDetailView.vue`, `dates.js`.
+
+### 2.98 QC: admin reset, and anyone can override a round's checklist (migration 071)
+
+Will: admins should be able to reset QC status, and anyone should be able to
+override which QC checklist a round uses.
+
+**Reset QC (admin only).** `POST /qc/tickets/:ticketId/reset`
+(`requireRole('admin')`) reopens every round on the ticket: all
+`qc_check_signoffs` rows are deleted, each round's `passed` / `signed_off_at`
+go back to NULL, and `tickets.qc_passed_at` is cleared, so the ticket is "QC
+outstanding" again and the rounds must be signed off again. Deliberately
+non-destructive: checklist marks, failure explanations, task reviews, round
+notes and QC photos are all kept (a reopened round is editable again, which
+is the point). A ticket note records who did it and how many rounds/
+signatures were affected; it has no author, so it isn't posted to Xero.
+`TicketQc.vue` shows a "Reset QC" button (with a confirm) in the card header
+for admins, only when there is something to reset. Invoices already created
+are untouched — `qc_passed_at` only gates creating a new one (`routes/invoices.js`).
+
+**Checklist override (anyone).** `qc_checks.checklist_template_id` (new,
+NULL = the round is on its standard checklist) records which template's items
+were copied into the round's `results`. `qc_checks.template_id` is left as the
+round's *standard* template on purpose: it still decides how many signatures
+the round needs (`required_signoffs`), so switching checklists can't be used to
+skip the two-signature rule on a closing round.
+- `PUT /qc/checks/:id/checklist` `{ template_id }` swaps an **open** round onto
+  any active QC checklist, any family or round number; `null` goes back to the
+  standard one. Marks (and fail explanations) carry over to items with the same
+  label (case/spacing-insensitive); marks on items the new list doesn't have
+  are dropped, and the response reports `marks_carried` / `marks_dropped`.
+  Locked once a round is signed off — an admin reopens it with Reset QC first.
+- `POST /qc/checks` also takes an optional `checklist_template_id`, so a round
+  can start on a non-standard checklist.
+- `TicketQc.vue`: a Checklist picker in each open round's header (this
+  instrument's family and general lists first, other families below; confirms
+  before clearing marks) and a picker beside "Start round N". An "Overridden"
+  tag marks rounds not on their standard list. `GET /tickets/:id` now returns
+  `checklist_template_id`, `checklist_override_name` and `template_name` per round.
+
+Not done: a per-round "reopen" (Reset QC reopens all rounds), and no log of
+who switched a checklist. Files: `database/migrations/071_qc_checklist_override.sql`,
+`routes/qc.js`, `routes/tickets.js`, `components/TicketQc.vue`.
+
 ## 4. Suggested first moves after deploy
 
 

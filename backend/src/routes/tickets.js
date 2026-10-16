@@ -369,13 +369,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
     // did), and signoffs is the full per-person list backing that round's
     // progress — qc_checks.reviewer_id/signed_off_at only ever reflect
     // "closed, and by whom most recently," not who all signed.
+    // checklist_template_id / checklist_override_name: set when someone
+    // switched this round onto a different checklist than its standard one
+    // (migration 071); template_name is the standard one's name.
     query(`SELECT q.*, emp.name AS reviewer_name, s.label AS tier_label,
                   COALESCE(qt.required_signoffs, 1) AS required_signoffs,
+                  qt.name AS template_name, ct.name AS checklist_override_name,
                   COALESCE(signoffs.rows, '[]'::json) AS signoffs
              FROM qc_checks q
              LEFT JOIN employees emp ON emp.id = q.reviewer_id
              LEFT JOIN settings s ON s.category = 'qc_tier' AND s.key = q.tier_key
              LEFT JOIN qc_templates qt ON qt.id = q.template_id
+             LEFT JOIN qc_templates ct ON ct.id = q.checklist_template_id
              LEFT JOIN LATERAL (
                SELECT json_agg(
                         json_build_object(
@@ -1048,6 +1053,21 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     }
   }
 
+  // "Date of Order/Queue" (drop_off_date) is editable from the ticket page.
+  // Unlike the COALESCE'd fields below, null here means "clear it" — a
+  // missing date is meaningful (the page offers to pull it from Xero) — so
+  // whether it was sent at all is its own flag. '' counts as clearing too.
+  const dropOffTouched = b.drop_off_date !== undefined;
+  let dropOffDate = null;
+  if (dropOffTouched && b.drop_off_date !== null && b.drop_off_date !== '') {
+    dropOffDate = String(b.drop_off_date);
+    const parsed = new Date(`${dropOffDate}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dropOffDate) || Number.isNaN(parsed.getTime())
+        || parsed.toISOString().slice(0, 10) !== dropOffDate) {
+      throw badRequest('Date of order must be a real date (YYYY-MM-DD), or blank');
+    }
+  }
+
   const resolved = {};
   if (b.category_key && b.category_key !== existing.category_key) {
     resolved.category = await settings.resolveActive('ticket_category', b.category_key);
@@ -1217,7 +1237,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
          -- published through routes/ticketNotes.js (migration 061). Left
          -- accepted so an old client doesn't 400.
          notes            = COALESCE($22, notes),
-         drop_off_date    = COALESCE($23, drop_off_date),
+         drop_off_date    = CASE WHEN $40::boolean THEN $23::date ELSE drop_off_date END,
          due_date         = COALESCE($24, due_date),
          multi_instrument = COALESCE($25, multi_instrument),
          vendor_tracks    = COALESCE($26, vendor_tracks),
@@ -1252,7 +1272,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         b.customer_id !== undefined, b.customer_id || null,
         b.shop_contact_id !== undefined, b.shop_contact_id || null,
         b.notes === undefined ? null : b.notes,
-        b.drop_off_date === undefined ? null : b.drop_off_date,
+        dropOffDate,
         b.due_date === undefined ? null : b.due_date,
         b.multi_instrument === undefined ? null : b.multi_instrument,
         b.vendor_tracks === undefined ? null : JSON.stringify(b.vendor_tracks),
@@ -1269,6 +1289,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         progressTouched, progressPercent,
         // Migration 070 — same boolean-only rule as fast_track.
         typeof b.custom_shop === 'boolean' ? b.custom_shop : null,
+        dropOffTouched,
       ],
     );
 

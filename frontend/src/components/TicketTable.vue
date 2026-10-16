@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useSettings } from '../stores';
 import { titleWithoutCustomer } from '../ticketNaming';
 import { progressOf, progressStyle } from '../progress';
+import { formatYmd } from '../dates';
 
 const props = defineProps({
   tickets: { type: Array, required: true },
@@ -45,7 +46,7 @@ const open = (id) => router.push({ name: 'ticket', params: { id } });
 
 const customerLabel = (t) => t.customer_name || (t.instrument_is_fleet ? 'CEPCo fleet' : '—');
 const columnCount = computed(() => (props.queueLayout ? 4 : 6) + (props.showStatus ? 1 : 0));
-const dropOff = (t) => (t.drop_off_date ? new Date(t.drop_off_date).toLocaleDateString() : '—');
+const dropOff = (t) => formatYmd(t.drop_off_date);
 
 // Consecutive-run grouping, not a full group-by — the list already arrives
 // status-sorted, so this just finds where status_key changes from the
