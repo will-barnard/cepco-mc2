@@ -444,7 +444,7 @@ async function persistOrder(sectionKey, statusKey) {
 // rather than showing a column of dashes. Decided once for the whole page,
 // not per box, so the title column starts at the same x in every box.
 const showCustomer = computed(
-  () => tickets.value.some((t) => t.customer_name || t.instrument_is_fleet),
+  () => tickets.value.some((t) => t.customer_name || t.instrument_in_inventory),
 );
 // Progress column (migration 066): on for the whole page once any ticket
 // has a progress value, so the percentages line up in every box.

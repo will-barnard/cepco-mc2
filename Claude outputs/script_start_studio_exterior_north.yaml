@@ -1,0 +1,13 @@
+alias: Start Studio Camera - Exterior North (Big TV)
+description: Casts a continuous live feed from the Exterior Studio North camera to the Big TV.
+sequence:
+  - action: media_player.turn_on
+    target:
+      entity_id: media_player.big_tv
+  - action: media_player.play_media
+    target:
+      entity_id: media_player.big_tv
+    data:
+      media_content_id: media-source://camera/camera.exterior_studio_north_high_resolution_channel
+      media_content_type: application/vnd.apple.mpegurl
+mode: single

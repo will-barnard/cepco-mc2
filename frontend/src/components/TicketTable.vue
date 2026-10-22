@@ -44,7 +44,7 @@ const settings = useSettings();
 
 const open = (id) => router.push({ name: 'ticket', params: { id } });
 
-const customerLabel = (t) => t.customer_name || (t.instrument_is_fleet ? 'CEPCo fleet' : '—');
+const customerLabel = (t) => t.customer_name || (t.instrument_in_inventory ? 'CEPCo inventory' : '—');
 const columnCount = computed(() => (props.queueLayout ? 4 : 6) + (props.showStatus ? 1 : 0));
 const dropOff = (t) => formatYmd(t.drop_off_date);
 

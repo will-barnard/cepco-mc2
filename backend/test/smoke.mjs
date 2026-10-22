@@ -74,10 +74,12 @@ async function main() {
   check('CSV import produced tickets', Array.isArray(imported.body) && imported.body.length > 20,
     `got ${imported.body?.length}`);
 
-  const fleet = await call('GET', '/api/instruments?fleet=true');
+  // The showroom fleet is part of inventory now (migration 072): shop-owned,
+  // not for sale. Consignments are inventory too but carry a customer_id.
+  const fleet = await call('GET', '/api/inventory?status=not_for_sale');
   check('showroom fleet imported', fleet.body.length > 30, `got ${fleet.body.length}`);
-  check('fleet instruments have no customer',
-    fleet.body.every((i) => i.customer_id === null));
+  check('shop-owned inventory has no customer',
+    fleet.body.filter((i) => i.ownership === 'shop').every((i) => i.customer_id === null));
 
   const parts = await call('GET', '/api/parts?status=needed');
   check('parts orders imported', parts.body.length > 5, `got ${parts.body.length}`);

@@ -11,7 +11,8 @@ router.use(requireAuth);
 
 const SELECT = `
   SELECT r.*, i.family AS instrument_family, i.model AS instrument_model,
-         i.is_fleet AS instrument_is_fleet
+         i.nickname AS instrument_nickname,
+         (i.ownership <> 'customer') AS instrument_in_inventory
     FROM instrument_rentals r
     JOIN instruments i ON i.id = r.instrument_id
 `;

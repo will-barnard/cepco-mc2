@@ -55,14 +55,21 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const result = await withTransaction(async (client) => {
     const { rows: instRows } = await client.query(
-      `INSERT INTO instruments (family, model, year, serial_no, identifying_notes, is_fleet)
-       VALUES ($1,$2,$3,$4,$5,TRUE) RETURNING *`,
+      // Bought stock: shop-owned and for sale. (This used to set the old
+      // is_fleet flag, which put every purchase on the showroom/rental
+      // fleet page — see migration 072.) cost_paid mirrors the purchase
+      // price so the inventory page's admin-only cost column is filled in.
+      `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
+                                ownership, sale_status, cost_paid, nickname)
+       VALUES ($1,$2,$3,$4,$5,'shop','available',$6,$7) RETURNING *`,
       [
         instrument.family,
         instrument.model || null,
         instrument.year || null,
         instrument.serial_no || null,
         instrument.identifying_notes || null,
+        price,
+        instrument.nickname ? String(instrument.nickname).trim() : null,
       ],
     );
     const instrumentRow = instRows[0];

@@ -186,12 +186,15 @@ async function fleetQcSweep() {
     // yet means no automatic ticket yet, same "no eligible row, nothing
     // happens" posture as an empty rotation pool in fireTemplate().
     // NOT EXISTS guards against re-firing on an instrument that already
-    // has an open Fleet QC ticket sitting in the queue — the title prefix
-    // is the marker, same lightweight "match on what's already visible"
-    // approach FleetView.vue's own qcPill() takes with fleet_last_qc.
+    // has an open QC ticket sitting in the queue — the title prefix is the
+    // marker. Both prefixes are checked: tickets created before migration
+    // 072 say "Fleet QC —", newer ones "Inventory QC —".
+    // Scope: every shop-held instrument that isn't sold (migration 072
+    // folded the old fleet into inventory — a cycle on a for-sale piece is
+    // just as valid as one on a floor piece).
     const { rows: overdue } = await query(
       `SELECT i.* FROM instruments i
-        WHERE i.is_fleet = TRUE
+        WHERE i.ownership <> 'customer' AND i.sale_status <> 'sold'
           AND i.qc_interval_months IS NOT NULL
           AND i.last_qc_at IS NOT NULL
           AND i.last_qc_at + (i.qc_interval_months || ' months')::interval
@@ -199,7 +202,7 @@ async function fleetQcSweep() {
           AND NOT EXISTS (
             SELECT 1 FROM tickets t
              WHERE t.instrument_id = i.id AND t.archived = FALSE
-               AND t.title ILIKE 'Fleet QC —%'
+               AND (t.title ILIKE 'Fleet QC —%' OR t.title ILIKE 'Inventory QC —%')
           )`,
       [config.shopTimezone],
     );
@@ -219,7 +222,7 @@ async function fleetQcSweep() {
           await insertTicketRow(
             client,
             {
-              title: `Fleet QC — ${label}`,
+              title: `Inventory QC — ${label}`,
               instrument_id: instrument.id,
               notes: instrument.identifying_notes || null,
             },

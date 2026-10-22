@@ -1,0 +1,13 @@
+alias: Stop Studio Stream (Big TV)
+description: >
+  Stops any Studio camera stream on the Big TV - including the alternating
+  loop, which won't actually stop just by turning the TV off, since the
+  script keeps running in the background otherwise.
+sequence:
+  - action: script.turn_off
+    target:
+      entity_id: script.start_studio_cameras_alternating_big_tv   # VERIFY this matches the alternating script's actual entity_id once created
+  - action: media_player.turn_off
+    target:
+      entity_id: media_player.big_tv
+mode: single

@@ -194,7 +194,7 @@ onMounted(async () => {
     loadPriorityAndTodos(),
     loadMine(),
     loadUnassigned(),
-    // Fleet departures are an admin-only headline (§ per NOTES.md) — skip
+    // Rental departures are an admin-only headline (§ per NOTES.md) — skip
     // the request entirely for everyone else.
     auth.isAdmin ? api.get('/rentals/departing', { within_days: 7 }).then((r) => { departing.value = r; }) : null,
   ]);
@@ -220,11 +220,11 @@ onMounted(async () => {
         v-if="auth.isAdmin && departing.length" class="card"
         style="margin-bottom: 24px; border-color: var(--amber)"
       >
-        <h2>Fleet departing soon</h2>
+        <h2>Rentals departing soon</h2>
         <ul class="timeline">
           <li v-for="r in departing" :key="r.id">
             <strong>
-              {{ r.instrument_family }}<template v-if="r.instrument_model"> {{ r.instrument_model }}</template>
+              <template v-if="r.instrument_nickname">{{ r.instrument_nickname }} · </template>{{ r.instrument_family }}<template v-if="r.instrument_model"> {{ r.instrument_model }}</template>
             </strong>
             <span :class="['pill', daysUntil(r.start_date) <= 1 ? 'red' : 'amber']" style="margin-left: 8px">
               {{ departureLabel(r.start_date) }}

@@ -1,0 +1,28 @@
+alias: Start Studio Cameras - Alternating (Big TV)
+description: >
+  Cycles the Big TV between the CR camera and the Live Room camera every 15
+  seconds, indefinitely, until stopped (use "Stop Studio Stream (Big TV)").
+sequence:
+  - action: media_player.turn_on
+    target:
+      entity_id: media_player.big_tv
+  - repeat:
+      while:
+        - condition: template
+          value_template: "true"
+      sequence:
+        - action: media_player.play_media
+          target:
+            entity_id: media_player.big_tv
+          data:
+            media_content_id: media-source://camera/camera.cr_high_resolution_channel
+            media_content_type: application/vnd.apple.mpegurl
+        - delay: "00:00:15"
+        - action: media_player.play_media
+          target:
+            entity_id: media_player.big_tv
+          data:
+            media_content_id: media-source://camera/camera.live_room_high_resolution_channel
+            media_content_type: application/vnd.apple.mpegurl
+        - delay: "00:00:15"
+mode: single

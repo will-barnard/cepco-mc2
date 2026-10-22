@@ -42,6 +42,9 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/instruments', require('./routes/instruments'));
+// Unified inventory (migration 072): shop stock, the old fleet, consignments,
+// photo sets and parts & accessories.
+app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/shopify', require('./routes/shopifyWebhooks'));

@@ -33,9 +33,16 @@ const routes = [
     path: '/customers/xero-duplicates', name: 'xero-duplicates',
     component: () => import('./views/XeroDuplicatesView.vue'), meta: { admin: true },
   },
-  { path: '/fleet', name: 'fleet', component: () => import('./views/FleetView.vue') },
-  { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryRestorationsView.vue') },
+  // Fleet + inventory are one page now (migration 072): the old fleet is
+  // inventory filtered to "not for sale", and the restoration queue is a
+  // tab on the same page. /fleet keeps working for old bookmarks.
+  { path: '/fleet', redirect: { path: '/inventory', query: { status: 'not_for_sale' } } },
+  { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryView.vue') },
   { path: '/inventory/new', name: 'inventory-purchase-new', component: () => import('./views/InventoryPurchaseNewView.vue') },
+  {
+    path: '/inventory/:id(\\d+)', name: 'inventory-item',
+    component: () => import('./views/InventoryDetailView.vue'), props: true,
+  },
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/ceppys', name: 'ceppys', component: () => import('./views/CeppysView.vue') },

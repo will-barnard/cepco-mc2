@@ -35,14 +35,19 @@ const driver = factory();
 
 console.log(`[storage] driver=${driver.name} directUpload=${driver.supportsDirectUpload}`);
 
-/** Build a collision-proof object key for a ticket attachment. */
-function buildKey(ticketId, fileName) {
+/** Collision-proof object key under any prefix (e.g. `instruments/12`). */
+function buildObjectKey(prefix, fileName) {
   const safe = String(fileName || 'photo')
     .replace(/[^\w.\-]+/g, '_')
     .slice(-80);
   const stamp = new Date().toISOString().slice(0, 10);
   const rand = Math.random().toString(36).slice(2, 10);
-  return `tickets/${ticketId}/${stamp}-${rand}-${safe}`;
+  return `${prefix}/${stamp}-${rand}-${safe}`;
 }
 
-module.exports = { ...driver, buildKey };
+/** Build a collision-proof object key for a ticket attachment. */
+function buildKey(ticketId, fileName) {
+  return buildObjectKey(`tickets/${ticketId}`, fileName);
+}
+
+module.exports = { ...driver, buildKey, buildObjectKey };

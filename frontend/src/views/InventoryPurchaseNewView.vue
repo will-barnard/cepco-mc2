@@ -13,7 +13,7 @@ const refData = useRefData();
 const shopToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
 
 const instrument = ref({
-  family: 'rhodes', model: '', year: '', serial_no: '', identifying_notes: '',
+  family: 'rhodes', nickname: '', model: '', year: '', serial_no: '', identifying_notes: '',
 });
 const seller = ref({
   name: '', email: '', phone: '', address: '',
@@ -68,8 +68,8 @@ async function submit() {
   <div class="page" style="max-width: 780px">
     <div class="page-head"><h1>Add instrument purchase</h1></div>
     <p class="muted small" style="margin-top: -12px; margin-bottom: 20px">
-      Records the instrument and what was paid for it, then drops it into the
-      restoration queue as a new ticket.
+      Records the instrument and what was paid for it, adds it to inventory
+      (for sale), and drops it into the restoration queue as a new ticket.
     </p>
 
     <form class="card" @submit.prevent="submit">
@@ -81,6 +81,10 @@ async function submit() {
           <select v-model="instrument.family" required>
             <option v-for="f in refData.families" :key="f" :value="f">{{ f }}</option>
           </select>
+        </div>
+        <div class="field">
+          <label>Name</label>
+          <input v-model="instrument.nickname" placeholder="Shop nickname, e.g. Blitzen" />
         </div>
         <div class="field">
           <label>Model</label>

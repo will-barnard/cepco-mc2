@@ -164,11 +164,17 @@ router.get('/', asyncHandler(async (req, res) => {
   const params = [];
   if (req.query.family) { params.push(req.query.family); clauses.push(`i.family = $${params.length}`); }
   if (req.query.customer_id) { params.push(req.query.customer_id); clauses.push(`i.customer_id = $${params.length}`); }
-  if (req.query.fleet === 'true') clauses.push('i.is_fleet = TRUE');
-  if (req.query.fleet === 'false') clauses.push('i.is_fleet = FALSE');
+  // inventory=true: everything the shop holds (owned stock + consignment),
+  // excluding what's already sold — the instrument pickers for a ticket with
+  // no customer and the rental calendar both want "what's in the building".
+  // The full inventory list with its own filters is routes/inventory.js.
+  if (req.query.inventory === 'true') {
+    clauses.push("i.ownership <> 'customer' AND i.sale_status <> 'sold'");
+  }
   if (req.query.q) {
     params.push(`%${req.query.q}%`);
-    clauses.push(`(i.model ILIKE $${params.length} OR i.identifying_notes ILIKE $${params.length})`);
+    clauses.push(`(i.model ILIKE $${params.length} OR i.identifying_notes ILIKE $${params.length}
+                   OR i.nickname ILIKE $${params.length} OR i.serial_no ILIKE $${params.length})`);
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
@@ -205,11 +211,13 @@ router.post('/', asyncHandler(async (req, res) => {
     throw badRequest(`family must be one of: ${FAMILIES.join(', ')}`);
   }
   const { rows } = await query(
+    // Customer instruments only — shop stock and consignments are created
+    // through POST /api/inventory, which owns ownership/sale_status.
     `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                              customer_id, is_fleet, fleet_last_qc, nickname)
-     VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,FALSE),$8,$9) RETURNING *`,
+                              customer_id, nickname)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
     [b.family, b.model || null, b.year || null, b.serial_no || null,
-      b.identifying_notes || null, b.customer_id || null, b.is_fleet, b.fleet_last_qc || null,
+      b.identifying_notes || null, b.customer_id || null,
       // N1: only the New Ticket page's "add a new instrument instead" form
       // sends this today — see composeTicketTitle in routes/tickets.js.
       b.nickname || null],
@@ -232,22 +240,18 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { rows } = await query(
     `UPDATE instruments SET
        family = COALESCE($2, family), model = COALESCE($3, model),
-       year = CASE WHEN $16::boolean THEN $4 ELSE year END,
-       serial_no = CASE WHEN $17::boolean THEN $5 ELSE serial_no END,
+       year = CASE WHEN $14::boolean THEN $4 ELSE year END,
+       serial_no = CASE WHEN $15::boolean THEN $5 ELSE serial_no END,
        identifying_notes = COALESCE($6, identifying_notes),
        customer_id = CASE WHEN $7::boolean THEN $8 ELSE customer_id END,
-       is_fleet = COALESCE($9, is_fleet),
-       fleet_last_qc = COALESCE($10, fleet_last_qc),
-       nickname = CASE WHEN $18::boolean THEN $11 ELSE nickname END,
-       last_qc_at = CASE WHEN $12::boolean THEN $13 ELSE last_qc_at END,
-       qc_interval_months = CASE WHEN $14::boolean THEN $15 ELSE qc_interval_months END
+       nickname = CASE WHEN $16::boolean THEN $9 ELSE nickname END,
+       last_qc_at = CASE WHEN $10::boolean THEN $11 ELSE last_qc_at END,
+       qc_interval_months = CASE WHEN $12::boolean THEN $13 ELSE qc_interval_months END
      WHERE id = $1 RETURNING *`,
     [req.params.id, b.family || null, b.model ? String(b.model).trim() : null,
       b.year || null, b.serial_no ? String(b.serial_no).trim() : null,
       b.identifying_notes === undefined ? null : b.identifying_notes,
       b.customer_id !== undefined, b.customer_id || null,
-      b.is_fleet === undefined ? null : b.is_fleet,
-      b.fleet_last_qc === undefined ? null : b.fleet_last_qc,
       b.nickname ? String(b.nickname).trim() : null,
       b.last_qc_at !== undefined, b.last_qc_at || null,
       b.qc_interval_months !== undefined, b.qc_interval_months || null,

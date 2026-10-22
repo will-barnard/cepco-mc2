@@ -33,6 +33,9 @@ const cursor = ref({ year: todayParts.getFullYear(), month: todayParts.getMonth(
 
 const rentals = ref([]);
 const instruments = ref([]);
+const rentalFleet = computed(() => instruments.value.filter((i) => i.sale_status === 'not_for_sale'));
+const otherInventory = computed(() => instruments.value.filter((i) => i.sale_status !== 'not_for_sale'));
+const instrumentLabel = (i) => [i.nickname, i.model || i.family].filter(Boolean).join(' — ');
 const loading = ref(true);
 const error = ref('');
 
@@ -150,7 +153,9 @@ async function cancelRental(entry) {
 }
 
 onMounted(async () => {
-  instruments.value = await api.get('/instruments', { fleet: 'true' });
+  // Anything the shop holds can go out on rental; the not-for-sale pieces
+  // (the old "fleet") are listed first since they're the usual ones.
+  instruments.value = await api.get('/instruments', { inventory: 'true' });
   await load();
 });
 </script>
@@ -161,11 +166,13 @@ onMounted(async () => {
       <div>
         <h1 style="margin-bottom: 4px">Rental calendar</h1>
         <p class="muted small" style="margin: 0">
-          When fleet instruments are out. Click an entry to cancel that rental.
+          When shop instruments are out. Click an entry to cancel that rental.
         </p>
       </div>
       <div class="row nowrap">
-        <RouterLink :to="{ name: 'fleet' }" class="btn small">Back to fleet</RouterLink>
+        <RouterLink :to="{ name: 'inventory', query: { status: 'not_for_sale' } }" class="btn small">
+          Back to inventory
+        </RouterLink>
         <button class="primary small" type="button" @click="showForm = !showForm">
           {{ showForm ? 'Cancel' : '+ Schedule rental' }}
         </button>
@@ -180,10 +187,13 @@ onMounted(async () => {
         <div class="field">
           <label>Instrument *</label>
           <select v-model="form.instrument_id" required>
-            <option value="" disabled>Select a fleet instrument</option>
-            <option v-for="i in instruments" :key="i.id" :value="i.id">
-              {{ i.family }} — {{ i.model || 'no model' }}
-            </option>
+            <option value="" disabled>Select an instrument</option>
+            <optgroup label="Floor / rental (not for sale)">
+              <option v-for="i in rentalFleet" :key="i.id" :value="i.id">{{ instrumentLabel(i) }}</option>
+            </optgroup>
+            <optgroup label="Other inventory">
+              <option v-for="i in otherInventory" :key="i.id" :value="i.id">{{ instrumentLabel(i) }}</option>
+            </optgroup>
           </select>
         </div>
         <div class="field">

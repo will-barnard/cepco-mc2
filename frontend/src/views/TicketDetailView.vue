@@ -134,15 +134,15 @@ const editingInstrument = ref(false);
 const instrumentOptions = ref([]);
 const loadingInstrumentOptions = ref(false);
 // Scoped to the ticket's current customer, same as the instrument dropdown
-// on NewTicketForm.vue -- or to the fleet when there's no customer, since
-// that's the only other place a ticket's instrument comes from.
+// on NewTicketForm.vue -- or to shop inventory when there's no customer,
+// since that's the only other place a ticket's instrument comes from.
 async function startEditInstrument() {
   editingInstrument.value = true;
   loadingInstrumentOptions.value = true;
   try {
     instrumentOptions.value = ticket.value.customer_id
       ? await api.get('/instruments', { customer_id: ticket.value.customer_id })
-      : await api.get('/instruments', { fleet: 'true' });
+      : await api.get('/instruments', { inventory: 'true' });
   } finally {
     loadingInstrumentOptions.value = false;
   }
@@ -822,7 +822,7 @@ const showProgressUpdate = computed(() => (
                 </div>
                 <span v-else-if="editingCustomer" class="muted">Choose a customer below</span>
                 <span v-else class="muted">
-                  {{ ticket.instrument_is_fleet ? 'CEPCo fleet (internal)' : 'None' }}
+                  {{ ticket.instrument_in_inventory ? 'CEPCo inventory (internal)' : 'None' }}
                 </span>
               </div>
               <button type="button" class="detail-action" @click="toggleEditCustomer">
@@ -831,7 +831,7 @@ const showProgressUpdate = computed(() => (
               <div v-if="editingCustomer" class="detail-extra">
                 <CustomerSearchSelect
                   v-model="customerEditValue"
-                  placeholder="Search customers (leave blank for internal / fleet)…"
+                  placeholder="Search customers (leave blank for internal / inventory)…"
                 />
                 <button class="small primary" style="margin-top: 6px" @click="saveCustomer">
                   Save
@@ -844,6 +844,11 @@ const showProgressUpdate = computed(() => (
               <div class="detail-value">
                 <span v-if="ticket.instrument_family">
                   {{ refData.familyLabel(ticket.instrument_family) }} · {{ ticket.instrument_model }}
+                  <RouterLink
+                    v-if="ticket.instrument_in_inventory"
+                    :to="{ name: 'inventory-item', params: { id: ticket.instrument_id } }" class="small"
+                    style="margin-left: 6px"
+                  >Inventory page →</RouterLink>
                 </span>
                 <span v-else class="muted">None</span>
               </div>
@@ -862,7 +867,7 @@ const showProgressUpdate = computed(() => (
                   </option>
                 </select>
                 <p v-if="!ticket.customer_id" class="muted small" style="margin: 4px 0 0">
-                  Showing CEPCo fleet instruments — this ticket has no customer.
+                  Showing CEPCo inventory — this ticket has no customer.
                 </p>
 
                 <div v-if="ticket.customer_id" style="margin-top: 8px">

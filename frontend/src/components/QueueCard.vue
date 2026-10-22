@@ -64,7 +64,7 @@ const otherStatus = computed(() => (
 ));
 
 const customer = computed(
-  () => props.ticket.customer_name || (props.ticket.instrument_is_fleet ? 'CEPCo fleet' : ''),
+  () => props.ticket.customer_name || (props.ticket.instrument_in_inventory ? 'CEPCo inventory' : ''),
 );
 // Only strip a real customer name — "CEPCo fleet" is never in a title.
 const rest = computed(() => (props.showCustomer

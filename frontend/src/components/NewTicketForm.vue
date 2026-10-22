@@ -779,7 +779,7 @@ async function submit() {
         <label>Customer</label>
         <CustomerSearchSelect
           v-model="form.customer_id" :disabled="newCustomer.enabled"
-          placeholder="Search customers (leave blank for internal / fleet)…"
+          placeholder="Search customers (leave blank for internal / inventory)…"
           @change="onCustomerChange"
         />
       </div>

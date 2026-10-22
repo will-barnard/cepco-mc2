@@ -70,7 +70,9 @@ const TICKET_SELECT = `
          c.xero_contact_id AS customer_xero_contact_id,
          i.family AS instrument_family,
          i.model  AS instrument_model,
-         i.is_fleet AS instrument_is_fleet,
+         -- Shop-held (inventory or consignment) instrument — the queue shows
+         -- "CEPCo inventory" in place of a customer name for these.
+         (i.ownership <> 'customer') AS instrument_in_inventory,
          contact.name AS shop_contact_name,
          cat.label  AS category_label,
          st.label   AS status_label,
@@ -195,7 +197,7 @@ router.get('/', asyncHandler(async (req, res) => {
       )`);
     }
   }
-  if (req.query.fleet === 'true') clauses.push('i.is_fleet = TRUE');
+  if (req.query.inventory === 'true') clauses.push("i.ownership <> 'customer'");
   // Queue page's "Fast Track" quick filter (migration 063). Only the TRUE
   // side is a filter — there's no "show me the non-fast-track ones" view.
   if (req.query.fast_track === 'true') clauses.push('t.fast_track = TRUE');

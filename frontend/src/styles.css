@@ -688,3 +688,12 @@ tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
   margin-left: 6px; background: rgba(212, 129, 63, 0.15); color: var(--accent);
   font-weight: 600; vertical-align: middle;
 }
+
+/* --- inventory condition grades (inventory.js's gradeClass) ---------------
+   Free-text grades coloured by their leading word, so a column of
+   EX/VG/G reads at a glance the way the Inventory Log sheet does. */
+.grade-mint { color: var(--green); }
+.grade-ex   { color: var(--teal); }
+.grade-vg   { color: var(--lime); }
+.grade-g    { color: var(--amber); }
+.grade-poor { color: var(--red); }

@@ -4060,6 +4060,70 @@ Not done: a per-round "reopen" (Reset QC reopens all rounds), and no log of
 who switched a checklist. Files: `database/migrations/071_qc_checklist_override.sql`,
 `routes/qc.js`, `routes/tickets.js`, `components/TicketQc.vue`.
 
+### 2.99 Fleet + inventory merged into one Inventory (migration 072)
+
+Shop feedback: "inventory" vs "fleet" was confusing. Now there's one thing —
+**Inventory** — and the old fleet is just inventory that's *not for sale*.
+
+Model (`instruments`, migration 072):
+- `is_fleet` and `fleet_last_qc` are gone. In their place `ownership`
+  (`customer` | `shop` | `consignment`) and `sale_status` (`available` |
+  `on_hold` | `not_for_sale` | `sold`, NULL for customer instruments — CHECK
+  enforced). "Is this inventory?" = `ownership <> 'customer'`.
+- Backfill: old fleet rows -> shop / not_for_sale / "Showroom/Rental", with
+  the old free-text Last QC + showroom notes moved into `qc_notes`. Rows that
+  came in through "Add instrument purchase" (which wrongly set `is_fleet`) ->
+  shop / available. Bug fixed in `routes/purchases.js`: purchases now land
+  as for-sale stock, with the purchase price copied into `cost_paid`.
+- New columns for what the Inventory Log sheets carry: per-family
+  `condition` JSONB (field lists in `services/inventory.js`), asking price +
+  price note, cost paid + note (admin-only in the API), hold-for, NFS reason,
+  on-website, sheet section (`model_group`) and row order (`sort_order`),
+  sale fields (`sold_at`, `sold_price`, `sold_to_name`,
+  `sold_to_customer_id`), consignment rate + `consignor_name` (the consignor
+  record itself is `customer_id`, so it reaches Xero through the normal
+  customer sync).
+- `instrument_events`: who changed status / price / ownership / web listing.
+- `instrument_photo_sets` + `instrument_photos`: named photo batches
+  ("Intake", "Listing", ...), same storage drivers and two upload paths as
+  ticket photos, keys under `instruments/<id>/`. `cover_photo_id` on the
+  instrument (first upload becomes the cover automatically).
+- `inventory_parts`: counted shelf stock (cases, rails, preamps, speaker
+  sets, music racks). Not the same as Parts / Supplies (`parts_orders`).
+
+API: `routes/inventory.js` (`/api/inventory`, `/meta`, `/parts`,
+`/photo-sets/...`, `/photos/...`; header comment lists every route).
+`GET /instruments?fleet=true` is replaced by `?inventory=true` (shop-held,
+not sold); tickets expose `instrument_in_inventory` instead of
+`instrument_is_fleet`. A photo set downloads as a .zip
+(`services/zipStream.js` — stored entries, no new dependency).
+
+UI: `InventoryView.vue` (tabs: Instruments / Parts & Accessories /
+Restoration queue; family chips, status filter, search, CSV download — all in
+the URL), `InventoryDetailView.vue` (one form + sticky Save bar; photos,
+tickets, rentals, QC cycle, history), `InstrumentPhotoSets.vue`,
+`InventoryParts.vue`. Inventory moved into the main nav; `/fleet` redirects
+to Inventory → Not for sale. FleetView.vue and InventoryRestorationsView.vue
+are no longer routed (delete them). The QC sweep now covers every
+shop-held, unsold piece with a cycle; new tickets are titled "Inventory QC —"
+(existing "Fleet QC —" tickets still count for the de-dupe check).
+
+Import: `npm run import:inventory -- --dry-run` (then without `--dry-run`)
+reads `assets/CEPCo Inventory Log - *.csv`. Matches the old fleet rows to
+their sheet rows by hand-written table (`FLEET_MATCHES`) so tickets, rentals
+and QC cycles stay attached; keeps fleet rows with no sheet counterpart under
+"From Showroom QC sheet"; untangles the Sold sections' drifting buyer/serial
+columns; rows below the Sold header with no buyer but marked on the website
+import as for sale. Consignors are matched to existing customers by exact
+name only — never created (that would push contacts to Xero); the detail page
+has a "create one" link for that. Re-runs upsert by `import_key`, and refuse
+once anyone has edited an imported piece in the app (`--force` to override).
+Everything uncertain is listed in `inventory-import-report.json`.
+
+Not done: Shopify listing sync / auto-mark-sold from an order (planned with
+Gearline), photos on parts & accessories, bulk edit from the list, merging
+duplicate pieces in the UI (delete the extra one instead).
+
 ## 4. Suggested first moves after deploy
 
 
@@ -4068,7 +4132,7 @@ who switched a checklist. Files: `database/migrations/071_qc_checklist_override.
 2. Create the real staff accounts under Settings → Staff accounts.
 3. Run the import: `docker compose exec backend node backend/src/scripts/importCsv.js`
    (add `--dry-run` first to see the report without writing).
-4. Walk `/fleet` and fix any instrument families the classifier got wrong (§2.6).
+4. Walk Inventory → Not for sale and fix any instrument families the classifier got wrong (§2.6).
 5. Map the `shop_contact_raw` initials onto real employees (§2.5).
 6. Get the GCS bucket up (§3) before the shop starts relying on photos.
 7. After the amp/rarity consolidation (§2.40), scan Settings → QC templates

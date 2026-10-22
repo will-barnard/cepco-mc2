@@ -139,13 +139,16 @@ router.get('/:id/url', asyncHandler(async (req, res) => {
 router.get('/file/:key(*)', asyncHandler(async (req, res) => {
   if (!storage.readObject) throw badRequest('This storage driver does not serve files directly');
   const key = decodeURIComponent(req.params.key);
-  // QC photos (qc_attachments, routes/qc.js) are served through this same
-  // proxy — the local driver hands out one URL shape for every stored object —
-  // so look in both tables.
+  // QC photos (qc_attachments, routes/qc.js) and inventory photos
+  // (instrument_photos, routes/inventory.js) are served through this same
+  // proxy — the local driver hands out one URL shape for every stored
+  // object — so look in all three tables.
   const { rows } = await query(
     `SELECT content_type FROM ticket_attachments WHERE storage_key = $1
      UNION ALL
      SELECT content_type FROM qc_attachments WHERE storage_key = $1
+     UNION ALL
+     SELECT content_type FROM instrument_photos WHERE storage_key = $1
      LIMIT 1`,
     [key],
   );

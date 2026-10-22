@@ -178,9 +178,18 @@ async function upsertInstrument({ family, model, customerId, isFleet, lastQc, no
     return -1;
   }
   const { rows } = await query(
-    `INSERT INTO instruments (family, model, customer_id, is_fleet, fleet_last_qc, identifying_notes)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-    [family, trimmedModel || null, customerId || null, !!isFleet, lastQc || null, notes || null],
+    // Post-072 shape: a fleet row is shop-owned / not for sale, and the old
+    // free-text "Last QC" lands in qc_notes (fleet_last_qc no longer exists).
+    // The SHOWROOM QC sheet is superseded by scripts/importInventory.js,
+    // which merges these rows into the inventory log — this path only still
+    // runs for a fresh database built from the original sheets.
+    `INSERT INTO instruments (family, model, customer_id, ownership, sale_status, nfs_reason,
+                              qc_notes, identifying_notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [family, trimmedModel || null, customerId || null,
+      isFleet ? 'shop' : 'customer', isFleet ? 'not_for_sale' : null,
+      isFleet ? 'Showroom/Rental' : null,
+      isFleet && lastQc ? `Last QC: ${lastQc}` : null, notes || null],
   );
   instrumentCache.set(cacheKey, rows[0].id);
   report.created.instruments += 1;
@@ -457,8 +466,13 @@ async function resetImported() {
   // 'supplemental-2026-08-27') is a different provenance and must survive a
   // --reset of the original sheet cutover.
   await query("DELETE FROM tickets WHERE source_sheet LIKE '%.csv'");
-  await query('DELETE FROM instruments WHERE is_fleet = TRUE');
-  await query(`DELETE FROM instruments WHERE id NOT IN (
+  // Old fleet rows only — anything the inventory-log import created or
+  // merged into (import_source set) is a different provenance and stays.
+  await query(`DELETE FROM instruments
+                WHERE ownership <> 'customer' AND import_source IS NULL`);
+  // Customer instruments only: shop inventory (migration 072) mostly has no
+  // tickets at all, and this cleanup must not take it with it.
+  await query(`DELETE FROM instruments WHERE ownership = 'customer' AND id NOT IN (
                  SELECT instrument_id FROM tickets WHERE instrument_id IS NOT NULL)`);
   await query(`DELETE FROM customers WHERE id NOT IN (
                  SELECT customer_id FROM tickets WHERE customer_id IS NOT NULL)
@@ -496,7 +510,14 @@ async function run() {
   await importInstrumentSheet('CEPCo Mission Control - HOHNER + STRINGS.csv', 'hohner_strings');
   await importInstrumentSheet('CEPCo Mission Control - KOMBO.csv', 'kombo');
   await importJobQueue('CEPCo Mission Control - JOB QUEUE.csv');
-  await importShowroomQc('CEPCo Mission Control - SHOWROOM QC.csv');
+  // Once the Inventory Log import has run, the showroom fleet already lives
+  // in inventory (merged or carried over — scripts/importInventory.js);
+  // importing SHOWROOM QC again would duplicate every fleet piece.
+  const { rows: invRows } = await query(
+    "SELECT count(*)::int AS n FROM instruments WHERE import_source IN ('inventory_log', 'showroom_qc')",
+  );
+  if (invRows[0].n > 0) warn('SHOWROOM QC skipped: the inventory-log import has already brought the fleet in');
+  else await importShowroomQc('CEPCo Mission Control - SHOWROOM QC.csv');
   await importPartsOrders('CEPCo Mission Control - PARTS ORDERS.csv');
 
   report.finished_at = new Date().toISOString();
