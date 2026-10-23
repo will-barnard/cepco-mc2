@@ -4124,6 +4124,29 @@ Not done: Shopify listing sync / auto-mark-sold from an order (planned with
 Gearline), photos on parts & accessories, bulk edit from the list, merging
 duplicate pieces in the UI (delete the extra one instead).
 
+### 2.100 Xero: Primary person + phone format
+
+Shop feedback: contacts MC2 created in Xero only had the contact name, and
+phones went into one box unformatted.
+
+- `xeroPayloadFromMc` (services/xeroSync.js) now fills Xero's Primary person
+  First/Last name from the customer name ("Nick Olynciw" -> Nick / Olynciw;
+  everything after the first word is the last name). Only when the name reads
+  as a person (`splitPersonName`: 2-4 words, no digits/&/(/c/o, none of the
+  business words like Studio, Chapel, Music, LLC, The) — a band or venue
+  name leaves it blank, as before. On an update it's only filled when Xero's
+  is blank, so a primary person set by hand in Xero is never overwritten
+  (`pushCustomerToXero` now reads the contact first; the sync uses the
+  contact it already fetched).
+- `formatPhoneForXero`: a US number (10 digits, or 11 with a leading 1) goes
+  up as Area "516" + Number "491-9935" (country code only when the number had
+  a +1; extensions kept as " x12"). Anything else is sent as typed.
+- Existing contacts: Customers page -> "Tidy Xero contacts…" previews, then
+  applies, the same two fixes for contacts already in Xero
+  (`POST /api/xero/tidy-contacts`, `dry_run` for the preview). It
+  reformats Xero's own phone rather than replacing it with MC2's, and stamps
+  xero_synced_at so the next sync doesn't treat it as a Xero-side change.
+
 ## 4. Suggested first moves after deploy
 
 

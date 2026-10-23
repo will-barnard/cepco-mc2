@@ -47,9 +47,16 @@
  * delivery address kept in Xero is left alone. customers.address is now
  * just the flattened display form, kept in step by a DB trigger.
  *
- * Phones are still flattened: Xero's typed phone numbers vs. one
- * free-text customers.phone. A pull joins country/area/number into one
- * string; a push sends the whole thing as a single DEFAULT PhoneNumber.
+ * Phones are still flattened on the MC2 side (one free-text
+ * customers.phone). A pull joins country/area/number into one string. A
+ * push splits a US number into Xero's Area and Number boxes as
+ * "516" / "491-9935" (shop feedback, Oct 2026 — formatPhoneForXero);
+ * anything that isn't a 10-digit US number goes up as typed.
+ *
+ * Primary person: Xero's "Primary person" First/Last name is filled from
+ * the customer's name when it reads as a person (splitPersonName), and
+ * only when Xero's is still blank — a primary person someone set by hand
+ * in Xero (e.g. the contact at a studio) is never overwritten.
  */
 
 const { query } = require('../db');
@@ -120,10 +127,69 @@ function mcFieldsFromXero(xc) {
   };
 }
 
-function xeroPayloadFromMc(customer) {
+/**
+ * Customer phone -> Xero's DEFAULT phone, split into its boxes. A US
+ * number (10 digits, or 11 starting with 1) becomes area code + "491-9935";
+ * an extension ("x12", "ext 12") is kept on the end of the number. Anything
+ * else (international, short, junk) goes into PhoneNumber unchanged.
+ */
+function formatPhoneForXero(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const ext = text.match(/\s*(?:x|ext\.?|extension)\s*(\d+)\s*$/i);
+  const main = ext ? text.slice(0, ext.index) : text;
+  let digits = main.replace(/\D/g, '');
+  let country = '';
+  if (digits.length === 11 && digits.startsWith('1')) { country = '1'; digits = digits.slice(1); }
+  if (digits.length !== 10 || /[a-z]/i.test(main.replace(/^\+/, ''))) {
+    return { PhoneType: 'DEFAULT', PhoneNumber: text.slice(0, 50) };
+  }
+  return {
+    PhoneType: 'DEFAULT',
+    // Only sent when the number itself carried a +1 — an empty value
+    // would blank a country code someone set in Xero.
+    ...(country ? { PhoneCountryCode: country } : {}),
+    PhoneAreaCode: digits.slice(0, 3),
+    PhoneNumber: `${digits.slice(3, 6)}-${digits.slice(6)}${ext ? ` x${ext[1]}` : ''}`,
+  };
+}
+
+// Words that mark a contact name as a business/band/venue rather than a
+// person — "Sure Thing Chapel" must not become First "Sure", Last "Thing
+// Chapel". Deliberately broad: a missed person just leaves Primary person
+// blank (today's behaviour); a wrongly split business looks broken in Xero.
+const BUSINESS_WORDS = /\b(llc|l\.l\.c|inc|co|corp|corporation|company|ltd|limited|group|studios?|music|records|recording|audio|sound|productions?|band|church|chapel|school|academy|university|college|theat(?:er|re)|hall|club|bar|restaurant|cafe|shop|store|services?|rentals?|entertainment|media|foundation|trust|partners|associates|the|and|of)\b/i;
+
+/**
+ * "Nick Olynciw" -> { first: 'Nick', last: 'Olynciw' }; "Robert Jasman Jr."
+ * -> { first: 'Robert', last: 'Jasman Jr.' }. null when the name doesn't
+ * read as one person (a single word, a business, "A & B", "x c/o y",
+ * anything with digits or an @).
+ */
+function splitPersonName(name) {
+  const n = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!n || /[\d@&/()+,]|\bc\/o\b/i.test(n) || BUSINESS_WORDS.test(n)) return null;
+  const parts = n.split(' ');
+  if (parts.length < 2 || parts.length > 4) return null;
+  return { first: parts[0].slice(0, 255), last: parts.slice(1).join(' ').slice(0, 255) };
+}
+
+const hasPrimaryPerson = (xc) => Boolean(xc && (String(xc.FirstName || '').trim() || String(xc.LastName || '').trim()));
+
+/**
+ * @param customer  MC2 customers row
+ * @param existing  the Xero contact being updated, or null when creating —
+ *                  decides whether Primary person may be filled in
+ */
+function xeroPayloadFromMc(customer, existing = null) {
   const payload = { Name: customer.name };
   if (customer.email) payload.EmailAddress = customer.email;
-  if (customer.phone) payload.Phones = [{ PhoneType: 'DEFAULT', PhoneNumber: String(customer.phone).slice(0, 50) }];
+  if (!hasPrimaryPerson(existing)) {
+    const person = splitPersonName(customer.name);
+    if (person) { payload.FirstName = person.first; payload.LastName = person.last; }
+  }
+  const phone = formatPhoneForXero(customer.phone);
+  if (phone) payload.Phones = [phone];
   if (hasAddress(customer)) {
     // Xero's own field limits: 500 chars per address line, 255 for
     // city/region/country, 50 for postal code.
@@ -368,7 +434,7 @@ async function runXeroSync() {
       );
       stats.mc2_updated += 1;
     } else if (action === 'push') {
-      await xero.updateContact(xc.ContactID, xeroPayloadFromMc(mc)); // eslint-disable-line no-await-in-loop
+      await xero.updateContact(xc.ContactID, xeroPayloadFromMc(mc, xc)); // eslint-disable-line no-await-in-loop
       await stampLink(mc.id, xc.ContactID); // eslint-disable-line no-await-in-loop
       stats.xero_updated += 1;
     } else {
@@ -524,7 +590,9 @@ async function fillMissingFieldsFromXero() {
  */
 async function pushCustomerToXero(customer) {
   if (!customer.xero_contact_id) throw new Error('Customer is not linked to Xero');
-  await xero.updateContact(customer.xero_contact_id, xeroPayloadFromMc(customer));
+  // Read it first so a Primary person set by hand in Xero survives the push.
+  const existing = await xero.getContact(customer.xero_contact_id);
+  await xero.updateContact(customer.xero_contact_id, xeroPayloadFromMc(customer, existing));
   await query('UPDATE customers SET xero_synced_at = now() WHERE id = $1', [customer.id]);
 }
 
@@ -547,8 +615,70 @@ async function createCustomerInXero(customer) {
   return created.ContactID;
 }
 
+/**
+ * One-off tidy-up for contacts already in Xero (shop feedback, Oct 2026):
+ *   - Primary person blank and the MC2 name reads as a person -> fill it.
+ *   - Xero's DEFAULT phone is a US number typed into one box -> split it
+ *     into Area / "491-9935". Xero's own number is reformatted, not
+ *     replaced with MC2's, so a phone edited in Xero is never lost.
+ * Only linked customers; touches nothing else on the contact. dryRun
+ * returns the same list without writing.
+ */
+async function tidyXeroContacts({ dryRun = false } = {}) {
+  const [xeroContacts, { rows: customers }] = await Promise.all([
+    xero.listContacts(),
+    query('SELECT id, name, xero_contact_id FROM customers WHERE xero_contact_id IS NOT NULL'),
+  ]);
+  const byId = new Map(xeroContacts.map((xc) => [xc.ContactID, xc]));
+  const changes = [];
+  for (const mc of customers) {
+    const xc = byId.get(mc.xero_contact_id);
+    if (!xc) continue; // eslint-disable-line no-continue
+    const update = { Name: xc.Name };
+    const change = { customer_id: mc.id, name: mc.name };
+
+    if (!hasPrimaryPerson(xc)) {
+      const person = splitPersonName(mc.name);
+      if (person) {
+        update.FirstName = person.first;
+        update.LastName = person.last;
+        change.primary_person = `${person.first} / ${person.last}`;
+      }
+    }
+    const phones = xc.Phones || [];
+    const current = phones.find((p) => p.PhoneType === 'DEFAULT');
+    if (current && current.PhoneNumber && !current.PhoneAreaCode) {
+      const joined = [current.PhoneCountryCode, current.PhoneNumber].filter(Boolean).join(' ');
+      const formatted = formatPhoneForXero(joined);
+      if (formatted && formatted.PhoneAreaCode) {
+        update.Phones = [formatted];
+        change.phone = `${current.PhoneNumber} -> (${formatted.PhoneAreaCode}) ${formatted.PhoneNumber}`;
+      }
+    }
+    if (!change.primary_person && !change.phone) continue; // eslint-disable-line no-continue
+    if (!dryRun) {
+      await xero.updateContact(xc.ContactID, update); // eslint-disable-line no-await-in-loop
+      // Xero's UpdatedDateUTC just moved; stamp the link so the next
+      // regular sync doesn't read this tidy-up as "changed in Xero" and
+      // pull the reformatted phone over MC2's.
+      await query('UPDATE customers SET xero_synced_at = now() WHERE id = $1', [mc.id]); // eslint-disable-line no-await-in-loop
+    }
+    changes.push(change);
+  }
+  return {
+    dry_run: dryRun,
+    contacts_checked: customers.length,
+    primary_people_filled: changes.filter((c) => c.primary_person).length,
+    phones_formatted: changes.filter((c) => c.phone).length,
+    changes,
+  };
+}
+
 module.exports = {
   ADDRESS_FIELDS,
+  formatPhoneForXero,
+  splitPersonName,
+  tidyXeroContacts,
   runXeroSync,
   phoneFromXero,
   addressFromXero,

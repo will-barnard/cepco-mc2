@@ -145,6 +145,12 @@ async function createContact(payload) {
   return contacts[0];
 }
 
+/** One contact in full (Phones, FirstName/LastName, ...). */
+async function getContact(contactId) {
+  const { Contacts: contacts = [] } = await apiRequest(`/Contacts/${contactId}`);
+  return contacts[0] || null;
+}
+
 async function updateContact(contactId, payload) {
   const { Contacts: contacts = [] } = await apiRequest(`/Contacts/${contactId}`, {
     method: 'POST',
@@ -175,5 +181,5 @@ async function addContactNote(contactId, details) {
 }
 
 module.exports = {
-  listContacts, createContact, updateContact, getContactHistory, addContactNote,
+  listContacts, getContact, createContact, updateContact, getContactHistory, addContactNote,
 };

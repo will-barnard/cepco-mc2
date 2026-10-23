@@ -15,7 +15,7 @@ const express = require('express');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
 const config = require('../config');
-const { runXeroSync, fillMissingFieldsFromXero } = require('../services/xeroSync');
+const { runXeroSync, fillMissingFieldsFromXero, tidyXeroContacts } = require('../services/xeroSync');
 const {
   computeBackfillCandidates, linkCustomerToXero, dismissMatch,
 } = require('../services/xeroBackfill');
@@ -55,6 +55,18 @@ router.post('/fill-missing-fields', requireAdmin, asyncHandler(async (req, res) 
   try {
     const result = await fillMissingFieldsFromXero();
     res.json(result);
+  } catch (err) {
+    throw badRequest(err.message);
+  }
+}));
+
+// One-time tidy-up of contacts already in Xero: fill a blank Primary person
+// from the customer name, and split one-box US phone numbers into Area /
+// "491-9935". dry_run: true previews the list without writing — the
+// Customers page always previews first. See tidyXeroContacts().
+router.post('/tidy-contacts', requireAdmin, asyncHandler(async (req, res) => {
+  try {
+    res.json(await tidyXeroContacts({ dryRun: req.body?.dry_run === true }));
   } catch (err) {
     throw badRequest(err.message);
   }

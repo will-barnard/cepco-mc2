@@ -173,6 +173,27 @@ async function fillXeroFields() {
   }
 }
 
+// Tidy-up of contacts already in Xero (POST /xero/tidy-contacts): Primary
+// person from the customer name when Xero's is blank, and US phones split
+// into Area / "491-9935". Always previewed first; Apply writes exactly
+// what the preview listed.
+const tidyingXero = ref(false);
+const xeroTidyPreview = ref(null);
+const xeroTidyResult = ref(null);
+
+async function tidyXeroContacts(apply) {
+  error.value = '';
+  tidyingXero.value = true;
+  try {
+    const result = await api.post('/xero/tidy-contacts', { dry_run: !apply });
+    if (apply) { xeroTidyResult.value = result; xeroTidyPreview.value = null; } else { xeroTidyPreview.value = result; xeroTidyResult.value = null; }
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    tidyingXero.value = false;
+  }
+}
+
 // --- customer edit, pushes to Xero when linked ------------------------------
 // Inline toggle rather than a separate route/page — same "toggle-shown
 // form" convention this page already uses for "New customer" (showNew),
@@ -392,6 +413,40 @@ const when = (ts) => new Date(ts).toLocaleString();
         Checked {{ xeroFillResult.checked }} linked customer(s) — filled
         {{ xeroFillResult.email_filled }} email(s), {{ xeroFillResult.phone_filled }} phone(s), and
         {{ xeroFillResult.address_filled }} address(es).
+      </p>
+
+      <div class="row" style="margin-top: 12px; align-items: center">
+        <button class="small" :disabled="tidyingXero" @click="tidyXeroContacts(false)">
+          {{ tidyingXero && !xeroTidyPreview ? 'Checking…' : 'Tidy Xero contacts…' }}
+        </button>
+        <span class="muted small">
+          Fills a blank Primary person from the customer's name and formats phones as 516 / 491-9935. Shows you the list first.
+        </span>
+      </div>
+      <div v-if="xeroTidyPreview" class="card tight" style="margin-top: 8px">
+        <p class="small" style="margin: 0 0 6px">
+          {{ xeroTidyPreview.primary_people_filled }} primary person(s) to fill,
+          {{ xeroTidyPreview.phones_formatted }} phone(s) to format
+          (of {{ xeroTidyPreview.contacts_checked }} linked).
+        </p>
+        <ul v-if="xeroTidyPreview.changes.length" class="small" style="max-height: 220px; overflow: auto; margin: 0 0 8px; padding-left: 18px">
+          <li v-for="c in xeroTidyPreview.changes" :key="c.customer_id">
+            <strong>{{ c.name }}</strong>
+            <span v-if="c.primary_person"> · person: {{ c.primary_person }}</span>
+            <span v-if="c.phone" class="muted"> · phone: {{ c.phone }}</span>
+          </li>
+        </ul>
+        <div class="row">
+          <button
+            class="small primary" :disabled="tidyingXero || !xeroTidyPreview.changes.length"
+            @click="tidyXeroContacts(true)"
+          >{{ tidyingXero ? 'Updating Xero…' : `Apply ${xeroTidyPreview.changes.length} change(s) in Xero` }}</button>
+          <button class="small" :disabled="tidyingXero" @click="xeroTidyPreview = null">Cancel</button>
+        </div>
+      </div>
+      <p v-if="xeroTidyResult" class="small" style="color: #4ade80; margin: 8px 0 0">
+        Updated Xero — filled {{ xeroTidyResult.primary_people_filled }} primary person(s), formatted
+        {{ xeroTidyResult.phones_formatted }} phone(s).
       </p>
     </div>
 
