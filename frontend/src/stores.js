@@ -33,7 +33,15 @@ export const useAuth = defineStore('auth', {
     async switchTo(employeeId, pin) {
       const { user } = await api.post('/auth/switch', { employee_id: employeeId, pin });
       this.user = user;
-      return user;
+      // /auth/switch only returns the basics; re-read /me so per-person
+      // settings (dashboard Parts card, show-all default) follow the switch.
+      await this.load();
+      return this.user;
+    },
+    /** Save one of your own viewing preferences (PATCH /auth/preferences). */
+    async setPreference(field, value) {
+      const saved = await api.patch('/auth/preferences', { [field]: value });
+      this.user = { ...this.user, ...saved };
     },
     /** Set/replace the 4-digit PIN used to switch *into* this account from kiosk mode. */
     async setPin(currentPassword, pin) {

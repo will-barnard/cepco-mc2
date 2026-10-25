@@ -16,6 +16,21 @@ const error = ref('');
 const notice = ref('');
 const busy = ref(false);
 
+// Dashboard default (migration 073) — saves on click.
+const prefError = ref('');
+const prefSaving = ref(false);
+async function setShowAll(value) {
+  prefError.value = '';
+  prefSaving.value = true;
+  try {
+    await auth.setPreference('dashboard_show_all_tickets', value);
+  } catch (err) {
+    prefError.value = err.message;
+  } finally {
+    prefSaving.value = false;
+  }
+}
+
 // Switch-in PIN (kiosk mode) — only admins are ever asked for this, since
 // junior/senior staff switch in with no credential on a shared computer.
 const pinCurrentPassword = ref('');
@@ -95,6 +110,29 @@ async function submit() {
         {{ auth.user.name }} &lt;{{ auth.user.email }}&gt;
         <span class="tag" style="margin-left: 6px">{{ auth.user.role }}</span>
       </p>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px">
+      <h2>Dashboard</h2>
+      <p class="muted small" style="margin-top: 0">
+        What the In-Progress Tickets card shows when you open the dashboard. The button on
+        the card still switches between the two for that visit.
+      </p>
+      <label class="checkbox" style="margin-bottom: 6px">
+        <input
+          type="radio" name="dash-default" :checked="!auth.user.dashboard_show_all_tickets"
+          :disabled="prefSaving" @change="setShowAll(false)"
+        />
+        <span>In Progress &amp; QC only</span>
+      </label>
+      <label class="checkbox">
+        <input
+          type="radio" name="dash-default" :checked="!!auth.user.dashboard_show_all_tickets"
+          :disabled="prefSaving" @change="setShowAll(true)"
+        />
+        <span>Everything assigned to me</span>
+      </label>
+      <div v-if="prefError" class="alert" style="margin-top: 10px">{{ prefError }}</div>
     </div>
 
     <div class="card">

@@ -4147,6 +4147,18 @@ phones went into one box unformatted.
   reformats Xero's own phone rather than replacing it with MC2's, and stamps
   xero_synced_at so the next sync doesn't treat it as a Xero-side change.
 
+### 2.101 Dashboard: per-person default for "Show all" (migration 073)
+
+Account page -> Dashboard: choose whether the In-Progress Tickets card opens
+on "In Progress & QC only" (the old behaviour, still the default) or
+"Everything assigned to me". Stored on `employees.dashboard_show_all_tickets`,
+saved through a new self-service `PATCH /api/auth/preferences` (whitelisted
+fields only). The button on the card still flips it for that visit.
+
+Also fixed while here: after a kiosk "Switch user", the store now re-reads
+`/auth/me` — `/auth/switch` only returns the basics, so per-person settings
+(this one, and the dashboard Parts card) didn't follow the switch.
+
 ## 4. Suggested first moves after deploy
 
 

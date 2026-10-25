@@ -153,7 +153,10 @@ async function toggleTodoTask(task) {
 // of Settings -> Ticket statuses, since unlike the shop-wide overview this
 // replaced, a paginated per-tech list can't cheaply concatenate two
 // separately-fetched, independently-paginated result sets.
-const mineShowAll = ref(false);
+// Starting point comes from the person's own Account setting
+// (employees.dashboard_show_all_tickets, migration 073); the button on the
+// card still flips it for this visit without changing the setting.
+const mineShowAll = ref(!!auth.user?.dashboard_show_all_tickets);
 
 async function loadMine() {
   const rows = await api.get('/tickets', {

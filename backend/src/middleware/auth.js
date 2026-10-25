@@ -40,7 +40,10 @@ async function requireAuth(req, res, next) {
     // therefore GET /auth/me) so DashboardView.vue knows, for the signed-in
     // user specifically, whether to render its Parts/Supplies card -- same
     // reasoning as role/active already being here rather than a separate call.
-    'SELECT id, name, email, role, initials, active, show_parts_on_dashboard FROM employees WHERE id = $1',
+    // dashboard_show_all_tickets (migration 073) rides along the same way.
+    `SELECT id, name, email, role, initials, active, show_parts_on_dashboard,
+            dashboard_show_all_tickets
+       FROM employees WHERE id = $1`,
     [payload.sub],
   );
   const employee = rows[0];

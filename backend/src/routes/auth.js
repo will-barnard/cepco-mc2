@@ -123,6 +123,26 @@ router.post('/switch', requireAuth, asyncHandler(async (req, res) => {
   });
 }));
 
+// Your own viewing preferences (Account page). Whitelisted fields only —
+// nothing here that an admin manages for you (role, active, the dashboard
+// Parts card) can be changed through this.
+const PREFERENCE_FIELDS = ['dashboard_show_all_tickets'];
+
+router.patch('/preferences', requireAuth, asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const fields = PREFERENCE_FIELDS.filter((f) => b[f] !== undefined);
+  if (!fields.length) throw badRequest(`Send one of: ${PREFERENCE_FIELDS.join(', ')}`);
+  for (const f of fields) {
+    if (typeof b[f] !== 'boolean') throw badRequest(`${f} must be true or false`);
+  }
+  const { rows } = await query(
+    `UPDATE employees SET ${fields.map((f, i) => `${f} = $${i + 2}`).join(', ')}
+      WHERE id = $1 RETURNING ${PREFERENCE_FIELDS.join(', ')}`,
+    [req.user.id, ...fields.map((f) => b[f])],
+  );
+  res.json(rows[0]);
+}));
+
 router.post('/change-password', requireAuth, asyncHandler(async (req, res) => {
   const { current_password: currentPassword, new_password: newPassword } = req.body || {};
   if (!currentPassword || !newPassword) throw badRequest('Current and new password are required');
