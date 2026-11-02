@@ -1,0 +1,477 @@
+{
+  "started_at": "2026-11-02T21:07:14.316Z",
+  "source_dir": "/tmp/imp/assets",
+  "dry_run": true,
+  "counts": {
+    "instruments_created": 0,
+    "instruments_updated": 367,
+    "fleet_rows_merged": 0,
+    "purchases_merged": 0,
+    "parts_created": 0,
+    "parts_updated": 57,
+    "sold": 138,
+    "consignments": 24
+  },
+  "sheets": {
+    "rhodes": {
+      "rows": 158,
+      "instruments": 66,
+      "sold": 56,
+      "parts": 36,
+      "skipped_blank": 3
+    },
+    "wurlitzer": {
+      "rows": 108,
+      "instruments": 47,
+      "sold": 46,
+      "parts": 13,
+      "skipped_blank": 1
+    },
+    "hohner": {
+      "rows": 50,
+      "instruments": 22,
+      "sold": 20,
+      "parts": 8,
+      "skipped_blank": 0
+    },
+    "combo": {
+      "rows": 87,
+      "instruments": 71,
+      "sold": 16,
+      "parts": 0,
+      "skipped_blank": 5
+    },
+    "other": {
+      "rows": 23,
+      "instruments": 23,
+      "sold": 0,
+      "parts": 0,
+      "skipped_blank": 0
+    }
+  },
+  "fleet_merged": [],
+  "fleet_kept_unmatched": [],
+  "fleet_possible_matches": [],
+  "fleet_match_target_missing": [],
+  "purchases_unmatched": [],
+  "listed_below_sold_header": [
+    {
+      "sheet": "rhodes",
+      "row": 126,
+      "name": "N'ardo",
+      "model": "Suitcase 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 136,
+      "name": "Djaan",
+      "model": "Stage 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 149,
+      "name": "Iron Man MKII",
+      "model": "Suitcase 88"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 166,
+      "name": "Miro",
+      "model": "Stage 73 - MK II"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 167,
+      "name": "Flyer",
+      "model": "Stage 73"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 112,
+      "name": "Woody",
+      "model": "200"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 114,
+      "name": "Banger 1",
+      "model": "206"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 116,
+      "name": "Library",
+      "model": "206A"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 117,
+      "name": "Aidy",
+      "model": "200"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 118,
+      "name": "Patricia",
+      "model": "200"
+    },
+    {
+      "sheet": "hohner",
+      "row": 51,
+      "name": "P-Neu",
+      "model": "Clavinet D6"
+    },
+    {
+      "sheet": "hohner",
+      "row": 53,
+      "name": "Porto",
+      "model": "Whammy D6"
+    },
+    {
+      "sheet": "hohner",
+      "row": 54,
+      "name": "Rothie",
+      "model": "Clavinet C"
+    },
+    {
+      "sheet": "combo",
+      "row": 100,
+      "name": "Barrelhouse RMI 368X",
+      "model": "RMI 368X"
+    }
+  ],
+  "sold_buyer_unknown": [
+    {
+      "sheet": "rhodes",
+      "row": 107,
+      "name": "Paul 73",
+      "model": "Plastic 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 108,
+      "name": "Ramsey/Smooth",
+      "model": "Suitcase 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 109,
+      "name": "Jesse Gordon",
+      "model": "Suitcase 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 111,
+      "name": "Rogers",
+      "model": "Piano Bass"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 112,
+      "name": "Dynamic",
+      "model": "Stage 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 113,
+      "name": "BNCO",
+      "model": "Suitcase 88"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 114,
+      "name": "Big Star/no regrets",
+      "model": "Suitcase 88"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 115,
+      "name": "Zalwaukee",
+      "model": "Stage 88"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 116,
+      "name": "Goldie",
+      "model": "Suitcase 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 117,
+      "name": "Mayan",
+      "model": "Stage 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 119,
+      "name": "Hi Jax 1974 stage 73 case",
+      "model": ""
+    },
+    {
+      "sheet": "rhodes",
+      "row": 127,
+      "name": "Dynamic (Aakash Consign)",
+      "model": "Stage 73"
+    },
+    {
+      "sheet": "rhodes",
+      "row": 128,
+      "name": "Peterson Pre-amp/Custom Supply",
+      "model": ""
+    },
+    {
+      "sheet": "rhodes",
+      "row": 161,
+      "name": "L Rollins",
+      "model": "Suitcase 73"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 68,
+      "name": "Bama 2A",
+      "model": "206A"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 69,
+      "name": "Glacier",
+      "model": "206"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 74,
+      "name": "Bama 2",
+      "model": "206"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 75,
+      "name": "Styx",
+      "model": "200"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 77,
+      "name": "Todd 200a",
+      "model": "200A"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 108,
+      "name": "Lee Law",
+      "model": "145"
+    },
+    {
+      "sheet": "wurlitzer",
+      "row": 109,
+      "name": "Stanley V",
+      "model": "214A"
+    },
+    {
+      "sheet": "hohner",
+      "row": 32,
+      "name": "Lobster",
+      "model": "D6"
+    },
+    {
+      "sheet": "hohner",
+      "row": 35,
+      "name": "Pianet T",
+      "model": "Pianet T"
+    },
+    {
+      "sheet": "hohner",
+      "row": 37,
+      "name": "Indy Case",
+      "model": ""
+    },
+    {
+      "sheet": "combo",
+      "row": 84,
+      "name": "INDY",
+      "model": "Helpinstill 64"
+    },
+    {
+      "sheet": "combo",
+      "row": 85,
+      "name": "Harding",
+      "model": "Helpinstill 64"
+    },
+    {
+      "sheet": "combo",
+      "row": 92,
+      "name": "Earth",
+      "model": "Farfisa Compact Duo"
+    }
+  ],
+  "consignors_linked": [],
+  "consignors_unlinked": [
+    {
+      "name": "Rodney Tapp",
+      "piece": "Rodney",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "David Scott",
+      "piece": "David Scott (Poppy)",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Graham Thompson",
+      "piece": "GT MKII 88 - WRONG LINK",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Sam Fribush",
+      "piece": "\"Fribush\" Jetson",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Aakash",
+      "piece": "Dynamic (Aakash Consign)",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Rick",
+      "piece": "Rick Walnut",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Chris W.",
+      "piece": "Chris W.",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Greg Heaphy",
+      "piece": "Greg H \"Heaphnote\" or GENE",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Barb Wertico",
+      "piece": "Barbarella",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Lisa Rollins",
+      "piece": "L Rollins",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Graham Thompson",
+      "piece": "Graham Thompson \"GT\"",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Lisa Rollins",
+      "piece": "L.R.C",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Bryan Hembree",
+      "piece": "Hemb",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Mark Nagy",
+      "piece": "Consignment: Mark Nagy",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Dave",
+      "piece": "Dave \"Revolution\"",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Stanley V",
+      "piece": "Stanley V",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Steve W",
+      "piece": "Wheaties",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Todd",
+      "piece": "Todd E7",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Kowalski",
+      "piece": "Kowalski",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Lizz Bell",
+      "piece": "Liz B Consignment",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Vijay",
+      "piece": "Vijay",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Brian Gay",
+      "piece": "ConsignTempo",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Alex Atevich",
+      "piece": "Atevich",
+      "reason": "no customer with this name"
+    },
+    {
+      "name": "Ben Ranson",
+      "piece": "Ranson",
+      "reason": "no customer with this name"
+    }
+  ],
+  "consignments_without_consignor": [],
+  "buyers_linked": 0,
+  "possible_duplicates": [
+    {
+      "key": "gary",
+      "rows": [
+        "rhodes: Gary (Stage 88)",
+        "combo: Gary (Farfisa Super Syntaccordion)"
+      ]
+    },
+    {
+      "key": "lithium",
+      "rows": [
+        "rhodes: Lithium (Stage 88)",
+        "combo: Lithium (Farfisa Compact Deluxe)"
+      ]
+    },
+    {
+      "key": "lil pumpkin",
+      "rows": [
+        "wurlitzer: 106P \"lil pumpkin\" (106P)",
+        "wurlitzer: Cepco Lil Pumpkin (?)"
+      ]
+    },
+    {
+      "key": "e orange",
+      "rows": [
+        "wurlitzer: 106P E Orange (106P)",
+        "wurlitzer: 106 E - orange (?)"
+      ]
+    }
+  ],
+  "private_collection_merged": [
+    {
+      "row": 65,
+      "name": "Shop Console Piano w/Visualizer",
+      "merged_into": "CEPCo 215V"
+    },
+    {
+      "row": 66,
+      "name": "Lil Pumpkin",
+      "merged_into": "106P \"lil pumpkin\""
+    }
+  ],
+  "previously_imported_not_in_sheet": [],
+  "warnings": [],
+  "finished_at": "2026-11-02T21:07:14.549Z"
+}
