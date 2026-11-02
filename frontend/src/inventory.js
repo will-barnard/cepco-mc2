@@ -11,6 +11,14 @@ export function formatPrice(value) {
   return Number.isFinite(n) ? money.format(n) : String(value);
 }
 
+// Parts costs (migration 078) need cents — $42.50 x 1.5 shouldn't read "$64".
+const cents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+export function formatCents(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  return Number.isFinite(n) ? cents.format(n) : String(value);
+}
+
 const OWNERSHIP_LABELS = { shop: 'Shop-owned', consignment: 'Consignment', customer: 'Customer' };
 export const ownershipLabel = (o) => OWNERSHIP_LABELS[o] || o;
 

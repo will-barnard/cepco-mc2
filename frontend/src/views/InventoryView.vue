@@ -20,6 +20,7 @@ import api from '../api';
 import { useAuth, useRefData, useSettings } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
+import ReservedParts from '../components/ReservedParts.vue';
 import {
   formatPrice, statusPill, gradeClass, ownershipLabel,
 } from '../inventory';
@@ -33,6 +34,8 @@ const refData = useRefData();
 const TABS = [
   { key: 'instruments', label: 'Instruments' },
   { key: 'parts', label: 'Parts & Accessories' },
+  // Parts set aside for a piece, not installed yet (migration 078).
+  { key: 'reserved', label: 'Reserved parts' },
   { key: 'restorations', label: 'Restoration queue' },
 ];
 const STATUS_OPTIONS = [
@@ -539,6 +542,9 @@ onMounted(async () => {
 
       <!-- Parts & accessories ------------------------------------------- -->
       <InventoryParts v-else-if="tab === 'parts'" :families="meta?.families || []" />
+
+      <!-- Reserved parts -------------------------------------------------- -->
+      <ReservedParts v-else-if="tab === 'reserved'" />
 
       <!-- Restoration queue ---------------------------------------------- -->
       <template v-else>

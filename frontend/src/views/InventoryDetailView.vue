@@ -14,6 +14,7 @@ import api from '../api';
 import { useAuth, useRefData, useSettings } from '../stores';
 import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import InstrumentPhotoSets from '../components/InstrumentPhotoSets.vue';
+import InstrumentPartsUsed from '../components/InstrumentPartsUsed.vue';
 import { xeroContactUrl } from '../xeroLinks';
 import {
   formatPrice, statusPill, gradeClass, ownershipLabel, nextQcDue,
@@ -42,7 +43,7 @@ const EDITABLE = [
   'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
   'sold_at', 'sold_price', 'sold_to_name', 'sold_to_customer_id',
   'qc_notes', 'last_qc_at', 'qc_interval_months',
-  'cost_paid', 'cost_note',
+  'cost_paid', 'cost_note', 'est_hours',
 ];
 const form = ref({});
 const conditionForm = ref({});
@@ -54,7 +55,7 @@ function fillForm(row) {
   const f = {};
   for (const k of EDITABLE) {
     if (k === 'on_website') f[k] = !!row[k];
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate'].includes(k)) f[k] = moneyNorm(row[k]);
+    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
     else if (['last_qc_at', 'sold_at'].includes(k)) f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
     else f[k] = norm(row[k]);
   }
@@ -68,7 +69,7 @@ const original = computed(() => {
   for (const k of EDITABLE) {
     const row = item.value;
     if (k === 'on_website') f[k] = !!row[k];
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate'].includes(k)) f[k] = moneyNorm(row[k]);
+    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
     else if (['last_qc_at', 'sold_at'].includes(k)) f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
     else f[k] = norm(row[k]);
   }
@@ -83,7 +84,7 @@ const changes = computed(() => {
     const was = original.value[k];
     let differs;
     if (k === 'on_website') differs = !!now !== was;
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate'].includes(k)) {
+    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) {
       differs = moneyNorm(String(now).replace(/[$,%]/g, '') || null) !== was;
     } else {
       // CustomerSearchSelect hands back numbers, the form holds strings.
@@ -389,6 +390,23 @@ watch(() => props.id, () => { loading.value = true; load(); });
                 <input v-model="conditionForm[f.key]" :class="gradeClass(conditionForm[f.key])" placeholder="EX, VG, OG…" />
               </div>
             </div>
+          </section>
+
+          <!-- Migration 078. Hours go through the Save bar like every other
+               field; part lines save themselves (InstrumentPartsUsed.vue). -->
+          <section class="card">
+            <h2>Parts &amp; labor</h2>
+            <div class="row hours-row">
+              <div class="field" style="margin-bottom: 0; max-width: 200px">
+                <label>Estimated hours worked</label>
+                <input v-model="form.est_hours" inputmode="decimal" placeholder="0" />
+              </div>
+              <span v-if="item.logged_hours" class="muted small" style="align-self: flex-end; padding-bottom: 10px">
+                {{ Number(item.logged_hours) }} h logged on this piece's tickets
+              </span>
+            </div>
+            <h3 style="margin: 16px 0 8px">Parts</h3>
+            <InstrumentPartsUsed :instrument-id="item.id" :family="item.family" />
           </section>
 
           <section id="photos" class="card">

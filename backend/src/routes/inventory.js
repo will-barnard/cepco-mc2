@@ -12,6 +12,13 @@
  *   GET    /api/inventory/:id                  detail (+ photos, tickets, history)
  *   PATCH  /api/inventory/:id                  edit
  *   PUT    /api/inventory/:id/audit            { audited: bool } (inventory audit)
+ *
+ *   Parts & labor on a piece (instrument_parts, migration 078):
+ *   GET    /api/inventory/:id/parts-used
+ *   POST   /api/inventory/:id/parts-used       typed in, or inventory_part_id
+ *   PATCH  /api/inventory/parts-used/:lineId
+ *   DELETE /api/inventory/parts-used/:lineId   (a trigger returns any stock)
+ *   GET    /api/inventory/reserved-parts       every reserved line (Reserved parts tab)
  *   GET    /api/inventory/audit                audit progress (Settings)
  *
  *   Parts & accessories (counted stock, inventory_parts):
@@ -39,7 +46,7 @@ const multer = require('multer');
 const { query, withTransaction } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
-  asyncHandler, badRequest, notFound, HttpError,
+  asyncHandler, badRequest, notFound, conflict, HttpError,
 } = require('../middleware/errors');
 const storage = require('../storage');
 const config = require('../config');
@@ -145,6 +152,12 @@ const FIELDS = {
     return n;
   },
   cover_photo_id: intOrNull('cover_photo_id'),
+  est_hours: (v) => {
+    if (v === null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 9999) throw badRequest('est_hours must be a number of hours');
+    return Math.round(n * 100) / 100;
+  },
   // admin only — see ADMIN_FIELDS
   cost_paid: money('cost_paid'),
   cost_note: text(500),
@@ -658,6 +671,147 @@ router.get('/audit', asyncHandler(async (req, res) => {
   res.json({ instruments: i, parts: p });
 }));
 
+// ---------------------------------------------------------------------------
+// Parts & labor (instrument_parts, migration 078). Lines save on their own,
+// not through the detail page's Save bar. Picking from Parts & Accessories
+// takes from its shelf count here (refusing if there aren't enough);
+// giving stock back on delete is a DB trigger — see the migration.
+// ---------------------------------------------------------------------------
+const LINE_SELECT = `
+  SELECT l.*, e.name AS created_by_name,
+         ip.name AS stock_name, ip.model AS stock_model, ip.quantity AS stock_quantity
+    FROM instrument_parts l
+    LEFT JOIN employees e ON e.id = l.created_by
+    LEFT JOIN inventory_parts ip ON ip.id = l.inventory_part_id
+`;
+
+function lineQuantity(v, fromStock) {
+  const n = v === undefined || v === null || v === '' ? 1 : Number(v);
+  if (!Number.isFinite(n) || n <= 0) throw badRequest('Quantity must be more than 0');
+  // Shelf counts are whole items; a typed-in line can be "1.5" (feet, etc.).
+  if (fromStock && !Number.isInteger(n)) throw badRequest('Parts from stock are counted in whole items');
+  return Math.round(n * 100) / 100;
+}
+
+/** Take `n` more off a stock row (negative = give back). Returns the amount actually taken. */
+async function takeStock(client, partId, n) {
+  const { rows: [part] } = await client.query(
+    'SELECT id, name, quantity FROM inventory_parts WHERE id = $1 FOR UPDATE', [partId],
+  );
+  if (!part) throw badRequest('That part is no longer in Parts & Accessories');
+  if (part.quantity === null) return 0; // "tons" / "5-10 Available": no count to keep
+  if (n > part.quantity) {
+    throw conflict(`Only ${part.quantity} "${part.name}" on the shelf — fix the count in Parts & Accessories, or type the part in instead`);
+  }
+  await client.query('UPDATE inventory_parts SET quantity = quantity - $2 WHERE id = $1', [partId, n]);
+  return n;
+}
+
+router.get('/reserved-parts', asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    `SELECT l.*, e.name AS created_by_name, ip.name AS stock_name,
+            i.nickname, i.model AS instrument_model, i.family, i.sale_status, i.ownership
+       FROM instrument_parts l
+       JOIN instruments i ON i.id = l.instrument_id
+       LEFT JOIN employees e ON e.id = l.created_by
+       LEFT JOIN inventory_parts ip ON ip.id = l.inventory_part_id
+      WHERE l.reserved
+      ORDER BY i.id, l.reserved_at NULLS LAST, l.id`,
+  );
+  res.json(rows.map((r) => ({ ...r, stock_number: inv.stockNumber({ id: r.instrument_id, family: r.family }) })));
+}));
+
+router.get('/:id/parts-used', asyncHandler(async (req, res) => {
+  const { rows } = await query(`${LINE_SELECT} WHERE l.instrument_id = $1 ORDER BY l.id`, [req.params.id]);
+  res.json(rows);
+}));
+
+router.post('/:id/parts-used', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const partId = b.inventory_part_id ? Number(b.inventory_part_id) : null;
+  const qty = lineQuantity(b.quantity, !!partId);
+  const unitCost = b.unit_cost === undefined ? null : money('unit_cost')(b.unit_cost);
+  const reserved = !!b.reserved;
+
+  const line = await withTransaction(async (client) => {
+    const { rows: [inst] } = await client.query(
+      'SELECT id, ownership FROM instruments WHERE id = $1', [req.params.id],
+    );
+    if (!inst || inst.ownership === 'customer') throw notFound('Instrument not found');
+
+    let description = text(300)(b.description);
+    let taken = 0;
+    if (partId) {
+      taken = await takeStock(client, partId, qty);
+      if (!description) {
+        const { rows: [p] } = await client.query('SELECT name, model FROM inventory_parts WHERE id = $1', [partId]);
+        description = [p.name, p.model].filter(Boolean).join(' — ');
+      }
+    }
+    if (!description) throw badRequest('Say what the part is');
+
+    const { rows: [row] } = await client.query(
+      `INSERT INTO instrument_parts (instrument_id, inventory_part_id, description, quantity, unit_cost,
+                                     stock_taken, reserved, reserved_at, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, CASE WHEN $7 THEN now() END, $8, $9) RETURNING id`,
+      [inst.id, partId, description, qty, unitCost, taken, reserved, text(500)(b.notes), req.user.id],
+    );
+    return row;
+  });
+  const { rows } = await query(`${LINE_SELECT} WHERE l.id = $1`, [line.id]);
+  res.status(201).json(rows[0]);
+}));
+
+router.patch('/parts-used/:lineId', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  await withTransaction(async (client) => {
+    const { rows: [old] } = await client.query(
+      'SELECT * FROM instrument_parts WHERE id = $1 FOR UPDATE', [req.params.lineId],
+    );
+    if (!old) throw notFound('Part line not found');
+    const sets = [];
+    const params = [old.id];
+    const set = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+
+    if (b.description !== undefined) {
+      const d = text(300)(b.description);
+      if (!d) throw badRequest('Say what the part is');
+      set('description', d);
+    }
+    if (b.quantity !== undefined) {
+      const qty = lineQuantity(b.quantity, !!old.inventory_part_id);
+      set('quantity', qty);
+      // Only a line that actually took stock keeps the shelf in step; one
+      // whose stock row had no count (or is gone) never did.
+      if (old.inventory_part_id && old.stock_taken > 0) {
+        const delta = qty - Number(old.quantity);
+        if (delta) {
+          const taken = await takeStock(client, old.inventory_part_id, delta);
+          set('stock_taken', old.stock_taken + taken);
+        }
+      }
+    }
+    if (b.unit_cost !== undefined) set('unit_cost', money('unit_cost')(b.unit_cost));
+    if (b.notes !== undefined) set('notes', text(500)(b.notes));
+    if (b.reserved !== undefined) {
+      const r = !!b.reserved;
+      set('reserved', r);
+      if (r && !old.reserved) sets.push('reserved_at = now()');
+      if (!r) sets.push('reserved_at = NULL');
+    }
+    if (!sets.length) throw badRequest('Nothing to update');
+    await client.query(`UPDATE instrument_parts SET ${sets.join(', ')} WHERE id = $1`, params);
+  });
+  const { rows } = await query(`${LINE_SELECT} WHERE l.id = $1`, [req.params.lineId]);
+  res.json(rows[0]);
+}));
+
+router.delete('/parts-used/:lineId', asyncHandler(async (req, res) => {
+  const { rowCount } = await query('DELETE FROM instrument_parts WHERE id = $1', [req.params.lineId]);
+  if (!rowCount) throw notFound('Part line not found');
+  res.json({ deleted: true });
+}));
+
 router.put('/:id/audit', asyncHandler(async (req, res) => {
   const audited = !!(req.body || {}).audited;
   await withTransaction(async (client) => {
@@ -688,7 +842,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const row = await loadInventoryRow(req.params.id);
   const id = row.id;
 
-  const [tickets, rentals, purchases, sets, photos, ticketPhotos, events, soldTo] = await Promise.all([
+  const [tickets, rentals, purchases, sets, photos, ticketPhotos, events, soldTo, logged] = await Promise.all([
     query(
       `SELECT t.id, t.title, t.status_key, t.archived, t.updated_at, t.category_key,
               s.label AS status_label
@@ -733,6 +887,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
     row.sold_to_customer_id
       ? query('SELECT id, name, email FROM customers WHERE id = $1', [row.sold_to_customer_id])
       : Promise.resolve({ rows: [] }),
+    // Shown beside the hand-entered est_hours for reference (migration 078).
+    query(
+      `SELECT COALESCE(sum(h.hours), 0)::float AS hours
+         FROM hours_log h JOIN tickets t ON t.id = h.ticket_id WHERE t.instrument_id = $1`,
+      [id],
+    ),
   ]);
 
   const photosBySet = {};
@@ -746,6 +906,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     purchases: purchases.rows,
     photo_sets: sets.rows.map((s) => ({ ...s, photos: photosBySet[s.id] || [] })),
     ticket_photos: ticketPhotos.rows,
+    logged_hours: logged.rows[0].hours,
     events: events.rows.filter((e) => isAdmin(req) || e.field !== 'cost_paid'),
   });
 }));

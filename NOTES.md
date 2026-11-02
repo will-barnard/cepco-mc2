@@ -4251,6 +4251,37 @@ inventory at once, so the shop is checking every piece by hand.
 
 Also: Parts / Supplies now opens on "Needed".
 
+### 2.105 Parts & labor on an instrument; Reserved parts (migration 078)
+
+Decisions (asked before building): lines are typed in *or* picked from Parts
+& Accessories stock, and picking takes from the shelf count; "reserved" =
+set aside, not installed yet; costs visible to everyone; reserved parts get
+their own Inventory tab, separate from Parts / Supplies (that's buying).
+
+- `instrument_parts`: description, quantity (NUMERIC — typed lines can be
+  1.5 ft; stock lines must be whole), unit_cost, reserved + reserved_at,
+  notes, optional `inventory_part_id`, and `stock_taken` — how many were
+  actually taken off the shelf (0 for a stock row with no count, like
+  "5-10 Available"). Returning stock always uses `stock_taken`.
+- Taking stock is in routes/inventory.js (`takeStock`): refuses with a 409
+  that names the shelf count when there aren't enough; changing a stock
+  line's quantity moves the shelf by the difference. Giving stock back is a
+  BEFORE DELETE trigger on `instrument_parts`, so it also happens when an
+  instrument is deleted (cascade).
+- API: `GET/POST /api/inventory/:id/parts-used`,
+  `PATCH/DELETE /api/inventory/parts-used/:lineId`,
+  `GET /api/inventory/reserved-parts`.
+- `instruments.est_hours` — hand-entered, saved through the detail page's
+  Save bar. Hours logged on the piece's tickets (hours_log) are shown beside
+  it as `logged_hours`, not summed in.
+- UI: detail page "Parts & labor" card (InstrumentPartsUsed.vue — lines save
+  on their own, inline-editable, reserved rows tinted violet, total with
+  cents). Inventory -> Reserved parts tab (ReservedParts.vue), grouped by
+  instrument: Installed (unreserve, keeps the line) or Release (delete,
+  stock goes back).
+- Stock cost (`inventory_parts.cost_paid`) stays admin-only: it pre-fills
+  "Cost each" for admins when picking from stock; everyone else types it.
+
 ## 4. Suggested first moves after deploy
 
 
