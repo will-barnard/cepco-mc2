@@ -31,15 +31,16 @@ const props = defineProps({
 
 const OTHER_VENDOR = '__other__';
 const FILTERS = [
-  { key: 'all', label: 'Needed & ordered' },
   { key: 'needed', label: 'Needed' },
   { key: 'ordered', label: 'Ordered' },
+  { key: 'all', label: 'Needed & ordered' },
 ];
 const pill = { needed: 'amber', ordered: 'blue' };
 
 const orders = ref([]);
 const vendors = ref([]);
-const filter = ref('all');
+// Opens on what still needs ordering; ordered items are one click away.
+const filter = ref('needed');
 const error = ref('');
 
 // --- vendor picker helpers ---------------------------------------------------

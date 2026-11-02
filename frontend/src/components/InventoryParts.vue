@@ -11,7 +11,7 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import api from '../api';
-import { useAuth, useRefData } from '../stores';
+import { useAuth, useRefData, useSettings } from '../stores';
 import { formatPrice } from '../inventory';
 
 const props = defineProps({
@@ -20,6 +20,11 @@ const props = defineProps({
 
 const auth = useAuth();
 const refData = useRefData();
+const settings = useSettings();
+// Inventory audit (migration 077) — same checkbox + highlight as the
+// Instruments tab, while Settings -> Inventory audit is running.
+const auditOn = computed(() => settings.inventoryAuditActive);
+const auditTodoOnly = ref(false);
 
 const parts = ref([]);
 const loading = ref(true);
@@ -41,8 +46,26 @@ async function load() {
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
   return parts.value.filter((p) => (!family.value || p.family === family.value)
-    && (!q || [p.name, p.model, p.notes, p.category, p.condition].some((v) => v && v.toLowerCase().includes(q))));
+    && (!q || [p.name, p.model, p.notes, p.category, p.condition].some((v) => v && v.toLowerCase().includes(q)))
+    && (!auditOn.value || !auditTodoOnly.value || !p.audited_at));
 });
+const auditDone = computed(() => parts.value.filter((p) => p.audited_at).length);
+
+async function toggleAudit(p, audited) {
+  const before = { audited_at: p.audited_at, audited_by_name: p.audited_by_name };
+  p.audited_at = audited ? new Date().toISOString() : null;
+  try {
+    const updated = await api.put(`/inventory/parts/${p.id}/audit`, { audited });
+    p.audited_at = updated.audited_at;
+    p.audited_by_name = updated.audited_by_name;
+  } catch (err) {
+    Object.assign(p, before);
+    error.value = err.message;
+  }
+}
+const auditTitle = (p) => (p.audited_at
+  ? `Audited${p.audited_by_name ? ` by ${p.audited_by_name}` : ''} ${new Date(p.audited_at).toLocaleDateString()}`
+  : 'Not audited yet — tick once checked');
 
 const groups = computed(() => {
   const out = [];
@@ -138,6 +161,15 @@ onMounted(load);
         <option v-for="f in familiesWithParts" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
       </select>
       <input v-model="search" type="search" placeholder="Search parts…" style="max-width: 280px; min-height: 34px; padding: 6px 10px" />
+      <template v-if="auditOn">
+        <span class="small audit-progress" :class="{ done: auditDone === parts.length }">
+          Audit: {{ auditDone }} / {{ parts.length }}
+        </span>
+        <button
+          type="button" class="small" :class="{ primary: auditTodoOnly }"
+          @click="auditTodoOnly = !auditTodoOnly"
+        >Not audited only</button>
+      </template>
       <span class="spacer" />
       <button type="button" class="small primary" @click="startNew">+ Add part</button>
     </div>
@@ -185,6 +217,7 @@ onMounted(load);
       <table class="parts-table">
         <thead>
           <tr>
+            <th v-if="auditOn" class="audit-col" title="Audited">✓</th>
             <th>Name</th><th>Model / size</th><th class="right">Qty</th><th>Condition</th>
             <th class="right">Price</th><th>Notes</th><th>Sale</th>
             <th v-if="auth.isAdmin" class="right">Paid</th>
@@ -198,7 +231,16 @@ onMounted(load);
             </td>
           </tr>
           <template v-for="p in g.rows" :key="p.id">
-            <tr v-if="editingId !== p.id" class="clickable" @click="startEdit(p)">
+            <tr
+              v-if="editingId !== p.id" class="clickable"
+              :class="{ unaudited: auditOn && !p.audited_at }" @click="startEdit(p)"
+            >
+              <td v-if="auditOn" class="audit-col" :title="auditTitle(p)" @click.stop>
+                <input
+                  type="checkbox" :checked="!!p.audited_at" :aria-label="`Audited: ${p.name}`"
+                  @change="toggleAudit(p, $event.target.checked)"
+                />
+              </td>
               <td><strong>{{ p.name }}</strong></td>
               <td class="small">{{ p.model }}</td>
               <td class="right nowrap" @click.stop>
@@ -266,5 +308,11 @@ onMounted(load);
 .edit-row .field { margin-bottom: 8px; }
 .qty-btn { padding: 0 6px; font-size: 16px; color: var(--text-dim); }
 .qty-btn:hover { color: var(--accent); }
+.audit-col { width: 34px; text-align: center; }
+.audit-col input { width: 18px; height: 18px; min-height: 18px; margin: 0; cursor: pointer; vertical-align: middle; }
+.parts-table tr.unaudited > td { background: color-mix(in srgb, var(--amber) 7%, transparent); }
+.parts-table tr.unaudited > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+.audit-progress { color: var(--amber); font-weight: 600; }
+.audit-progress.done { color: var(--green); }
 .notes-col { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

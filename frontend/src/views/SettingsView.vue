@@ -208,6 +208,41 @@ async function setShopifyCategory(row, categoryKey) {
   }
 }
 
+// Inventory audit (migration 077): while meta.active, the Inventory page
+// shows a checkbox on every piece and flags the unaudited ones. Ending it
+// hides all of that; the marks themselves are kept, so resuming picks up
+// where it left off.
+const auditRow = computed(() => settings.inventoryAudit);
+const auditSummary = ref(null);
+async function loadAuditSummary() {
+  try {
+    auditSummary.value = await api.get('/inventory/audit');
+  } catch {
+    auditSummary.value = null; // progress is a nicety; the toggle still works
+  }
+}
+async function setAuditActive(active) {
+  if (!auditRow.value) return;
+  const s = auditSummary.value;
+  const left = s ? (s.instruments.total - s.instruments.audited) + (s.parts.total - s.parts.audited) : 0;
+  if (!active && left > 0 && !confirm(`${left} item${left === 1 ? ' is' : 's are'} still not audited. End the audit anyway?`)) return;
+  error.value = '';
+  notice.value = '';
+  try {
+    const now = new Date().toISOString();
+    await api.patch(`/settings/${auditRow.value.id}`, {
+      meta: { ...auditRow.value.meta, active, ...(active ? { resumed_at: now } : { ended_at: now }) },
+    });
+    notice.value = active
+      ? 'Inventory audit resumed — checkboxes are back on the Inventory page.'
+      : 'Inventory audit ended — the checkboxes and highlighting are gone from the Inventory page.';
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+const auditPct = (part) => (part?.total ? Math.round((part.audited / part.total) * 100) : 0);
+
 // Queue split view (migration 063): which statuses the Queue page pulls
 // into its right-hand column, in what order. One shop_config row whose
 // meta.value is the ordered key list; the whole list is re-saved on every
@@ -563,7 +598,10 @@ async function submitPasswordReset(emp) {
   }
 }
 
-onMounted(refresh);
+onMounted(() => {
+  refresh();
+  loadAuditSummary();
+});
 </script>
 
 <template>
@@ -623,6 +661,37 @@ onMounted(refresh);
               @change="setShopValue(row, $event.target.value)"
             />
           </div>
+        </div>
+      </div>
+
+      <!-- ------------------------------------------- inventory audit -->
+      <div v-if="auditRow" class="card">
+        <div class="row" style="margin-bottom: 8px">
+          <h2 style="margin: 0">Inventory audit</h2>
+          <span :class="['pill', auditRow.meta?.active ? 'amber' : 'slate']">
+            {{ auditRow.meta?.active ? 'In progress' : 'Ended' }}
+          </span>
+          <div class="spacer" />
+          <button v-if="auditRow.meta?.active" class="small" @click="setAuditActive(false)">End audit</button>
+          <button v-else class="small" @click="setAuditActive(true)">Resume audit</button>
+        </div>
+        <p class="muted small" style="margin-top: 0">
+          While the audit runs, every piece on the Inventory page (and every part &amp; accessory) has an
+          “Audited” checkbox, and anything not yet ticked is highlighted. Ending it hides both; the
+          ticks are kept, so resuming picks up where you left off.
+        </p>
+        <div v-if="auditSummary" class="row small" style="gap: 18px">
+          <span>
+            Instruments: <strong>{{ auditSummary.instruments.audited }}</strong> / {{ auditSummary.instruments.total }}
+            ({{ auditPct(auditSummary.instruments) }}%)
+          </span>
+          <span>
+            Parts &amp; accessories: <strong>{{ auditSummary.parts.audited }}</strong> / {{ auditSummary.parts.total }}
+            ({{ auditPct(auditSummary.parts) }}%)
+          </span>
+          <RouterLink :to="{ path: '/inventory', query: { status: 'all', audit: 'todo' } }">
+            See what's left →
+          </RouterLink>
         </div>
       </div>
 

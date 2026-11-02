@@ -119,6 +119,22 @@ async function reloadKeepingEdits() {
   item.value = row;
 }
 
+// Inventory audit (migration 077) — its own request rather than part of the
+// Save bar, so ticking it never drags unsaved form edits along with it.
+const auditBusy = ref(false);
+async function setAudited(audited) {
+  auditBusy.value = true;
+  error.value = '';
+  try {
+    await api.put(`/inventory/${props.id}/audit`, { audited });
+    await reloadKeepingEdits();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    auditBusy.value = false;
+  }
+}
+
 async function save() {
   if (!dirty.value) return;
   saving.value = true;
@@ -241,7 +257,7 @@ async function deletePiece() {
 const FIELD_LABELS = {
   sale_status: 'Status', asking_price: 'Price', ownership: 'Ownership', on_website: 'On website',
   hold_for: 'Held for', nfs_reason: 'NFS reason', sold_price: 'Sold price', customer_id: 'Consignor',
-  cost_paid: 'Paid', created: 'Added', consignment_status: 'Consignment',
+  cost_paid: 'Paid', created: 'Added', consignment_status: 'Consignment', audited: 'Audited',
 };
 function eventText(e) {
   const label = FIELD_LABELS[e.field] || e.field;
@@ -249,7 +265,7 @@ function eventText(e) {
     if (v === null || v === undefined || v === '') return '—';
     if (['asking_price', 'sold_price', 'cost_paid'].includes(e.field)) return formatPrice(v);
     if (e.field === 'sale_status' || e.field === 'created') return meta.value?.sale_status_labels[v] || v;
-    if (e.field === 'on_website') return v === 'true' ? 'yes' : 'no';
+    if (e.field === 'on_website' || e.field === 'audited') return v === 'true' ? 'yes' : 'no';
     if (e.field === 'consignment_status') return meta.value?.consignment_status_labels[v] || v;
     if (e.field === 'customer_id') return `customer #${v}`;
     return v;
@@ -303,6 +319,19 @@ watch(() => props.id, () => { loading.value = true; load(); });
                 :class="['pill', item.consignment_status === 'payout_due' ? 'amber' : 'slate']"
               >{{ meta?.consignment_status_labels[item.consignment_status] }}</span>
               <span v-if="item.on_website" class="pill green">On website</span>
+              <label
+                v-if="settings.inventoryAuditActive" class="checkbox audit-check" :class="{ todo: !item.audited_at }"
+                :title="item.audited_at ? '' : 'Not audited yet — tick once every field has been checked'"
+              >
+                <input
+                  type="checkbox" :checked="!!item.audited_at" :disabled="auditBusy"
+                  @change="setAudited($event.target.checked)"
+                />
+                Audited
+                <span v-if="item.audited_at" class="muted small">
+                  {{ item.audited_by_name ? `by ${item.audited_by_name} · ` : '' }}{{ new Date(item.audited_at).toLocaleDateString() }}
+                </span>
+              </label>
               <strong v-if="item.asking_price !== null && item.sale_status !== 'sold'" style="font-size: 18px">
                 {{ formatPrice(item.asking_price) }}
               </strong>
@@ -572,6 +601,11 @@ watch(() => props.id, () => { loading.value = true; load(); });
 @media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } }
 .cond-grid { display: grid; gap: 0 12px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .preset-row { gap: 10px; margin-top: 6px; }
+.audit-check {
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--green); font-size: 13px;
+}
+.audit-check.todo { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.audit-check input { width: 16px; height: 16px; min-height: 16px; }
 .consignor-hint {
   margin-bottom: 12px; font-size: 13px; color: var(--text);
   border-color: var(--amber); background: rgba(245, 158, 11, 0.08);

@@ -71,6 +71,12 @@ export const useSettings = defineStore('settings', {
     // category out.
     categoriesForQueuePicker: (s) => (s.data.ticket_category || [])
       .filter((r) => !r.retired && !r.meta?.hide_from_category_queue),
+    // Inventory audit (migration 077): while active, the Inventory page
+    // shows audit checkboxes and flags unaudited rows. Ended from
+    // Settings -> Inventory audit. Missing row = no audit.
+    inventoryAudit: (s) => (s.data.shop_config || []).find((r) => r.key === 'inventory_audit') || null,
+    inventoryAuditActive: (s) => !!(s.data.shop_config || [])
+      .find((r) => r.key === 'inventory_audit')?.meta?.active,
     priorities: (s) => s.data.priority_tier || [],
     techLevels: (s) => s.data.tech_level || [],
     active: (s) => (category) => (s.data[category] || []).filter((r) => !r.retired),

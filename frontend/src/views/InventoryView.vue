@@ -17,7 +17,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import api from '../api';
-import { useAuth, useRefData } from '../stores';
+import { useAuth, useRefData, useSettings } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import {
@@ -27,6 +27,7 @@ import {
 const route = useRoute();
 const router = useRouter();
 const auth = useAuth();
+const settings = useSettings();
 const refData = useRefData();
 
 const TABS = [
@@ -42,12 +43,19 @@ const STATUS_OPTIONS = [
   // Every consignment, sold or not, grouped by where the deal stands —
   // "Payout due" first, since that's money the shop owes (migration 075).
   { key: 'consignments', label: 'Consignments' },
+  // Everything, sold included — mostly for the inventory audit, which
+  // covers sold pieces too (Settings -> Inventory audit links here).
+  { key: 'all', label: 'All' },
 ];
 
 const tab = computed(() => (TABS.some((t) => t.key === route.query.tab) ? route.query.tab : 'instruments'));
 const status = computed(() => (STATUS_OPTIONS.some((s) => s.key === route.query.status) ? route.query.status : 'active'));
 const family = computed(() => String(route.query.family || ''));
 const search = ref(String(route.query.q || ''));
+// Inventory audit (migration 077): checkboxes and the unaudited highlight
+// only exist while the audit is running (Settings -> Inventory audit).
+const auditOn = computed(() => settings.inventoryAuditActive);
+const auditTodoOnly = computed(() => auditOn.value && route.query.audit === 'todo');
 
 function setQuery(patch) {
   const query = { ...route.query, ...patch };
@@ -80,7 +88,33 @@ const matchesSearch = (i) => {
     i.customer_name, i.sold_to_name, i.model_group, i.year]
     .some((v) => v && String(v).toLowerCase().includes(needle.value));
 };
-const searched = computed(() => items.value.filter(matchesSearch));
+const searched = computed(() => items.value.filter(
+  (i) => matchesSearch(i) && (!auditTodoOnly.value || !i.audited_at),
+));
+// Progress for the current status/family/search, ignoring the
+// "not audited only" toggle itself (or it would always read 0 of N).
+const auditProgress = computed(() => {
+  const pool = items.value.filter((i) => matchesSearch(i) && (!family.value || i.family === family.value));
+  return { total: pool.length, done: pool.filter((i) => i.audited_at).length };
+});
+
+async function toggleAudit(i, audited) {
+  const before = { audited_at: i.audited_at, audited_by_name: i.audited_by_name };
+  // Optimistic: auditing is a long run of clicks down the list.
+  i.audited_at = audited ? new Date().toISOString() : null;
+  i.audited_by_name = audited ? auth.user?.name : null;
+  try {
+    const row = await api.put(`/inventory/${i.id}/audit`, { audited });
+    i.audited_at = row.audited_at;
+    i.audited_by_name = row.audited_by_name;
+  } catch (err) {
+    Object.assign(i, before);
+    error.value = err.message;
+  }
+}
+const auditTitle = (i) => (i.audited_at
+  ? `Audited${i.audited_by_name ? ` by ${i.audited_by_name}` : ''} ${new Date(i.audited_at).toLocaleDateString()}`
+  : 'Not audited yet — tick once checked');
 const filtered = computed(() => (family.value
   ? searched.value.filter((i) => i.family === family.value)
   : searched.value));
@@ -327,6 +361,15 @@ onMounted(async () => {
             >{{ s.label }}</button>
           </div>
           <input v-model="search" type="search" placeholder="Search name, model, serial, notes…" class="inv-search" />
+          <template v-if="auditOn">
+            <span class="small audit-progress" :class="{ done: auditProgress.done === auditProgress.total }">
+              Audit: {{ auditProgress.done }} / {{ auditProgress.total }}
+            </span>
+            <button
+              type="button" class="small" :class="{ primary: auditTodoOnly }"
+              @click="setQuery({ audit: auditTodoOnly ? '' : 'todo' })"
+            >Not audited only</button>
+          </template>
           <span class="spacer" />
           <button type="button" class="small" :disabled="!filtered.length" @click="downloadCsv">Download CSV</button>
         </div>
@@ -363,6 +406,7 @@ onMounted(async () => {
                      notes last, where they can run long without pushing
                      anything important off-screen. -->
                 <tr>
+                  <th v-if="auditOn" class="audit-col" title="Audited">✓</th>
                   <th class="thumb-col" />
                   <th>Name</th>
                   <th>Year</th>
@@ -401,7 +445,16 @@ onMounted(async () => {
                     <span class="muted small"> · {{ g.rows.length }}</span>
                   </td>
                 </tr>
-                <tr v-for="i in g.rows" :key="i.id" class="clickable" @click="open(i)">
+                <tr
+                  v-for="i in g.rows" :key="i.id" class="clickable"
+                  :class="{ unaudited: auditOn && !i.audited_at }" @click="open(i)"
+                >
+                  <td v-if="auditOn" class="audit-col" :title="auditTitle(i)" @click.stop>
+                    <input
+                      type="checkbox" :checked="!!i.audited_at" :aria-label="`Audited: ${i.nickname || i.model}`"
+                      @change="toggleAudit(i, $event.target.checked)"
+                    />
+                  </td>
                   <td class="thumb-col">
                     <img
                       v-if="i.cover_photo_id" :src="`/api/inventory/photos/${i.cover_photo_id}/view`"
@@ -523,6 +576,15 @@ onMounted(async () => {
 }
 .inv-table .group-row:hover { background: inherit; }
 .thumb-col { width: 48px; padding-right: 0 !important; }
+
+/* Inventory audit: anything not yet checked gets an amber edge and a faint
+   wash, so the unaudited rows stand out down a long list. */
+.audit-col { width: 34px; text-align: center; }
+.audit-col input { width: 18px; height: 18px; min-height: 18px; margin: 0; cursor: pointer; vertical-align: middle; }
+.inv-table tr.unaudited > td { background: color-mix(in srgb, var(--amber) 7%, transparent); }
+.inv-table tr.unaudited > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+.audit-progress { color: var(--amber); font-weight: 600; }
+.audit-progress.done { color: var(--green); }
 .thumb { width: 44px; height: 33px; object-fit: cover; border-radius: 4px; display: block; }
 .name-col { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .status-col { white-space: nowrap; }

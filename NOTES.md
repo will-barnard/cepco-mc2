@@ -4226,6 +4226,31 @@ and its terms — without that, a sold-but-unpaid consignment looked settled.
   cabs (a parts item — parts can't be consignments). No customers are
   created; that stays a per-piece choice because it pushes to Xero.
 
+### 2.104 Inventory audit (migration 077)
+
+The import and consignment fixes (§2.99, §2.103) changed most of the
+inventory at once, so the shop is checking every piece by hand.
+
+- `instruments.audited_at/audited_by` and the same on `inventory_parts`.
+  Everything starts unaudited. `PUT /api/inventory/:id/audit` and
+  `PUT /api/inventory/parts/:id/audit` with `{ audited: bool }` — any staff
+  member, stamped with who and when; instrument audits are also written to
+  `instrument_events` so History shows who signed a piece off.
+  `GET /api/inventory/audit` = progress counts (all shop-held pieces, sold
+  included, plus every part).
+- Switch: `shop_config` row `inventory_audit`, `meta.active` (seeded true).
+  While active: a checkbox column on Inventory (Instruments and Parts &
+  Accessories tabs), unaudited rows get an amber edge + wash, an
+  "Audit: n / N" counter and a "Not audited only" toggle (`?audit=todo`),
+  and an Audited checkbox on the detail page header. Settings -> Inventory
+  audit shows progress and End / Resume. Ending hides everything; the marks
+  are kept, so resuming continues.
+- Inventory gained an "All" status filter (sold included) — the Settings
+  card's "See what's left" link lands on All + Not audited only.
+- Editing a piece does not clear its audit mark.
+
+Also: Parts / Supplies now opens on "Needed".
+
 ## 4. Suggested first moves after deploy
 
 

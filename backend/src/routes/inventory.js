@@ -11,9 +11,12 @@
  *   POST   /api/inventory                      add a piece
  *   GET    /api/inventory/:id                  detail (+ photos, tickets, history)
  *   PATCH  /api/inventory/:id                  edit
+ *   PUT    /api/inventory/:id/audit            { audited: bool } (inventory audit)
+ *   GET    /api/inventory/audit                audit progress (Settings)
  *
  *   Parts & accessories (counted stock, inventory_parts):
  *   GET/POST /api/inventory/parts, PATCH/DELETE /api/inventory/parts/:id
+ *   PUT    /api/inventory/parts/:id/audit
  *
  *   Photo sets (named batches: "Intake", "Listing", ...):
  *   POST   /api/inventory/:id/photo-sets
@@ -268,7 +271,8 @@ router.get('/parts', asyncHandler(async (req, res) => {
   }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await query(
-    `SELECT * FROM inventory_parts ${where}
+    `SELECT p.*, (SELECT e.name FROM employees e WHERE e.id = p.audited_by) AS audited_by_name
+       FROM inventory_parts p ${where}
       ORDER BY array_position($${params.length + 1}::text[], family), sort_order NULLS LAST, id`,
     [...params, inv.FAMILIES],
   );
@@ -295,8 +299,22 @@ router.patch('/parts/:id', asyncHandler(async (req, res) => {
   if (!cols.length) throw badRequest('Nothing to update');
   const { rows } = await query(
     `UPDATE inventory_parts SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')}
-      WHERE id = $1 RETURNING *`,
+      WHERE id = $1
+      RETURNING *, (SELECT e.name FROM employees e WHERE e.id = audited_by) AS audited_by_name`,
     [req.params.id, ...cols.map((c) => f[c])],
+  );
+  if (!rows[0]) throw notFound('Part not found');
+  res.json(redactPart(rows[0], req));
+}));
+
+router.put('/parts/:id/audit', asyncHandler(async (req, res) => {
+  const audited = !!(req.body || {}).audited;
+  const { rows } = await query(
+    `UPDATE inventory_parts SET audited_at = CASE WHEN $2 THEN now() END,
+                                audited_by = CASE WHEN $2 THEN $3::int END
+      WHERE id = $1
+      RETURNING *, (SELECT e.name FROM employees e WHERE e.id = audited_by) AS audited_by_name`,
+    [req.params.id, audited, req.user.id],
   );
   if (!rows[0]) throw notFound('Part not found');
   res.json(redactPart(rows[0], req));
@@ -528,6 +546,7 @@ const STATUS_FILTERS = {
 
 const LIST_SELECT = `
   SELECT i.*, c.name AS customer_name, c.xero_contact_id AS customer_xero_contact_id,
+         (SELECT e.name FROM employees e WHERE e.id = i.audited_by) AS audited_by_name,
          (SELECT count(*)::int FROM tickets t WHERE t.instrument_id = i.id AND t.archived = FALSE)
            AS open_tickets,
          (SELECT count(*)::int FROM instrument_photos p WHERE p.instrument_id = i.id)
@@ -622,6 +641,48 @@ async function loadInventoryRow(id) {
   }
   return rows[0];
 }
+
+// ---------------------------------------------------------------------------
+// Inventory audit (migration 077). The summary counts every shop-held piece
+// — sold ones included, since the import rewrote those too — plus every
+// parts & accessories row. Registered before '/:id' (see header).
+// ---------------------------------------------------------------------------
+router.get('/audit', asyncHandler(async (req, res) => {
+  const { rows: [i] } = await query(
+    `SELECT count(*)::int AS total, count(audited_at)::int AS audited
+       FROM instruments WHERE ownership <> 'customer'`,
+  );
+  const { rows: [p] } = await query(
+    'SELECT count(*)::int AS total, count(audited_at)::int AS audited FROM inventory_parts',
+  );
+  res.json({ instruments: i, parts: p });
+}));
+
+router.put('/:id/audit', asyncHandler(async (req, res) => {
+  const audited = !!(req.body || {}).audited;
+  await withTransaction(async (client) => {
+    const { rows: [old] } = await client.query(
+      'SELECT id, ownership, audited_at FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id],
+    );
+    if (!old || old.ownership === 'customer') throw notFound('Instrument not found');
+    if (!!old.audited_at === audited) return;
+    await client.query(
+      `UPDATE instruments SET audited_at = CASE WHEN $2 THEN now() END,
+                              audited_by = CASE WHEN $2 THEN $3::int END
+        WHERE id = $1`,
+      [old.id, audited, req.user.id],
+    );
+    // In the piece's History too, so "who signed this off" survives the
+    // mark being cleared and re-done.
+    await client.query(
+      `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+       VALUES ($1, $2, 'audited', $3, $4)`,
+      [old.id, req.user.id, String(!audited), String(audited)],
+    );
+  });
+  const row = await loadInventoryRow(req.params.id);
+  res.json(inv.redactForRole(row, req.user));
+}));
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const row = await loadInventoryRow(req.params.id);
