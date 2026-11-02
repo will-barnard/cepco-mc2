@@ -4159,6 +4159,35 @@ Also fixed while here: after a kiosk "Switch user", the store now re-reads
 `/auth/me` — `/auth/switch` only returns the basics, so per-person settings
 (this one, and the dashboard Parts card) didn't follow the switch.
 
+### 2.102 Parts / Supplies: needed → ordered, editable rows, vendor editor (migration 074)
+
+**Two states.** Delivered/cancelled turned out not to matter to the shop —
+only "has someone ordered this, and when." Status is now `needed` or
+`ordered`; `ordered_at` became a `DATE` (converted in shop time) and is
+hand-editable. The API refuses `delivered`/`cancelled`, but old rows keep
+those statuses (the CHECK still allows them) and are all archived, so they
+only show up in a ticket's own Vendor Orders history. This supersedes the
+P2 archive-on-delivered flow in §2.31.
+
+**Editing.** `PATCH /parts/:id` is now a true partial update — keys present
+in the body are written, `''`/`null` clears (the old `COALESCE` version
+couldn't clear a field, and switching to "Other…" left the old `vendor_id`
+behind). Going back to `needed` clears the date; going to `ordered` keeps
+the date sent, else the one it had, else today. Parts / Supplies rows have
+an Edit button (every field, plus Remove); the dashboard card stays
+view + "Mark ordered" only.
+
+**Quick add per vendor.** Each vendor box on Parts / Supplies has a "+ Add"
+button top-right that opens an inline form already filed under that vendor
+(including "Other…" names). It stays open after each add for a run of items.
+
+**Vendor editor.** Settings → Parts / Supplies vendors: rename, reorder,
+hide/unhide, add (`PATCH /parts/vendors/:id`, `GET /parts/vendors?all=true`).
+No delete — the FK is `ON DELETE SET NULL`, so it would strip the vendor off
+old orders; hiding takes it out of the pickers instead. Names are unique
+case-insensitively. Adding a vendor moves any "Other…" orders with that
+exact name (case/whitespace-insensitive) under it.
+
 ## 4. Suggested first moves after deploy
 
 

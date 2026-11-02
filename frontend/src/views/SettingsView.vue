@@ -13,6 +13,7 @@ import api from '../api';
 import { STATUS_COLORS } from '../statusColors';
 import { useSettings, useRefData } from '../stores';
 import RefreshAppButton from '../components/RefreshAppButton.vue';
+import PartsVendorsSettings from '../components/PartsVendorsSettings.vue';
 
 const settings = useSettings();
 const refData = useRefData();
@@ -893,6 +894,9 @@ onMounted(refresh);
           <button @click="addValue(category)">Add</button>
         </div>
       </div>
+
+      <!-- ------------------------------------- parts/supplies vendors -->
+      <PartsVendorsSettings />
 
       <!-- ------------------------------------------------------ staff -->
       <div class="card">

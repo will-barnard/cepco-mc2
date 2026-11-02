@@ -25,6 +25,7 @@
  */
 import { ref, onMounted } from 'vue';
 import api from '../api';
+import { formatYmd } from '../dates';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
 
@@ -38,7 +39,8 @@ const OTHER_VENDOR = '__other__';
 const vendors = ref([]);
 const form = ref({ vendor_id: '', vendor_other: '', quantity: '', notes: '' });
 
-const STATUSES = ['needed', 'ordered', 'delivered', 'cancelled'];
+// Two states now (migration 074) -- delivered/cancelled stay in the pill
+// map only because this box shows a ticket's full history, old rows included.
 const pill = {
   needed: 'amber', ordered: 'blue', delivered: 'green', cancelled: 'slate',
 };
@@ -152,13 +154,15 @@ defineExpose({ openForm });
             <td>{{ o.vendor_name || '—' }}</td>
             <td class="small">{{ o.quantity || '—' }}</td>
             <td class="small muted">{{ o.notes || '—' }}</td>
-            <td><span :class="['pill', pill[o.status]]">{{ o.status }}</span></td>
+            <td class="nowrap">
+              <span :class="['pill', pill[o.status] || 'slate']">{{ o.status }}</span>
+              <span v-if="o.status === 'ordered' && o.ordered_at" class="small muted" style="margin-left: 6px">
+                {{ formatYmd(o.ordered_at) }}
+              </span>
+            </td>
             <td class="right nowrap">
               <button v-if="o.status === 'needed'" class="small" @click="setStatus(o, 'ordered')">
                 Mark ordered
-              </button>
-              <button v-if="o.status === 'ordered'" class="small" @click="setStatus(o, 'delivered')">
-                Mark delivered
               </button>
             </td>
           </tr>

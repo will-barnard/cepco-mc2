@@ -362,9 +362,9 @@ onMounted(async () => {
 
       <!-- Settings -> Staff accounts' "Parts on dashboard" checkbox
            (employees.show_parts_on_dashboard, migration 058) -- view and
-           status-change only, same PartsOrdersPanel.vue the "+ New" page's
-           Parts/Supplies tab uses, just with allow-create off. Creating a
-           new order only ever happens from that tab. -->
+           "Mark ordered" only, same PartsOrdersPanel.vue the "+ New" page's
+           Parts/Supplies tab uses, just with allow-create off. Adding and
+           editing orders only ever happens from that tab. -->
       <div v-if="auth.user.show_parts_on_dashboard" class="card" style="margin-bottom: 24px">
         <div class="row" style="margin-bottom: 12px">
           <h2 style="margin: 0">Parts / Supplies</h2>
