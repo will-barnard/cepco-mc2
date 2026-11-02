@@ -7,9 +7,9 @@
  *     replaced the old standalone /parts route (see NOTES.md).
  *   - DashboardView.vue's Parts/Supplies card, for whichever employees
  *     Settings -> Staff accounts has opted in (employees.show_parts_on_dashboard,
- *     migration 058) -- `compact` there: no filter and no top "new order"
- *     form, but rows are editable and each vendor box keeps its "+ Add",
- *     same as the full view.
+ *     migration 058) -- `compact` there: needed items only, no filter and
+ *     no top "new order" form, but rows are editable and each vendor box
+ *     keeps its "+ Add", same as the full view.
  *
  * Two states only: needed -> ordered, plus the day it was ordered
  * (migration 074, NOTES.md §2.102). Delivered/cancelled are gone from the
@@ -84,10 +84,12 @@ const grouped = computed(() => {
 });
 
 async function load() {
-  // The compact (dashboard) view sends no status/archived params, meaning
-  // "every non-archived order" -- the "what's outstanding" glance.
+  // The compact (dashboard) card only ever shows what still needs ordering
+  // -- ordered items no longer drop off on their own (no "delivered" step),
+  // so without this they'd pile up on everyone's dashboard.
   const params = {};
-  if (!props.compact && filter.value !== 'all') params.status = filter.value;
+  if (props.compact) params.status = 'needed';
+  else if (filter.value !== 'all') params.status = filter.value;
   orders.value = await api.get('/parts', params);
 }
 
@@ -264,7 +266,7 @@ defineExpose({ load });
     </form>
 
     <div v-if="!orders.length" class="empty">
-      <template v-if="compact">Nothing outstanding right now.</template>
+      <template v-if="compact">Nothing needs ordering right now.</template>
       <template v-else-if="filter === 'all'">Nothing on the list.</template>
       <template v-else>Nothing {{ filter }} right now.</template>
     </div>
