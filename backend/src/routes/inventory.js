@@ -127,6 +127,8 @@ const FIELDS = {
     if (!Number.isFinite(n) || n < 0 || n > 100) throw badRequest('consignment_rate must be 0-100');
     return n;
   },
+  consignment_status: (v) => (v === null || v === '' ? null : oneOf('consignment_status', inv.CONSIGNMENT_STATUSES)(v)),
+  consignment_terms: text(500),
   sold_at: dateOrNull('sold_at'),
   sold_price: money('sold_price'),
   sold_to_name: text(200),
@@ -150,8 +152,34 @@ const ADMIN_FIELDS = new Set(['cost_paid', 'cost_note']);
 // history ("who dropped the price, when did it go on hold").
 const LOGGED_FIELDS = new Set([
   'sale_status', 'asking_price', 'ownership', 'on_website', 'hold_for',
-  'nfs_reason', 'sold_price', 'customer_id', 'cost_paid',
+  'nfs_reason', 'sold_price', 'customer_id', 'cost_paid', 'consignment_status',
 ]);
+
+/**
+ * Keeps consignment_status in step with ownership and sale status, so the
+ * Consignments view's "Payout due" group can't silently miss a sale:
+ *   - not a consignment            -> no consignment status
+ *   - becomes a consignment        -> for sale (or payout due if already sold)
+ *   - a consignment is marked sold -> payout due, unless already paid out
+ * An explicit consignment_status in the same request always wins.
+ * `old` is the row before the change ({} for a new piece); mutates `f`.
+ */
+function applyConsignmentRules(f, old) {
+  const ownership = f.ownership ?? old.ownership;
+  const saleStatus = f.sale_status ?? old.sale_status;
+  const current = old.consignment_status ?? null;
+  if (ownership !== 'consignment') {
+    if (current !== null || f.consignment_status) f.consignment_status = null;
+    return;
+  }
+  if (f.consignment_status !== undefined) return;
+  const becameConsignment = old.ownership !== 'consignment';
+  const becameSold = saleStatus === 'sold' && old.sale_status !== 'sold';
+  if (becameSold && current !== 'paid_out') f.consignment_status = 'payout_due';
+  else if (becameConsignment && current === null) {
+    f.consignment_status = saleStatus === 'sold' ? 'payout_due' : 'for_sale';
+  }
+}
 
 function pickFields(body, req) {
   const out = {};
@@ -179,6 +207,8 @@ router.get('/meta', (req, res) => {
     ownerships: inv.OWNERSHIPS,
     sale_statuses: inv.SALE_STATUSES,
     sale_status_labels: inv.SALE_STATUS_LABELS,
+    consignment_statuses: inv.CONSIGNMENT_STATUSES,
+    consignment_status_labels: inv.CONSIGNMENT_STATUS_LABELS,
     condition_fields: inv.CONDITION_FIELDS,
     nfs_reason_presets: inv.NFS_REASON_PRESETS,
     photo_set_presets: inv.PHOTO_SET_PRESETS,
@@ -481,7 +511,8 @@ router.delete('/photos/:photoId', asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 // List
 //   status   active (default: everything not sold) | for_sale (available +
-//            on_hold) | available | on_hold | not_for_sale | sold | all
+//            on_hold) | available | on_hold | not_for_sale | sold |
+//            consignments (every consignment, sold or not) | all
 //   family, ownership, q, on_website=true|false
 // ---------------------------------------------------------------------------
 const STATUS_FILTERS = {
@@ -491,6 +522,7 @@ const STATUS_FILTERS = {
   on_hold: ["i.sale_status = 'on_hold'"],
   not_for_sale: ["i.sale_status = 'not_for_sale'"],
   sold: ["i.sale_status = 'sold'"],
+  consignments: ["i.ownership = 'consignment'"],
   all: [],
 };
 
@@ -526,11 +558,21 @@ router.get('/', asyncHandler(async (req, res) => {
   const familyOrder = `array_position($${params.length}::text[], i.family)`;
   // Sold pieces read best newest-first; everything else in sheet order
   // (family, then section in the order it first appears, then row).
-  const order = status === 'sold'
-    ? `i.sold_at DESC NULLS LAST, ${familyOrder}, i.sort_order NULLS LAST, i.id DESC`
-    : `${familyOrder},
+  // Consignments group by where the deal stands, payout due first (money
+  // owed), then newest sale.
+  let order;
+  if (status === 'sold') {
+    order = `i.sold_at DESC NULLS LAST, ${familyOrder}, i.sort_order NULLS LAST, i.id DESC`;
+  } else if (status === 'consignments') {
+    // Only pushed here: an unused bind parameter is an error in Postgres.
+    params.push(['payout_due', 'contracted', 'for_sale', 'paid_out']);
+    order = `array_position($${params.length}::text[], i.consignment_status) NULLS LAST,
+       i.sold_at DESC NULLS LAST, ${familyOrder}, i.sort_order NULLS LAST, i.id`;
+  } else {
+    order = `${familyOrder},
        MIN(i.sort_order) OVER (PARTITION BY i.family, COALESCE(i.model_group, '')) NULLS LAST,
        i.model_group NULLS LAST, i.sort_order NULLS LAST, i.id`;
+  }
 
   const { rows } = await query(
     `${LIST_SELECT} WHERE ${clauses.join(' AND ')} ORDER BY ${order} LIMIT 2000`,
@@ -549,6 +591,7 @@ router.post('/', asyncHandler(async (req, res) => {
   f.ownership = f.ownership || 'shop';
   f.sale_status = f.sale_status || 'available';
   if (f.sale_status === 'sold' && !f.sold_at) f.sold_at = new Date().toISOString().slice(0, 10);
+  applyConsignmentRules(f, {});
   delete f.cover_photo_id;
 
   const cols = Object.keys(f);
@@ -692,6 +735,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     if (f.sale_status === 'sold' && old.sale_status !== 'sold' && f.sold_at === undefined && !old.sold_at) {
       f.sold_at = new Date().toISOString().slice(0, 10);
     }
+    applyConsignmentRules(f, old);
 
     const setCols = Object.keys(f);
     const { rows } = await client.query(

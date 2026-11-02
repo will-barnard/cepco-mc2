@@ -11,6 +11,17 @@ const { FAMILIES } = require('../routes/instruments');
 const OWNERSHIPS = ['shop', 'consignment']; // 'customer' exists too, but isn't inventory
 const SALE_STATUSES = ['available', 'on_hold', 'not_for_sale', 'sold'];
 
+// Where a consignment deal stands (migration 075). NULL = not recorded.
+// Order is the deal's lifecycle; the Consignments view groups by it, with
+// payout_due first since that's money the shop owes.
+const CONSIGNMENT_STATUSES = ['contracted', 'for_sale', 'payout_due', 'paid_out'];
+const CONSIGNMENT_STATUS_LABELS = {
+  contracted: 'Contracted',
+  for_sale: 'For sale',
+  payout_due: 'Payout due',
+  paid_out: 'Paid out',
+};
+
 const SALE_STATUS_LABELS = {
   available: 'For sale',
   on_hold: 'On hold',
@@ -93,6 +104,8 @@ module.exports = {
   OWNERSHIPS,
   SALE_STATUSES,
   SALE_STATUS_LABELS,
+  CONSIGNMENT_STATUSES,
+  CONSIGNMENT_STATUS_LABELS,
   CONDITION_FIELDS,
   NFS_REASON_PRESETS,
   PHOTO_SET_PRESETS,

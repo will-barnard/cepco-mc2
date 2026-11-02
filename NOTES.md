@@ -4195,6 +4195,37 @@ old orders; hiding takes it out of the pickers instead. Names are unique
 case-insensitively. Adding a vendor moves any "Other…" orders with that
 exact name (case/whitespace-insensitive) under it.
 
+### 2.103 Consignments: deal status, terms, and the tracking sheet (migrations 075-076)
+
+The Inventory Log import (§2.99) only knew *that* a piece was consigned.
+The shop's Consignment Tracking sheet also tracked where each deal stands
+and its terms — without that, a sold-but-unpaid consignment looked settled.
+
+- `instruments.consignment_status`: `contracted` / `for_sale` /
+  `payout_due` / `paid_out`, NULL = not recorded. `consignment_terms`: the
+  deal in words; `consignment_rate` stays the number.
+- Kept in step by `applyConsignmentRules` (routes/inventory.js) on create
+  and edit: not a consignment -> cleared; becomes one -> for sale (payout
+  due if already sold); a consignment marked sold -> payout due unless
+  already paid out. An explicit status in the same request wins. Changes
+  are logged to `instrument_events`.
+- Inventory -> **Consignments** (`?status=consignments`): every
+  consignment, sold or not, grouped by deal status with Payout due first;
+  consignor (flagged "unlinked" when there's no customer record), terms,
+  price, buyer, date. Detail page: Deal status + Terms under Ownership.
+- 075 backfills unsold consignments to for sale and leaves sold ones NULL —
+  the sheets don't say whether those consignors were paid, and guessing
+  "payout due" would fill the owed list with years-old sales.
+- 076 applies the tracking sheet (`assets/CEPCo Inventory Log -
+  Consignment Tracking.csv`) by `import_key`, so it's a no-op on a
+  database that never ran the import. Aidy, Todd Piano Bass, Bruno and
+  M Calc become consignments; consignor names filled in where the sheet is
+  fuller (Akash Dheer, Steve Weiss, Mark Calcott). Greg is shop-owned
+  (bought outright) despite the tracking sheet listing him. Not applied, no
+  matching piece: Cliff Colnot, Joe Randel, Graham Thompson's satellite
+  cabs (a parts item — parts can't be consignments). No customers are
+  created; that stays a per-piece choice because it pushes to Xero.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -39,6 +39,9 @@ const STATUS_OPTIONS = [
   { key: 'for_sale', label: 'For sale' },
   { key: 'not_for_sale', label: 'Not for sale' },
   { key: 'sold', label: 'Sold' },
+  // Every consignment, sold or not, grouped by where the deal stands —
+  // "Payout due" first, since that's money the shop owes (migration 075).
+  { key: 'consignments', label: 'Consignments' },
 ];
 
 const tab = computed(() => (TABS.some((t) => t.key === route.query.tab) ? route.query.tab : 'instruments'));
@@ -110,18 +113,32 @@ function conditionSummary(i) {
 }
 
 const isSold = computed(() => status.value === 'sold');
+const isConsign = computed(() => status.value === 'consignments');
+const consignLabel = (cs) => (cs ? meta.value?.consignment_status_labels[cs] || cs : 'Not recorded');
+const consignorOf = (i) => i.customer_name || i.consignor_name || '';
 
 // --- grouping: family -> sheet section, in the order the API returns ----
 const groups = computed(() => {
   const out = [];
   let current = null;
   for (const i of filtered.value) {
-    const key = isSold.value ? i.family : `${i.family}|${i.model_group || ''}`;
+    let key;
+    let label;
+    if (isConsign.value) {
+      key = `c|${i.consignment_status || ''}`;
+      label = consignLabel(i.consignment_status);
+    } else if (isSold.value) {
+      key = i.family;
+      label = refData.familyLabel(i.family);
+    } else {
+      key = `${i.family}|${i.model_group || ''}`;
+      label = i.model_group || `Other ${refData.familyLabel(i.family)}`;
+    }
     if (!current || current.key !== key) {
       current = {
         key,
         family: i.family,
-        label: isSold.value ? refData.familyLabel(i.family) : (i.model_group || `Other ${refData.familyLabel(i.family)}`),
+        label,
         rows: [],
       };
       out.push(current);
@@ -136,6 +153,7 @@ const totals = computed(() => {
   return {
     count: filtered.value.length,
     forSale: forSale.length,
+    payoutDue: filtered.value.filter((i) => i.ownership === 'consignment' && i.consignment_status === 'payout_due').length,
     askingTotal: forSale.reduce((sum, i) => sum + (Number(i.asking_price) || 0), 0),
   };
 });
@@ -179,6 +197,7 @@ function downloadCsv() {
     : [...new Map(Object.values(meta.value?.condition_fields || {}).flat().map((f) => [f.key, f])).values()];
   const header = ['Stock #', 'Name', 'Family', 'Section', 'Year', 'Model', ...condKeys.map((f) => f.label),
     'Notes', 'Status', 'Reason / hold', 'Price', 'Price note', 'Serial', 'On website', 'Ownership', 'Consignor',
+    'Consignment status', 'Consignment terms',
     ...(isSold.value ? ['Sold price', 'Sold to', 'Sold on'] : []),
     ...(auth.isAdmin ? ['Paid', 'Paid note'] : [])];
   const rows = filtered.value.map((i) => [
@@ -187,6 +206,7 @@ function downloadCsv() {
     i.identifying_notes, meta.value?.sale_status_labels[i.sale_status], i.nfs_reason || i.hold_for,
     i.asking_price, i.price_note, i.serial_no, i.on_website ? 'yes' : '', ownershipLabel(i.ownership),
     i.customer_name || i.consignor_name,
+    i.ownership === 'consignment' ? consignLabel(i.consignment_status) : '', i.consignment_terms,
     ...(isSold.value ? [i.sold_price, i.sold_to_name, i.sold_at] : []),
     ...(auth.isAdmin ? [i.cost_paid, i.cost_note] : []),
   ]);
@@ -331,6 +351,9 @@ onMounted(async () => {
             <template v-if="!isSold && totals.forSale">
               · {{ totals.forSale }} for sale, {{ formatPrice(totals.askingTotal) }} asking
             </template>
+            <template v-if="isConsign && totals.payoutDue">
+              · <strong>{{ totals.payoutDue }} payout{{ totals.payoutDue === 1 ? '' : 's' }} due</strong>
+            </template>
           </p>
           <div class="table-wrap">
             <table class="inv-table">
@@ -350,6 +373,14 @@ onMounted(async () => {
                     <th>Date</th>
                     <th>Serial</th>
                   </template>
+                  <template v-else-if="isConsign">
+                    <th>Consignor</th>
+                    <th>Terms</th>
+                    <th class="right">Price</th>
+                    <th>Status</th>
+                    <th>Sold to</th>
+                    <th>Date</th>
+                  </template>
                   <template v-else>
                     <th class="right">Price</th>
                     <th>Status</th>
@@ -366,7 +397,7 @@ onMounted(async () => {
                 <tr class="group-row">
                   <td :colspan="99">
                     <strong>{{ g.label }}</strong>
-                    <span v-if="!family && !isSold" class="muted small"> · {{ refData.familyLabel(g.family) }}</span>
+                    <span v-if="!family && !isSold && !isConsign" class="muted small"> · {{ refData.familyLabel(g.family) }}</span>
                     <span class="muted small"> · {{ g.rows.length }}</span>
                   </td>
                 </tr>
@@ -394,6 +425,28 @@ onMounted(async () => {
                     <td>{{ i.sold_to_name }}</td>
                     <td class="nowrap small">{{ i.sold_at }}</td>
                     <td class="nowrap small">{{ i.serial_no }}</td>
+                  </template>
+                  <template v-else-if="isConsign">
+                    <td>
+                      {{ consignorOf(i) }}
+                      <span
+                        v-if="i.consignor_name && !i.customer_id" class="muted tiny-text"
+                        title="Not linked to a customer record yet"
+                      > (unlinked)</span>
+                    </td>
+                    <td class="small">
+                      {{ i.consignment_terms || (i.consignment_rate !== null && i.consignment_rate !== undefined ? `${Number(i.consignment_rate)}%` : '') }}
+                    </td>
+                    <td class="right nowrap">
+                      {{ formatPrice(i.sale_status === 'sold' ? i.sold_price : i.asking_price) }}
+                    </td>
+                    <td class="status-col">
+                      <span :class="['pill', statusPill(i).color]" :title="statusPill(i).title">
+                        {{ i.sale_status === 'not_for_sale' ? 'NFS' : statusPill(i).label }}
+                      </span>
+                    </td>
+                    <td>{{ i.sold_to_name }}</td>
+                    <td class="nowrap small">{{ i.sold_at }}</td>
                   </template>
                   <template v-else>
                     <td class="right nowrap">

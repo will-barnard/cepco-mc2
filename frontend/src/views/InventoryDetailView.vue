@@ -39,7 +39,7 @@ const xeroUrl = ref(null);
 const EDITABLE = [
   'nickname', 'family', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes',
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'on_website',
-  'customer_id', 'consignor_name', 'consignment_rate',
+  'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
   'sold_at', 'sold_price', 'sold_to_name', 'sold_to_customer_id',
   'qc_notes', 'last_qc_at', 'qc_interval_months',
   'cost_paid', 'cost_note',
@@ -241,7 +241,7 @@ async function deletePiece() {
 const FIELD_LABELS = {
   sale_status: 'Status', asking_price: 'Price', ownership: 'Ownership', on_website: 'On website',
   hold_for: 'Held for', nfs_reason: 'NFS reason', sold_price: 'Sold price', customer_id: 'Consignor',
-  cost_paid: 'Paid', created: 'Added',
+  cost_paid: 'Paid', created: 'Added', consignment_status: 'Consignment',
 };
 function eventText(e) {
   const label = FIELD_LABELS[e.field] || e.field;
@@ -250,6 +250,7 @@ function eventText(e) {
     if (['asking_price', 'sold_price', 'cost_paid'].includes(e.field)) return formatPrice(v);
     if (e.field === 'sale_status' || e.field === 'created') return meta.value?.sale_status_labels[v] || v;
     if (e.field === 'on_website') return v === 'true' ? 'yes' : 'no';
+    if (e.field === 'consignment_status') return meta.value?.consignment_status_labels[v] || v;
     if (e.field === 'customer_id') return `customer #${v}`;
     return v;
   };
@@ -297,6 +298,10 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <div class="row" style="margin-top: 8px">
               <span :class="['pill', pill.color]" :title="pill.title">{{ pill.label }}</span>
               <span v-if="item.ownership === 'consignment'" class="pill violet">Consignment</span>
+              <span
+                v-if="item.ownership === 'consignment' && item.consignment_status"
+                :class="['pill', item.consignment_status === 'payout_due' ? 'amber' : 'slate']"
+              >{{ meta?.consignment_status_labels[item.consignment_status] }}</span>
               <span v-if="item.on_website" class="pill green">On website</span>
               <strong v-if="item.asking_price !== null && item.sale_status !== 'sold'" style="font-size: 18px">
                 {{ formatPrice(item.asking_price) }}
@@ -450,6 +455,24 @@ watch(() => props.id, () => { loading.value = true; load(); });
               <div class="field-row">
                 <div class="field"><label>Name as written</label><input v-model="form.consignor_name" /></div>
                 <div class="field"><label>Commission %</label><input v-model="form.consignment_rate" inputmode="decimal" placeholder="25" /></div>
+              </div>
+              <!-- Marking a consignment sold moves this to "Payout due" on
+                   save (routes/inventory.js applyConsignmentRules), so the
+                   Consignments view always shows what's owed. -->
+              <div class="field-row">
+                <div class="field">
+                  <label>Deal status</label>
+                  <select v-model="form.consignment_status">
+                    <option value="">Not recorded</option>
+                    <option v-for="cs in meta?.consignment_statuses || []" :key="cs" :value="cs">
+                      {{ meta.consignment_status_labels[cs] }}
+                    </option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Terms</label>
+                  <input v-model="form.consignment_terms" placeholder="Services + 25% of sale" />
+                </div>
               </div>
             </template>
           </section>
