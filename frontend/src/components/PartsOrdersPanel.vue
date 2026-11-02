@@ -7,8 +7,9 @@
  *     replaced the old standalone /parts route (see NOTES.md).
  *   - DashboardView.vue's Parts/Supplies card, for whichever employees
  *     Settings -> Staff accounts has opted in (employees.show_parts_on_dashboard,
- *     migration 058) -- `allow-create="false"` there: view and "Mark ordered"
- *     only, no filter, no adding or editing, per that same product decision.
+ *     migration 058) -- `compact` there: no filter and no top "new order"
+ *     form, but rows are editable and each vendor box keeps its "+ Add",
+ *     same as the full view.
  *
  * Two states only: needed -> ordered, plus the day it was ordered
  * (migration 074, NOTES.md §2.102). Delivered/cancelled are gone from the
@@ -23,7 +24,9 @@ import api from '../api';
 import { formatYmd, shopDate } from '../dates';
 
 const props = defineProps({
-  allowCreate: { type: Boolean, default: true },
+  // Dashboard card: drops the filter and the top "new order" form (the card
+  // links to the full tab for that). Editing and per-vendor quick-add stay.
+  compact: { type: Boolean, default: false },
 });
 
 const OTHER_VENDOR = '__other__';
@@ -83,7 +86,7 @@ async function load() {
   // The compact (dashboard) view sends no status/archived params, meaning
   // "every non-archived order" -- the "what's outstanding" glance.
   const params = {};
-  if (props.allowCreate && filter.value !== 'all') params.status = filter.value;
+  if (!props.compact && filter.value !== 'all') params.status = filter.value;
   orders.value = await api.get('/parts', params);
 }
 
@@ -207,7 +210,8 @@ async function markOrdered(o) {
 }
 
 onMounted(async () => {
-  if (props.allowCreate) vendors.value = await api.get('/parts/vendors');
+  // Both views need the vendor list now -- the edit form's picker.
+  vendors.value = await api.get('/parts/vendors');
   await load();
 });
 
@@ -216,7 +220,7 @@ defineExpose({ load });
 
 <template>
   <div>
-    <div v-if="allowCreate" class="row" style="margin-bottom: 16px">
+    <div v-if="!compact" class="row" style="margin-bottom: 16px">
       <div class="seg">
         <button
           v-for="f in FILTERS" :key="f.key" type="button"
@@ -228,9 +232,9 @@ defineExpose({ load });
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
 
-    <form v-if="allowCreate" class="card" style="margin-bottom: 16px" @submit.prevent="create">
-      <div class="field-row" style="align-items: end">
-        <div>
+    <form v-if="!compact" class="card" style="margin-bottom: 16px" @submit.prevent="create">
+      <div class="form-line">
+        <div class="f">
           <label>Vendor</label>
           <select v-model="form.vendor_id">
             <option value="">— none —</option>
@@ -238,28 +242,28 @@ defineExpose({ load });
             <option :value="OTHER_VENDOR">Other…</option>
           </select>
         </div>
-        <div v-if="form.vendor_id === OTHER_VENDOR">
+        <div v-if="form.vendor_id === OTHER_VENDOR" class="f">
           <label>Vendor name *</label>
           <input v-model="form.vendor_other" required placeholder="New supplier's name" />
         </div>
-        <div style="flex: 2; min-width: 220px">
+        <div class="f wide">
           <label>Item *</label>
           <input v-model="form.item" required placeholder="3 packs #5 reeds" />
         </div>
-        <div>
+        <div class="f narrow">
           <label>Quantity</label>
           <input v-model="form.quantity" />
         </div>
-        <div style="flex: 2; min-width: 200px">
+        <div class="f wide">
           <label>Notes</label>
           <input v-model="form.notes" />
         </div>
-        <div><button class="primary" type="submit">Add</button></div>
+        <div class="f action"><button class="primary" type="submit">Add</button></div>
       </div>
     </form>
 
     <div v-if="!orders.length" class="empty">
-      <template v-if="!allowCreate">Nothing outstanding right now.</template>
+      <template v-if="compact">Nothing outstanding right now.</template>
       <template v-else-if="filter === 'all'">Nothing on the list.</template>
       <template v-else>Nothing {{ filter }} right now.</template>
     </div>
@@ -270,32 +274,32 @@ defineExpose({ load });
           <h2 style="margin: 0">{{ g.name }}</h2>
           <div class="spacer" />
           <button
-            v-if="allowCreate" class="small" type="button"
+            class="small" type="button"
             :title="`Add another item from ${g.name}`"
             @click="quickAddFor === g.key ? (quickAddFor = null) : openQuickAdd(g)"
           >{{ quickAddFor === g.key ? 'Done' : '+ Add' }}</button>
         </div>
 
         <form
-          v-if="quickAddFor === g.key" class="field-row quick-add"
+          v-if="quickAddFor === g.key" class="form-line quick-add"
           @submit.prevent="submitQuickAdd(g)" @keydown.esc="quickAddFor = null"
         >
-          <div style="grid-column: span 2">
+          <div class="f wide">
             <label>Item *</label>
             <input ref="quickItemInput" v-model="quick.item" required />
           </div>
-          <div>
+          <div class="f narrow">
             <label>Quantity</label>
             <input v-model="quick.quantity" />
           </div>
-          <div>
+          <div class="f wide">
             <label>Notes</label>
             <input v-model="quick.notes" />
           </div>
-          <div style="align-self: end"><button class="primary" type="submit">Add</button></div>
+          <div class="f action"><button class="primary" type="submit">Add</button></div>
         </form>
 
-        <div class="table-wrap">
+        <div class="table-wrap vendor-table">
           <table>
             <thead>
               <tr><th>Item</th><th>Qty</th><th>Notes</th><th>Ticket</th><th>Status</th><th /></tr>
@@ -326,15 +330,15 @@ defineExpose({ load });
                     <button v-if="o.status === 'needed'" class="small" @click="markOrdered(o)">
                       Mark ordered
                     </button>
-                    <button v-if="allowCreate" class="small" @click="startEdit(o)">Edit</button>
+                    <button class="small" style="margin-left: 6px" @click="startEdit(o)">Edit</button>
                   </td>
                 </tr>
 
                 <tr v-else class="editing">
                   <td colspan="6">
-                    <form @submit.prevent="saveEdit(o)" @keydown.esc="editingId = null">
-                      <div class="field-row">
-                        <div>
+                    <form class="edit-form" @submit.prevent="saveEdit(o)" @keydown.esc="editingId = null">
+                      <div class="form-line">
+                        <div class="f">
                           <label>Vendor</label>
                           <select v-model="edit.vendor_id">
                             <option value="">— none —</option>
@@ -349,30 +353,30 @@ defineExpose({ load });
                             <option :value="OTHER_VENDOR">Other…</option>
                           </select>
                         </div>
-                        <div v-if="edit.vendor_id === OTHER_VENDOR">
+                        <div v-if="edit.vendor_id === OTHER_VENDOR" class="f">
                           <label>Vendor name *</label>
                           <input v-model="edit.vendor_other" required />
                         </div>
-                        <div style="grid-column: span 2">
+                        <div class="f wide">
                           <label>Item *</label>
                           <input v-model="edit.item" required />
                         </div>
-                        <div>
+                        <div class="f narrow">
                           <label>Quantity</label>
                           <input v-model="edit.quantity" />
                         </div>
-                        <div>
+                        <div class="f wide">
                           <label>Notes</label>
                           <input v-model="edit.notes" />
                         </div>
-                        <div>
+                        <div class="f narrow">
                           <label>Status</label>
                           <select v-model="edit.status" @change="onEditStatusChange">
                             <option value="needed">needed</option>
                             <option value="ordered">ordered</option>
                           </select>
                         </div>
-                        <div v-if="edit.status === 'ordered'">
+                        <div v-if="edit.status === 'ordered'" class="f">
                           <label>Ordered on</label>
                           <input v-model="edit.ordered_at" type="date" />
                         </div>
@@ -399,6 +403,17 @@ defineExpose({ load });
 
 <style scoped>
 .seg { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+/* Inline forms wrap with flex rather than the global .field-row grid. That
+   grid's columns can shrink to 180px, and a field that needs more than its
+   column (a wide Item box, a date picker) spills over its neighbour instead
+   of wrapping. Flex items just move to the next line. */
+.form-line { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.form-line > .f { flex: 1 1 170px; min-width: 0; }
+.form-line > .f.wide { flex: 2 1 240px; }
+.form-line > .f.narrow { flex: 1 1 110px; }
+.form-line > .f.action { flex: 0 0 auto; }
+
 .quick-add {
   margin-bottom: 12px;
   padding: 10px;
@@ -406,4 +421,16 @@ defineExpose({ load });
   border-radius: 8px;
 }
 tr.editing > td { background: var(--surface-2); }
+
+/* On a narrow screen (or the dashboard card) the table is wider than its
+   box and scrolls sideways. Pin the edit form to the visible width of the
+   scroll box so it never opens half off-screen: the wrapper is a size
+   container, and the form is exactly its width (100cqw, minus the cell's
+   12px padding each side) and sticks to its left edge while the table
+   scrolls. */
+.vendor-table { container-type: inline-size; }
+.edit-form {
+  position: sticky; left: 12px;
+  width: calc(100cqw - 24px);
+}
 </style>

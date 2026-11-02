@@ -361,17 +361,17 @@ onMounted(async () => {
       </div>
 
       <!-- Settings -> Staff accounts' "Parts on dashboard" checkbox
-           (employees.show_parts_on_dashboard, migration 058) -- view and
-           "Mark ordered" only, same PartsOrdersPanel.vue the "+ New" page's
-           Parts/Supplies tab uses, just with allow-create off. Adding and
-           editing orders only ever happens from that tab. -->
+           (employees.show_parts_on_dashboard, migration 058) -- same
+           PartsOrdersPanel.vue the "+ New" page's Parts/Supplies tab uses, in
+           `compact` mode: no filter or top "new order" form, but rows are
+           editable and each vendor box has its "+ Add". -->
       <div v-if="auth.user.show_parts_on_dashboard" class="card" style="margin-bottom: 24px">
         <div class="row" style="margin-bottom: 12px">
           <h2 style="margin: 0">Parts / Supplies</h2>
           <div class="spacer" />
           <RouterLink to="/new?tab=parts" class="small">Add an order →</RouterLink>
         </div>
-        <PartsOrdersPanel :allow-create="false" />
+        <PartsOrdersPanel compact />
       </div>
 
       <div class="card" style="margin-bottom: 24px">

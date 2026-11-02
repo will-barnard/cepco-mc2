@@ -60,7 +60,7 @@ function selectTab(key) {
     <div class="folder-tab-panel">
       <NewTicketForm v-if="activeTab === 'ticket'" />
       <NewTaskPanel v-else-if="activeTab === 'task'" />
-      <PartsOrdersPanel v-else :allow-create="true" />
+      <PartsOrdersPanel v-else />
     </div>
   </div>
 </template>

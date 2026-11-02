@@ -4174,8 +4174,15 @@ in the body are written, `''`/`null` clears (the old `COALESCE` version
 couldn't clear a field, and switching to "Other…" left the old `vendor_id`
 behind). Going back to `needed` clears the date; going to `ordered` keeps
 the date sent, else the one it had, else today. Parts / Supplies rows have
-an Edit button (every field, plus Remove); the dashboard card stays
-view + "Mark ordered" only.
+an Edit button (every field, plus Remove). The dashboard card is editable
+too (`<PartsOrdersPanel compact>`, replacing the old `allow-create` prop):
+same Edit and per-vendor "+ Add", just no filter or top "new order" form.
+
+Inline forms here use a wrapping flex row (`.form-line`) instead of the
+global `.field-row` grid — the grid let wide fields overlap their
+neighbours. When the table scrolls sideways (phone, dashboard card), the
+edit form is pinned to the visible width of the scroll box so it never
+opens half off-screen.
 
 **Quick add per vendor.** Each vendor box on Parts / Supplies has a "+ Add"
 button top-right that opens an inline form already filed under that vendor
