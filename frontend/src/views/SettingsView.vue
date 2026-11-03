@@ -170,7 +170,8 @@ async function remove(row) {
 // `meta.value` nothing on the backend ever reads.
 const genericShopConfigRows = computed(
   () => (settings.data.shop_config || []).filter(
-    (row) => row.key === 'labor_rate' || row.key === 'shopify_default_category',
+    (row) => row.key === 'labor_rate' || row.key === 'shopify_default_category'
+      || row.key === 'default_ticket_status',
   ),
 );
 
@@ -202,6 +203,21 @@ async function setShopifyCategory(row, categoryKey) {
   try {
     await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, value: categoryKey } });
     notice.value = 'Incoming Shopify orders will now be filed under this category.';
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
+// Which status a new ticket starts at (migration 079, Settings -> Shop
+// configuration). A category's own override (meta.default_status_key) and
+// shipping tickets' In Progress still win over this.
+async function setDefaultTicketStatus(row, statusKey) {
+  error.value = '';
+  notice.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, { meta: { ...row.meta, value: statusKey } });
+    notice.value = 'New tickets will now start at this status.';
     await refresh();
   } catch (err) {
     error.value = err.message;
@@ -653,6 +669,15 @@ onMounted(() => {
                 :key="cat.key" :value="cat.key"
               >
                 {{ cat.label }}
+              </option>
+            </select>
+            <select
+              v-else-if="row.key === 'default_ticket_status'"
+              :value="row.meta.value"
+              @change="setDefaultTicketStatus(row, $event.target.value)"
+            >
+              <option v-for="st in settings.active('ticket_status')" :key="st.key" :value="st.key">
+                {{ st.label }}
               </option>
             </select>
             <input

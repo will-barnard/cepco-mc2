@@ -77,6 +77,13 @@ export const useSettings = defineStore('settings', {
     inventoryAudit: (s) => (s.data.shop_config || []).find((r) => r.key === 'inventory_audit') || null,
     inventoryAuditActive: (s) => !!(s.data.shop_config || [])
       .find((r) => r.key === 'inventory_audit')?.meta?.active,
+    // Settings -> Shop configuration -> "New tickets start at" (migration
+    // 079): the status key a new ticket starts at when its category doesn't
+    // name its own. '' = no setting, i.e. fall back to the first status.
+    defaultTicketStatusKey: (s) => {
+      const v = (s.data.shop_config || []).find((r) => r.key === 'default_ticket_status')?.meta?.value;
+      return typeof v === 'string' ? v : '';
+    },
     priorities: (s) => s.data.priority_tier || [],
     techLevels: (s) => s.data.tech_level || [],
     active: (s) => (category) => (s.data[category] || []).filter((r) => !r.retired),

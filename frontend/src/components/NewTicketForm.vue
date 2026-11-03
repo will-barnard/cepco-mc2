@@ -192,13 +192,20 @@ const defaultStatusKey = computed(() => {
   const preferredKey = category?.meta?.default_status_key;
   if (preferredKey && statusOptions.value.some((s) => s.key === preferredKey)) return preferredKey;
   if (isShippingCategory.value && statusOptions.value.some((s) => s.key === 'in_progress')) return 'in_progress';
+  // Settings -> Shop configuration -> "New tickets start at" (migration 079),
+  // e.g. Not Started rather than Reservation, which merely sorts first.
+  const shopDefault = settings.defaultTicketStatusKey;
+  if (shopDefault && statusOptions.value.some((s) => s.key === shopDefault)) return shopDefault;
   return statusOptions.value[0]?.key || '';
 });
-// If the category changes out from under the currently-picked status,
-// re-home it to that combination's default rather than silently
-// submitting a status the backend will reject.
+// True once someone picks a status by hand, so a later category change
+// doesn't undo their choice (it still re-homes an invalid one, below).
+const statusTouched = ref(false);
+// If the category changes, move the status to that combination's default --
+// unless the status was picked by hand and is still valid -- rather than
+// leaving it stranded or silently submitting one the backend will reject.
 watch(() => form.value.category_key, () => {
-  if (!statusOptions.value.some((s) => s.key === form.value.status_key)) {
+  if (!statusTouched.value || !statusOptions.value.some((s) => s.key === form.value.status_key)) {
     form.value.status_key = defaultStatusKey.value;
   }
 });
@@ -446,22 +453,27 @@ async function applyTicketDraft(v) {
   form.value.technician_ids = v.form.technician_ids;
   form.value.title = v.form.title;
   form.value.ticket_name = v.form.ticket_name;
+  // The category watcher above may have reset the status to its default;
+  // a restored draft keeps whatever the person had left it on.
+  form.value.status_key = v.form.status_key;
+  statusTouched.value = true;
   siblingInstruments.value = v.siblingInstruments;
 }
 
 onMounted(async () => {
   defaultTechsByFamily.value = await api.get('/instruments/default-technicians');
   vendors.value = await api.get('/parts/vendors');
-  form.value.status_key = settings.statuses.find((s) => !s.retired)?.key || '';
   // Prefer the historical default if it's still active; otherwise fall
-  // back to whatever sorts first, same "don't assume a key survives"
-  // reasoning as status_key just above (N4a).
+  // back to whatever sorts first -- "don't assume a key survives" (N4a).
   const activeCategories = settings.active('ticket_category');
   form.value.category_key = activeCategories.find((c) => c.key === 'repairs_restoration')?.key
     || activeCategories[0]?.key || '';
   const activePriorities = settings.active('priority_tier');
   form.value.priority_key = activePriorities.find((p) => p.key === 'standard_priority')?.key
     || activePriorities[0]?.key || '';
+  // Needs the category above: the starting status depends on it (shop-wide
+  // default, category override, shipping).
+  form.value.status_key = defaultStatusKey.value;
   await nextTick();
   ticketDraft.start();
 });
@@ -767,7 +779,7 @@ async function submit() {
         </div>
         <div class="field">
           <label>Status</label>
-          <select v-model="form.status_key">
+          <select v-model="form.status_key" @change="statusTouched = true">
             <option v-for="s in statusOptions" :key="s.key" :value="s.key">
               {{ s.label }}
             </option>

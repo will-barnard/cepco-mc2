@@ -152,7 +152,11 @@ async function resolveStatusForCategory(key, categoryKey, isShipping = false) {
  * Daily To-Do's is. Its own auto-created task (insertTicketRow's
  * is_shipping branch) would otherwise sit on 'not_started' — a status
  * that's valid for a shipping ticket but doesn't unlock tasks — same
- * "created but invisible" gap the Daily To-Do fix above closes. */
+ * "created but invisible" gap the Daily To-Do fix above closes.
+ *
+ * Below both of those sits the shop-wide "New tickets start at" setting
+ * (shop_config 'default_ticket_status', migration 079) -- most jobs start at
+ * Not Started even though Reservation sorts first. */
 async function defaultStatusForCategory(categoryKey, isShipping = false) {
   const rows = await listCategory('ticket_status');
 
@@ -175,6 +179,17 @@ async function defaultStatusForCategory(categoryKey, isShipping = false) {
     const inProgress = rows.find((r) => r.key === 'in_progress');
     if (inProgress && !inProgress.retired && statusAppliesToCategory(inProgress, categoryKey, isShipping)) {
       return inProgress;
+    }
+  }
+
+  // Shop-wide "New tickets start at" (migration 079, Settings -> Shop
+  // configuration) -- same "ignore it if it doesn't apply" rule as the
+  // category override above.
+  const shopDefaultKey = await shopConfigString('default_ticket_status', null);
+  if (shopDefaultKey) {
+    const shopDefault = rows.find((r) => r.key === shopDefaultKey);
+    if (shopDefault && !shopDefault.retired && statusAppliesToCategory(shopDefault, categoryKey, isShipping)) {
+      return shopDefault;
     }
   }
 
@@ -283,6 +298,23 @@ async function validateQueueSplitView(meta) {
 }
 
 /**
+ * Migration 079: shop_config 'default_ticket_status' -- meta.value is the
+ * ticket_status key a new ticket starts at. Must name a real, non-retired
+ * status (unlike the split view, a retired pick would just be silently
+ * ignored at ticket creation, so better to refuse it here).
+ */
+async function validateDefaultTicketStatus(meta) {
+  const value = meta && meta.value;
+  if (typeof value !== 'string' || !value) throw badRequest('Pick a status for new tickets to start at');
+  const { rows } = await query(
+    "SELECT retired FROM settings WHERE category = 'ticket_status' AND key = $1",
+    [value],
+  );
+  if (!rows[0]) throw badRequest(`Unknown ticket status: ${value}`);
+  if (rows[0].retired) throw badRequest('That status is retired -- pick an active one');
+}
+
+/**
  * Queue sections (migration 065): ticket statuses whose meta.queue_group
  * matches share one queue section on the Queue page and dashboard. Stored
  * trimmed + lowercased so "Waiting" and "waiting " are the same section,
@@ -342,6 +374,9 @@ async function update(id, {
   if (meta !== undefined) await validateParentKey(current.category, current.key, meta);
   if (meta !== undefined && current.category === 'shop_config' && current.key === 'queue_split_view') {
     await validateQueueSplitView(meta);
+  }
+  if (meta !== undefined && current.category === 'shop_config' && current.key === 'default_ticket_status') {
+    await validateDefaultTicketStatus(meta);
   }
 
   // Joining a status to a queue section (or moving it to another one) means

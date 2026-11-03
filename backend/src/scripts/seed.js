@@ -125,6 +125,11 @@ const SETTINGS = [
   ['shop_config', 'shopify_default_category', 'Default category for Shopify orders', 20,
     { value: 'orders_shipping' }],
 
+  // Status a new ticket starts at when its category doesn't name one
+  // (migration 079). Admin-editable from Settings -> Shop configuration.
+  ['shop_config', 'default_ticket_status', 'New tickets start at', 80,
+    { value: 'not_started' }],
+
   // Ceppys (fictional staff-recognition award) weekly digest schedule —
   // admin-configured from the Ceppys page's "Configure" panel, read by
   // services/ceppyScheduler.js. day_of_week follows JS's Date#getDay()
