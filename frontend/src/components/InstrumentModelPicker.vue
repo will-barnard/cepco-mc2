@@ -50,11 +50,37 @@ const levels = computed(() => {
   return out;
 });
 
-async function loadFamily() {
+// The 'other' brand is the catch-all family (see backend instruments.js
+// FAMILIES) and has no model tree, so an empty dropdown is useless there --
+// start on the free-text box instead. Same fallback for any family whose
+// tree comes back empty. `initial` is the first run on mount: a value that
+// already exists (editing, or a restored draft) is kept as the text rather
+// than cleared; after a brand change the old model no longer applies.
+const NO_MODELS_FAMILY = 'other';
+
+function defaultToManual(initial) {
+  if (manual.value) return;
+  manual.value = true;
+  path.value = [];
+  if (initial) {
+    manualText.value = props.modelValue || '';
+  } else {
+    manualText.value = '';
+    emit('update:modelValue', '');
+  }
+}
+
+async function loadFamily(family, oldFamily) {
+  const initial = oldFamily === undefined;
   nodes.value = [];
   path.value = [];
-  if (!props.family) return;
-  nodes.value = await api.get(`/instrument-models?family=${encodeURIComponent(props.family)}`);
+  if (!initial) { manual.value = false; manualText.value = ''; }
+  if (!family) return;
+  if (family === NO_MODELS_FAMILY) defaultToManual(initial);
+  const loaded = await api.get(`/instrument-models?family=${encodeURIComponent(family)}`);
+  if (props.family !== family) return; // brand changed again while loading
+  nodes.value = loaded;
+  if (!loaded.length) defaultToManual(initial);
 }
 
 function nameChain() {
@@ -122,8 +148,9 @@ watch([() => props.modelValue, nodes], () => {
         <option value="">{{ depth === 0 ? 'Choose a model…' : 'Choose…' }}</option>
         <option v-for="n in options" :key="n.id" :value="n.id">{{ n.name }}</option>
       </select>
-      <label class="small">
-        <input type="checkbox" :checked="manual" @change="toggleManual($event.target.checked)" /> Type it in instead
+      <label class="checkbox small manual-toggle">
+        <input type="checkbox" :checked="manual" @change="toggleManual($event.target.checked)" />
+        <span>Type it in instead</span>
       </label>
       <input
         v-if="manual" v-model="manualText"
@@ -136,4 +163,11 @@ watch([() => props.modelValue, nodes], () => {
 <style scoped>
 .model-picker { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
 .model-picker select, .model-picker input[type='text'], .model-picker input:not([type]) { width: 100%; }
+/* The global `input` rule (full width, 40px tall) would otherwise stretch
+   the checkbox; keep it a normal-sized box beside its label. */
+.manual-toggle { margin: 0; gap: 6px; cursor: pointer; }
+.manual-toggle input[type='checkbox'] {
+  width: 16px; height: 16px; min-height: 16px; padding: 0; margin: 0;
+  flex: none; accent-color: var(--accent); cursor: pointer;
+}
 </style>

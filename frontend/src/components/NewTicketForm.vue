@@ -999,11 +999,13 @@ async function submit() {
            picking nothing creates no order at all. -->
       <div class="field">
         <button
-          type="button" class="disclosure-toggle"
+          type="button" class="disclosure-toggle boxed"
           :class="{ open: vendorOrdersOpen }" :aria-expanded="vendorOrdersOpen ? 'true' : 'false'"
           @click="vendorOrdersOpen = !vendorOrdersOpen"
         >
-          <span class="disclosure-caret">▸</span> Vendor Orders
+          <span class="disclosure-caret">▸</span>
+          <span>Vendor Orders</span>
+          <span class="disclosure-hint">Optional — order supplies for this job</span>
         </button>
         <div v-if="vendorOrdersOpen" class="card tight" style="margin-top: 10px">
           <p class="muted small" style="margin-top: 0">

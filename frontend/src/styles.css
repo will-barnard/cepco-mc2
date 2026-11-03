@@ -615,6 +615,18 @@ tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
 }
 .disclosure-toggle.open .disclosure-caret { transform: rotate(90deg); }
 
+/* .boxed -- a full-width, bordered version for toggles that need to read as
+   a button rather than a text link (NewTicketForm.vue's Vendor Orders). */
+.disclosure-toggle.boxed {
+  display: flex; width: 100%; padding: 11px 14px; min-height: 44px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.disclosure-toggle.boxed:hover, .disclosure-toggle.boxed.open {
+  background: #2c313b; border-color: var(--accent); color: var(--accent);
+}
+.disclosure-toggle.boxed .disclosure-caret { color: var(--accent); }
+.disclosure-hint { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--text-dim); text-align: right; }
+
 /* --- folder tabs (NewView.vue's "+ New" page) ------------------------------
    Three tabs -- New Ticket / New Task / Parts & Supplies -- styled like
    manila-folder tabs sitting on top of the panel below them: the active
