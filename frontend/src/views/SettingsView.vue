@@ -446,6 +446,20 @@ async function toggleHighlightTasks(row) {
   }
 }
 
+// Per-priority "Queue flag" toggle (migration 080): a tag beside the title
+// on the Queue page, like Lite's -- see stores.js's priorityFlagged.
+async function toggleQueueFlag(row) {
+  error.value = '';
+  try {
+    await api.patch(`/settings/${row.id}`, {
+      meta: { ...row.meta, queue_flag: !row.meta.queue_flag },
+    });
+    await refresh();
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 // Status color picker (ticket_status and vendor_status rows): stores the
 // color's name in meta.color, which every pill / row highlight reads
 // (stores.js's colorFor, statusColors.js for the palette).
@@ -726,7 +740,8 @@ onMounted(() => {
         <p class="muted small" style="margin-top: -6px">
           Statuses listed here move out of the Queue page's main list into a right-hand column,
           top to bottom in this order. Everything else stays on the left in workflow order.
-          On phones the right column shows first. Leave it empty for a single list.
+          On phones the right column shows first. Leave it empty for a single list. Only applies
+          when the Queue is sorted by Status — Date and Priority are one flat list.
         </p>
         <p v-if="!splitViewRow" class="muted small">
           This setting hasn't been created yet — it arrives with migration 063.
@@ -792,6 +807,7 @@ onMounted(() => {
                   title="Statuses with the same name share one box on the Queue, ordered together"
                 >Queue section</th>
                 <th v-if="category === 'priority_tier'">Highlight in tasks</th>
+                <th v-if="category === 'priority_tier'" title="Show this priority as a tag beside the ticket title on the Queue">Queue flag</th>
                 <th v-if="category === 'ticket_status' || category === 'vendor_status'">Color</th>
                 <th>Order</th><th>State</th><th />
               </tr>
@@ -927,7 +943,7 @@ onMounted(() => {
                 <td v-if="category === 'ticket_status'">
                   <input
                     :value="row.meta.queue_group || ''" placeholder="Own box" style="width: 110px"
-                    title="Statuses with the same name share one box on the Queue, ordered together. Joining a section re-sorts it oldest Date of Order/Queue first."
+                    title="Statuses with the same name share one box on the Queue (when sorted by Status), ordered together oldest Date of Order/Queue first."
                     @change="saveQueueGroup(row, $event.target.value)"
                   />
                 </td>
@@ -937,6 +953,15 @@ onMounted(() => {
                     <input
                       type="checkbox" :checked="!!row.meta.highlight_in_tasks"
                       @change="toggleHighlightTasks(row)"
+                    />
+                  </label>
+                </td>
+
+                <td v-if="category === 'priority_tier'">
+                  <label class="checkbox" title="Show this priority as a tag beside the ticket title on the Queue">
+                    <input
+                      type="checkbox" :checked="!!row.meta.queue_flag"
+                      @change="toggleQueueFlag(row)"
                     />
                   </label>
                 </td>

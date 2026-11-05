@@ -255,12 +255,24 @@ router.get('/', asyncHandler(async (req, res) => {
   // sort=date (Q3) orders by drop-off date — when the instrument physically
   // landed in the shop, not due_date or created_at — with the usual
   // updated_at tiebreak for rows sharing (or missing) a drop-off date.
+  //
+  // Queue page sort modes (Nov 2026): the Queue always sends one of
+  // date / status / priority now, and date is the tiebreak inside the other
+  // two -- status sections are oldest-first *within* each section (it
+  // replaced the drag-and-drop position there; the shop dropped manual
+  // reordering), and priority tiers likewise. Within a shared section
+  // (Reservation + Not Started) the date wins over which member status a
+  // ticket has: the box is one list. The positioned-queue branches below are
+  // only reached by callers that send no ?sort (the dashboard).
+  const BY_DATE = 't.drop_off_date NULLS LAST, t.updated_at DESC';
   let orderBy = 'pr.sort_order NULLS LAST, t.updated_at DESC';
   let extraJoin = '';
   if (req.query.sort === 'status') {
-    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, st.sort_order DESC NULLS LAST, t.updated_at DESC`;
+    orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, ${BY_DATE}`;
   } else if (req.query.sort === 'date') {
-    orderBy = 't.drop_off_date NULLS LAST, t.updated_at DESC';
+    orderBy = BY_DATE;
+  } else if (req.query.sort === 'priority') {
+    orderBy = `pr.sort_order NULLS LAST, ${BY_DATE}`;
   } else if (req.query.category && !req.query.technician_id) {
     orderBy = `${SECTION_RANK} DESC NULLS LAST, ${SECTION_KEY}, t.category_queue_position NULLS LAST, t.updated_at DESC`;
   } else if (technicianParamIdx && !req.query.category) {

@@ -84,10 +84,10 @@ const form = ref({
   subcategory_key: '',
   subcategory_other_text: '',
   priority_key: '',
-  // Migration 063 -- checkbox beside Priority; the Queue's "Fast Track"
+  // Migration 063 -- checkbox beside Priority; the Queue's "Lite"
   // quick filter. Carried onto sibling tickets like priority is.
   fast_track: false,
-  // Migration 070 -- checkbox beside Fast Track; the Queue's "Custom Shop"
+  // Migration 070 -- checkbox beside Lite; the Queue's "Custom Shop"
   // quick filter. Carried onto sibling tickets the same way.
   custom_shop: false,
   status_key: '',
@@ -769,7 +769,7 @@ async function submit() {
             </select>
             <label class="checkbox nowrap" style="margin: 0">
               <input v-model="form.fast_track" type="checkbox" />
-              <span>Fast Track</span>
+              <span>Lite</span>
             </label>
             <label class="checkbox nowrap" style="margin: 0">
               <input v-model="form.custom_shop" type="checkbox" />

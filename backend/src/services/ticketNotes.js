@@ -14,7 +14,8 @@
  *                are skipped -- they'd bury the real history in Xero.
  *   Xero -> MC2  The contact's Xero history is read live when a ticket or
  *                customer page asks for it (contactHistory below) and shown
- *                read-only. Nothing is copied into MC2's own tables: Xero
+ *                read-only -- on a ticket, notes typed in Xero are merged
+ *                into the ticket's own notes list. Nothing is copied into MC2's own tables: Xero
  *                stays the owner of its history, and there's no second
  *                copy to drift or to de-duplicate on the next sync.
  *
@@ -144,22 +145,27 @@ function parseXeroDate(rec) {
   return null;
 }
 
-// A ticket page can be reloaded a lot; a minute's cache per contact keeps
-// that from turning into a Xero call per reload (Xero rate-limits at 60
-// calls/minute per org).
-const HISTORY_TTL_MS = 60 * 1000;
+// The ticket page loads this automatically now (Nov 2026 -- the old
+// collapsed "History from Xero" section with its Refresh button is gone),
+// so every ticket view for a linked customer asks for it. Xero allows 60
+// calls/minute and 5,000/day per org; three things keep us well inside that:
+//
+//  1. A per-contact cache. Xero notes are immutable and append-only -- an
+//     entry never changes once written -- so a cached copy is never *wrong*,
+//     only possibly missing the newest note. Five minutes is the longest a
+//     note typed in Xero takes to appear on a ticket.
+//  2. In-flight sharing: several tabs/kiosks opening the same customer at
+//     once make one Xero call, not one each.
+//  3. Stale-on-error: if Xero rate-limits us (429) or is down and we have
+//     *any* earlier copy, that's served (flagged `stale`) instead of an
+//     error. Fine precisely because entries never change.
+//
+// The cache is in-process memory; a restart just costs one call per contact.
+const HISTORY_TTL_MS = 5 * 60 * 1000;
 const historyCache = new Map(); // contactId -> { at, records }
+const inFlight = new Map(); // contactId -> Promise<records>
 
-/**
- * A Xero contact's History & Notes, newest first, minus the notes MC2
- * itself posted there (those are already on the ticket). `kind` is
- * 'note' for something a person typed into Xero, 'activity' for Xero's
- * own audit entries (created, edited, invoice sent...).
- */
-async function contactHistory(contactId) {
-  const hit = historyCache.get(contactId);
-  if (hit && Date.now() - hit.at < HISTORY_TTL_MS) return hit.records;
-
+async function fetchHistory(contactId) {
   const raw = await xero.getContactHistory(contactId);
   const records = raw
     .filter((r) => !String(r.Details || '').startsWith(MC2_PREFIX))
@@ -173,6 +179,30 @@ async function contactHistory(contactId) {
     .sort((a, b) => String(b.at).localeCompare(String(a.at)));
   historyCache.set(contactId, { at: Date.now(), records });
   return records;
+}
+
+/**
+ * A Xero contact's History & Notes, newest first, minus the notes MC2
+ * itself posted there (those are already on the ticket). `kind` is
+ * 'note' for something a person typed into Xero, 'activity' for Xero's
+ * own audit entries (created, edited, invoice sent...).
+ *
+ * Returns { records, stale } -- `stale` is true when Xero couldn't be
+ * reached and an older cached copy was served instead.
+ */
+async function contactHistory(contactId) {
+  const hit = historyCache.get(contactId);
+  if (hit && Date.now() - hit.at < HISTORY_TTL_MS) return { records: hit.records, stale: false };
+
+  if (!inFlight.has(contactId)) {
+    inFlight.set(contactId, fetchHistory(contactId).finally(() => inFlight.delete(contactId)));
+  }
+  try {
+    return { records: await inFlight.get(contactId), stale: false };
+  } catch (err) {
+    if (hit) return { records: hit.records, stale: true };
+    throw err;
+  }
 }
 
 module.exports = {

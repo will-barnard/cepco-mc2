@@ -245,6 +245,26 @@ export const useSettings = defineStore('settings', {
     highlightTasksForPriority: (s) => (priorityKey) => (
       !!(s.data.priority_tier || []).find((r) => r.key === priorityKey)?.meta?.highlight_in_tasks
     ),
+    // Queue page priority flag (migration 080, Settings -> Priority tiers'
+    // "Queue flag" column): a tag beside the title, like Lite's.
+    priorityFlagged: (s) => (priorityKey) => (
+      !!(s.data.priority_tier || []).find((r) => r.key === priorityKey)?.meta?.queue_flag
+    ),
+    // Queue's lightning-bolt priority column, the way mail apps show
+    // importance with "!": the lowest active tier gets one bolt and the
+    // highest gets as many as there are active tiers. Tiers sort lowest
+    // sort_order = most urgent, so a tier's bolts = how many active tiers
+    // sit at or below it. Counting this way (rather than by index) also
+    // gives a sensible number for a retired tier still on old tickets.
+    // 0 = unknown/blank priority, which renders nothing.
+    priorityBoltMax: (s) => (s.data.priority_tier || []).filter((r) => !r.retired).length,
+    priorityBolts: (s) => (priorityKey) => {
+      const rows = s.data.priority_tier || [];
+      const tier = rows.find((r) => r.key === priorityKey);
+      if (!tier) return 0;
+      const n = rows.filter((r) => !r.retired && r.sort_order >= tier.sort_order).length;
+      return Math.max(n, 1);
+    },
   },
   actions: {
     async load(force = false) {

@@ -5,16 +5,29 @@
  * stamped with who and when, like Xero's own History & Notes; when the
  * ticket's customer is linked to Xero it's also posted to that contact's
  * history there, and the little status beside each note says whether that
- * happened. Below the notes, the customer's history *from* Xero (notes
- * typed in Xero, invoices sent, etc.) is shown read-only.
+ * happened.
+ *
+ * Notes typed directly in Xero are merged into the same list, tagged
+ * "Xero" (Nov 2026 -- replaced the separate collapsed "History from Xero"
+ * section with its Show-activity toggle and Refresh button). Xero notes
+ * are immutable, so there's nothing to edit or reconcile: they're fetched
+ * automatically when the ticket opens (cached server-side for five
+ * minutes, see services/ticketNotes.js's contactHistory, which is what
+ * keeps this inside Xero's rate limits) and simply interleaved by date.
+ * Xero's own audit entries ("Contact edited", "Invoice sent") are left out
+ * -- they're still on the Customers page.
+ *
+ * Xero history is per *contact*, so for a repeat customer it reaches back
+ * past this job. Notes from before this ticket existed (earlier of created
+ * and Date of Order/Queue) are tucked behind one "earlier notes" link
+ * rather than burying this ticket's own notes.
  *
  * List comes from the ticket itself (`ticket.notes_log`, from GET
  * /tickets/:id); a post emits `changed` so the parent re-fetches, same as
  * TicketLinks.vue.
  */
-import { ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import api from '../api';
-import XeroHistory from './XeroHistory.vue';
 import DraftNotice from './DraftNotice.vue';
 import { useDraft } from '../drafts';
 
@@ -72,6 +85,65 @@ async function retry(note) {
   }
 }
 
+// --- Notes typed in Xero ----------------------------------------------------
+
+const xeroNotes = ref([]);
+const xeroLoading = ref(false);
+const xeroError = ref('');
+const showEarlierXero = ref(false);
+
+async function loadXeroNotes() {
+  xeroNotes.value = [];
+  xeroError.value = '';
+  showEarlierXero.value = false;
+  const { customer_id: customerId, customer_xero_contact_id: contactId } = props.ticket;
+  if (!customerId || !contactId) return;
+  xeroLoading.value = true;
+  try {
+    const res = await api.get(`/customers/${customerId}/xero-history`);
+    // Bail if the ticket's customer changed while this was in flight.
+    if (props.ticket.customer_id !== customerId) return;
+    xeroNotes.value = (res.records || []).filter((r) => r.kind === 'note' && r.at);
+    if (res.error) xeroError.value = `Couldn't load notes from Xero: ${res.error}`;
+  } catch (err) {
+    xeroError.value = `Couldn't load notes from Xero: ${err.message}`;
+  } finally {
+    xeroLoading.value = false;
+  }
+}
+
+// Keyed on ticket + linked contact, not the whole ticket object: the parent
+// re-fetches the ticket after every edit, and that shouldn't re-ask Xero.
+watch(
+  () => `${props.ticket.id}:${props.ticket.customer_id}:${props.ticket.customer_xero_contact_id}`,
+  loadXeroNotes,
+  { immediate: true },
+);
+
+// When this job started, as far as notes are concerned: the earlier of the
+// ticket's creation and its Date of Order/Queue (imported tickets were
+// "created" on import day but came in long before).
+const ticketStart = computed(() => {
+  const created = props.ticket.created_at ? new Date(props.ticket.created_at).getTime() : Infinity;
+  const dropOff = props.ticket.drop_off_date ? new Date(`${props.ticket.drop_off_date}T00:00:00`).getTime() : Infinity;
+  const start = Math.min(created, dropOff);
+  return Number.isFinite(start) ? start : -Infinity;
+});
+
+const earlierXeroCount = computed(
+  () => xeroNotes.value.filter((r) => new Date(r.at).getTime() < ticketStart.value).length,
+);
+
+// One timeline, oldest first (same order as notes_log). Each entry carries
+// `source` so the template can tell an MC2 note from a Xero one.
+const timeline = computed(() => {
+  const mine = (props.ticket.notes_log || []).map((n) => ({ source: 'mc2', key: `mc2-${n.id}`, at: n.created_at, note: n }));
+  const fromXero = xeroNotes.value
+    .filter((r) => showEarlierXero.value || new Date(r.at).getTime() >= ticketStart.value)
+    .map((r, i) => ({ source: 'xero', key: `xero-${r.at}-${i}`, at: r.at, note: r }));
+  return [...mine, ...fromXero].sort((a, b) => new Date(a.at) - new Date(b.at));
+});
+
 const when = (ts) => new Date(ts).toLocaleString([], {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
 });
@@ -96,29 +168,49 @@ function xeroBadge(note) {
   <div class="field ticket-notes">
     <label>Notes &amp; parts</label>
 
-    <ul v-if="ticket.notes_log?.length" class="ticket-notes-list">
-      <li v-for="n in ticket.notes_log" :key="n.id">
-        <div class="row ticket-note-meta">
-          <strong class="small">{{ n.created_by_name || 'MC2' }}</strong>
-          <span class="muted small">{{ when(n.created_at) }}</span>
-          <span v-if="n.legacy" class="muted small" title="Carried over from the old notes box, which didn't keep dates">
-            · from the old notes box
-          </span>
-          <div class="spacer" />
-          <template v-if="xeroBadge(n)">
-            <span :class="['pill', xeroBadge(n).cls]" :title="xeroBadge(n).title">{{ xeroBadge(n).text }}</span>
-            <button
-              v-if="n.xero_status === 'failed'" type="button" class="link small"
-              :disabled="retrying === n.id" @click="retry(n)"
-            >
-              {{ retrying === n.id ? 'Retrying…' : 'Retry' }}
-            </button>
-          </template>
-        </div>
-        <div class="ticket-note-body">{{ n.body }}</div>
+    <button
+      v-if="earlierXeroCount && !showEarlierXero" type="button" class="link small"
+      style="margin: 2px 0 4px" @click="showEarlierXero = true"
+    >
+      Show {{ earlierXeroCount }} earlier Xero {{ earlierXeroCount === 1 ? 'note' : 'notes' }} (before this ticket)
+    </button>
+
+    <ul v-if="timeline.length" class="ticket-notes-list">
+      <li v-for="item in timeline" :key="item.key">
+        <template v-if="item.source === 'mc2'">
+          <div class="row ticket-note-meta">
+            <strong class="small">{{ item.note.created_by_name || 'MC2' }}</strong>
+            <span class="muted small">{{ when(item.note.created_at) }}</span>
+            <span v-if="item.note.legacy" class="muted small" title="Carried over from the old notes box, which didn't keep dates">
+              · from the old notes box
+            </span>
+            <div class="spacer" />
+            <template v-if="xeroBadge(item.note)">
+              <span :class="['pill', xeroBadge(item.note).cls]" :title="xeroBadge(item.note).title">{{ xeroBadge(item.note).text }}</span>
+              <button
+                v-if="item.note.xero_status === 'failed'" type="button" class="link small"
+                :disabled="retrying === item.note.id" @click="retry(item.note)"
+              >
+                {{ retrying === item.note.id ? 'Retrying…' : 'Retry' }}
+              </button>
+            </template>
+          </div>
+          <div class="ticket-note-body">{{ item.note.body }}</div>
+        </template>
+        <template v-else>
+          <div class="row ticket-note-meta">
+            <strong class="small">{{ item.note.user || 'Xero' }}</strong>
+            <span class="muted small">{{ when(item.note.at) }}</span>
+            <div class="spacer" />
+            <span class="pill blue" title="Typed into this customer's History &amp; Notes in Xero">From Xero</span>
+          </div>
+          <div class="ticket-note-body">{{ item.note.details }}</div>
+        </template>
       </li>
     </ul>
-    <p v-else class="muted small" style="margin: 4px 0 8px">No notes yet.</p>
+    <p v-else-if="!xeroLoading" class="muted small" style="margin: 4px 0 8px">No notes yet.</p>
+    <p v-if="xeroLoading" class="muted small" style="margin: 0 0 8px">Checking Xero for notes…</p>
+    <p v-if="xeroError" class="muted small" style="margin: 0 0 8px; color: var(--amber)">{{ xeroError }}</p>
 
     <form class="ticket-note-compose" @submit.prevent="post">
       <DraftNotice :draft="noteDraft" />
@@ -138,11 +230,6 @@ function xeroBadge(note) {
     </form>
 
     <div v-if="error" class="alert" style="margin-top: 8px">{{ error }}</div>
-
-    <XeroHistory
-      v-if="ticket.customer_id && ticket.customer_xero_contact_id"
-      :customer-id="ticket.customer_id" collapsible style="margin-top: 14px"
-    />
   </div>
 </template>
 

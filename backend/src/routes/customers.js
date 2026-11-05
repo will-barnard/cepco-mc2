@@ -183,7 +183,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 }));
 
 // Xero's own History & Notes for this customer's linked contact -- read
-// live, never stored here (see services/ticketNotes.js's contactHistory).
+// live (short in-memory cache), never stored in the DB -- see
+// services/ticketNotes.js's contactHistory.
 // 200 with `linked: false` rather than a 404 for an unlinked customer, so
 // the ticket page can simply not show the section.
 router.get('/:id/xero-history', asyncHandler(async (req, res) => {
@@ -194,10 +195,14 @@ router.get('/:id/xero-history', asyncHandler(async (req, res) => {
     return;
   }
   try {
-    res.json({ linked: true, records: await contactHistory(rows[0].xero_contact_id) });
+    const { records, stale } = await contactHistory(rows[0].xero_contact_id);
+    res.json({ linked: true, records, stale });
   } catch (err) {
     // Xero being unreachable shouldn't break the page this is embedded in.
-    res.json({ linked: true, records: [], error: err.message });
+    // Only reached with nothing cached for this contact (contactHistory
+    // serves a stale copy otherwise).
+    const error = err.status === 429 ? 'Xero is rate-limiting us — notes from Xero will show on the next load.' : err.message;
+    res.json({ linked: true, records: [], error });
   }
 }));
 

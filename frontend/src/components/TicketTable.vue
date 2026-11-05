@@ -5,6 +5,7 @@ import { useSettings } from '../stores';
 import { titleWithoutCustomer } from '../ticketNaming';
 import { progressOf, progressStyle } from '../progress';
 import { formatYmd } from '../dates';
+import PriorityBolts from './PriorityBolts.vue';
 
 const props = defineProps({
   tickets: { type: Array, required: true },
@@ -28,7 +29,8 @@ const props = defineProps({
   // titleWithoutCustomer) right after, and column widths are fixed so
   // several of these tables stacked in separate status boxes line up with
   // each other. (This replaced the inline priority picker the Queue used
-  // to have here — priority is changed on the ticket page now.)
+  // to have here — priority is changed on the ticket page now, and shown
+  // here as lightning bolts, PriorityBolts.vue, Nov 2026.)
   queueLayout: { type: Boolean, default: false },
   // Off when every row is already known to share one status (each Queue
   // status box), where the column would just repeat the box's own header.
@@ -45,7 +47,10 @@ const settings = useSettings();
 const open = (id) => router.push({ name: 'ticket', params: { id } });
 
 const customerLabel = (t) => t.customer_name || (t.instrument_in_inventory ? 'CEPCo inventory' : '—');
-const columnCount = computed(() => (props.queueLayout ? 4 : 6) + (props.showStatus ? 1 : 0));
+const columnCount = computed(() => (props.queueLayout ? 5 : 6) + (props.showStatus ? 1 : 0));
+// Bolt column just wide enough for the most bolts any ticket can have.
+const boltColStyle = computed(() => ({ width: `${Math.max(settings.priorityBoltMax, 1) * 10 + 14}px` }));
+const priorityLabel = (t) => t.priority_label || t.priority_label_snapshot;
 const dropOff = (t) => formatYmd(t.drop_off_date);
 
 // Consecutive-run grouping, not a full group-by — the list already arrives
@@ -120,11 +125,12 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
 
   <div v-else class="table-wrap">
     <table :class="{ 'queue-layout-table': queueLayout }">
-      <!-- queueLayout: the same columns as the Queue's drag cards
-           (QueueCard.vue) — customer, ticket, date of order, techs — so
-           switching between the two (e.g. toggling Fast Track) doesn't
-           reshuffle the page. Priority/hours live on the ticket page. -->
+      <!-- queueLayout: the same columns as the Queue's right-column rows
+           (QueueCard.vue) — priority bolts, customer, ticket, date of
+           order, techs — so the main list and the split-view column line
+           up. Hours live on the ticket page. -->
       <colgroup v-if="queueLayout">
+        <col class="c-priority" :style="boltColStyle" />
         <col class="c-customer" />
         <col />
         <col v-if="showStatus" class="c-status" />
@@ -133,6 +139,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
       </colgroup>
       <thead v-if="queueLayout">
         <tr>
+          <th class="c-priority" title="Priority">Pri</th>
           <th>Customer</th>
           <th>Ticket</th>
           <th v-if="showStatus">Status</th>
@@ -164,13 +171,19 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
           :class="['clickable', rowClass(section.statusKey), { 'progress-fill': rowProgress(t) !== null }]"
           :style="rowProgress(t) !== null ? progressStyle(t) : null" @click="open(t.id)"
         >
+          <td v-if="queueLayout" class="c-priority">
+            <PriorityBolts :priority-key="t.priority_key" :label="priorityLabel(t)" />
+          </td>
           <td v-if="queueLayout" class="ellipsis" :title="customerLabel(t)">
             <strong>{{ customerLabel(t) }}</strong>
           </td>
           <td>
             <strong v-if="queueLayout">{{ titleWithoutCustomer(t.title, t.customer_name) || t.title }}</strong>
             <strong v-else>{{ t.title }}</strong>
-            <span v-if="t.fast_track" class="tag fast-track-tag">Fast Track</span>
+            <span
+              v-if="queueLayout && settings.priorityFlagged(t.priority_key)" class="tag priority-flag-tag"
+            >{{ priorityLabel(t) }}</span>
+            <span v-if="t.fast_track" class="tag fast-track-tag">Lite</span>
             <span v-if="t.custom_shop" class="tag custom-shop-tag">Custom Shop</span>
             <span v-if="t.shipping_direction" class="tag direction-tag">{{ t.shipping_direction === 'inbound' ? 'Inbound' : 'Outbound' }}</span>
             <span v-if="rowProgress(t) !== null" class="small progress-pct" style="margin-left: 6px">{{ rowProgress(t) }}%</span>
@@ -224,6 +237,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
 .queue-layout-table col.c-date { width: 100px; }
 .queue-layout-table col.c-tech { width: 140px; }
 .queue-layout-table .sub { display: none; }
+.queue-layout-table .c-priority { padding-right: 0; }
 
 /* Same idea as QueueCard.vue: these fixed columns add up to 560px, which left
    the title nothing in a ~560px iPad column. Sized by the Queue box

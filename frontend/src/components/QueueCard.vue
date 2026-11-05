@@ -13,15 +13,13 @@
  * Oct 2026): grip, then the customer in a fixed-width column so
  * every name starts at the same x, then the rest of the title (with the
  * customer stripped off it — see ticketNaming.js's titleWithoutCustomer)
- * starting at the same x too. Priority isn't shown here any more; it's
- * changed on the ticket page.
+ * starting at the same x too. Priority leads the row as lightning bolts
+ * (PriorityBolts.vue, Nov 2026); it's changed on the ticket page.
  *
- * Drag-and-drop stays entirely the parent's business: `draggable` and the
- * native drag listeners are passed as plain attributes and fall through to
- * the root element (none of them are declared as props or emits), so this
- * component never needs to know which index it sits at in the parent's
- * list. `pos` doubles as the "is this a reorderable queue" switch — null
- * hides the grip, for a read-only row.
+ * Since Nov 2026 the Queue no longer drag-reorders (it sorts by date,
+ * status or priority instead), so this only renders the split view's
+ * right-hand column. The `pos`/grip support is left in place, unused, in
+ * case manual ordering comes back -- null (the default) hides the grip.
  */
 import { computed } from 'vue';
 import { RouterLink } from 'vue-router';
@@ -29,6 +27,7 @@ import { titleWithoutCustomer } from '../ticketNaming';
 import { useSettings } from '../stores';
 import { progressOf, progressStyle } from '../progress';
 import { formatYmd } from '../dates';
+import PriorityBolts from './PriorityBolts.vue';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -75,6 +74,8 @@ const techs = computed(
   () => (props.ticket.technicians || []).map((x) => x.name).join(', ') || 'unassigned',
 );
 const dropOff = computed(() => formatYmd(props.ticket.drop_off_date));
+const priorityLabel = computed(() => props.ticket.priority_label || props.ticket.priority_label_snapshot);
+const boltW = computed(() => `${Math.max(settings.priorityBoltMax, 1) * 10}px`);
 </script>
 
 <template>
@@ -85,6 +86,9 @@ const dropOff = computed(() => formatYmd(props.ticket.drop_off_date));
     <template v-if="pos !== null">
       <span class="muted grip" title="Drag to reorder">⠿</span>
     </template>
+    <span class="bolts" :style="{ width: boltW }">
+      <PriorityBolts :priority-key="ticket.priority_key" :label="priorityLabel" />
+    </span>
     <RouterLink
       v-if="showCustomer" :to="{ name: 'ticket', params: { id: ticket.id } }"
       class="customer" :title="customer || 'No customer'"
@@ -96,7 +100,10 @@ const dropOff = computed(() => formatYmd(props.ticket.drop_off_date));
       <RouterLink :to="{ name: 'ticket', params: { id: ticket.id } }" class="rest-title">
         {{ rest || ticket.title }}
       </RouterLink>
-      <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Fast Track">Fast Track</span>
+      <span
+        v-if="settings.priorityFlagged(ticket.priority_key)" class="tag priority-flag-tag"
+      >{{ priorityLabel }}</span>
+      <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Lite">Lite</span>
       <span v-if="ticket.custom_shop" class="tag custom-shop-tag" title="Custom Shop">Custom Shop</span>
       <span
         v-if="ticket.shipping_direction" class="tag direction-tag"
@@ -132,6 +139,7 @@ const dropOff = computed(() => formatYmd(props.ticket.drop_off_date));
 
 /* Fixed widths on everything left of the title, so customer names and the
    title text each start at the same x on every row, across boxes too. */
+.bolts { flex: none; }
 .grip { width: 14px; flex: none; font-size: 16px; line-height: 1; cursor: grab; }
 .customer {
   width: var(--customer-w); flex: none;

@@ -15,7 +15,6 @@ import TicketVendorOrders from '../components/TicketVendorOrders.vue';
 import TicketVendorWork from '../components/TicketVendorWork.vue';
 import TicketServiceLog from '../components/TicketServiceLog.vue';
 import { xeroContactUrl } from '../xeroLinks';
-import { shopDate } from '../dates';
 import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
 import TicketNotes from '../components/TicketNotes.vue';
@@ -335,38 +334,7 @@ async function patch(payload) {
 async function saveDropOff(event) {
   const next = event.target.value || null;
   if (next === (ticket.value.drop_off_date || null)) return;
-  xeroDateMessage.value = '';
   await patch({ drop_off_date: next });
-}
-
-// Only offered while the date is blank and the customer is linked to Xero:
-// takes the earliest *note* in the customer's Xero History & Notes (not
-// Xero's own activity entries) as the day the job came in. It's the whole
-// contact's history, so for a repeat customer it can predate this job --
-// the field stays editable for that reason.
-const pullingXeroDate = ref(false);
-const xeroDateMessage = ref('');
-async function pullDropOffFromXero() {
-  pullingXeroDate.value = true;
-  xeroDateMessage.value = '';
-  try {
-    const res = await api.get(`/customers/${ticket.value.customer_id}/xero-history`);
-    if (res.error) {
-      xeroDateMessage.value = `Couldn't reach Xero: ${res.error}`;
-      return;
-    }
-    const notes = (res.records || []).filter((r) => r.kind === 'note' && r.at);
-    if (!notes.length) {
-      xeroDateMessage.value = 'No notes found in this customer\'s Xero history.';
-      return;
-    }
-    const earliest = notes.reduce((a, b) => (String(b.at) < String(a.at) ? b : a));
-    await patch({ drop_off_date: shopDate(earliest.at) });
-  } catch (err) {
-    xeroDateMessage.value = err.message;
-  } finally {
-    pullingXeroDate.value = false;
-  }
 }
 
 async function changeStatus(event) {
@@ -651,8 +619,9 @@ const showProgressUpdate = computed(() => (
           <div class="field-row">
             <div class="field">
               <label>Priority</label>
-              <!-- Fast Track (migration 063) sits beside priority rather
-                   than being a tier of it: a quick job can be Fast Track
+              <!-- Lite (migration 063; "Fast Track" until Nov 2026 -- the
+                   column is still tickets.fast_track) sits beside priority
+                   rather than being a tier of it: a quick job can be Lite
                    at any priority. The Queue page filters on it. -->
               <div class="row" style="flex-wrap: nowrap">
                 <select
@@ -668,7 +637,7 @@ const showProgressUpdate = computed(() => (
                     type="checkbox" :checked="!!ticket.fast_track"
                     @change="patch({ fast_track: $event.target.checked })"
                   />
-                  <span>Fast Track</span>
+                  <span>Lite</span>
                 </label>
                 <label class="checkbox nowrap" style="margin: 0">
                   <input
@@ -705,13 +674,6 @@ const showProgressUpdate = computed(() => (
                 type="date" :value="ticket.drop_off_date || ''" style="width: 170px"
                 @change="saveDropOff($event)"
               />
-              <button
-                v-if="!ticket.drop_off_date && ticket.customer_xero_contact_id"
-                type="button" class="small" :disabled="pullingXeroDate"
-                title="Use the earliest note in this customer's Xero history"
-                @click="pullDropOffFromXero"
-              >{{ pullingXeroDate ? 'Checking Xero…' : 'Pull from Xero' }}</button>
-              <span v-if="xeroDateMessage" class="muted small">{{ xeroDateMessage }}</span>
             </div>
           </div>
 
@@ -941,8 +903,8 @@ const showProgressUpdate = computed(() => (
                (TicketVendorWork.vue, migration 064), editable now. -->
 
           <!-- Published notes (migration 061) — replaced the live-edited
-               textarea; also posted to / read from the customer's Xero
-               history. -->
+               textarea; also posted to the customer's Xero history, with
+               notes typed in Xero merged into the same list. -->
           <TicketNotes :ticket="ticket" @changed="load(true)" />
 
           <div v-if="settings.statusNotesAllowed(ticket.category_key)" class="field">

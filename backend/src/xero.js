@@ -111,7 +111,13 @@ async function apiRequest(path, { method = 'GET', body } = {}) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Xero API error: ${describeError(payload, res.status)}`);
+  if (!res.ok) {
+    // status rides along so callers can tell a rate limit (429) apart from
+    // a real failure -- see routes/customers.js's xero-history.
+    const err = new Error(`Xero API error: ${describeError(payload, res.status)}`);
+    err.status = res.status;
+    throw err;
+  }
   return payload;
 }
 

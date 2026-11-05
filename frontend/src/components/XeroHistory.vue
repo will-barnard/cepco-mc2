@@ -5,9 +5,10 @@
  * and shown read-only. Notes MC2 itself posted to Xero are filtered out
  * server-side -- they're already on their tickets.
  *
- * Used on the ticket page (under the ticket's own notes, collapsed by
- * default so it doesn't cost a Xero call on every ticket view) and on the
- * Customers page's detail pane (open).
+ * Used on the Customers page's detail pane. (The ticket page used to embed
+ * a collapsed copy too; since Nov 2026 it merges Xero notes straight into
+ * the ticket's own notes list instead -- see TicketNotes.vue. `collapsible`
+ * is kept for any future embed but nothing passes it today.)
  */
 import { ref, watch } from 'vue';
 import api from '../api';

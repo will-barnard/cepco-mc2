@@ -22,34 +22,41 @@
  * or filters.category). Filters are mirrored into the URL query, same as
  * the old Tickets page, so a filtered/queued view is still bookmarkable.
  *
- * Drag-to-reorder only makes sense against one *complete, unfiltered* queue
- * — POST /tickets/reorder-queue checks that the dragged status section's
- * full membership matches what the client has, so any filter that could
- * hide a ticket that legitimately belongs in that section (search text,
- * priority, "show archived") has to disable dragging, not just picking
- * "All". `canReorder` below mirrors routes/tickets.js's GET / ORDER BY
- * branch selection: the status filter and "Hide statuses" are fine (they
- * only ever drop *whole* status sections, never part of one), but
- * q/priority/archived aren't, and neither is picking both an instrument
- * and a category, or an explicit "Sort by" override. Whenever canReorder
- * is false, the list below falls back to the plain table the old Tickets
- * page used (status-grouped when the backend is still returning one queue's
- * order, same as `isQueueOrdered` — just not draggable).
+ * Sort modes (shop feedback, Nov 2026) -- a three-way toggle in the page
+ * header, applied to whatever queue/filters are picked:
+ *   Date      (default) one flat list, oldest Date of Order/Queue first.
+ *   Status    one box per status section (workflow order), oldest first
+ *             inside each box. This is the only grouped mode, so it's the
+ *             only one the split view applies to.
+ *   Priority  one flat list, most urgent tier first, oldest first within.
+ * The pick is remembered per device (localStorage) and mirrored into the
+ * URL like every filter. It is *not* reset by "Clear filters" -- it's how
+ * you like to look at the queue, not what you're filtering for.
+ *
+ * Drag-to-reorder is gone with this change: with Status sub-sorted by date
+ * there's no mode where a manual position would show. The saved positions
+ * (category/family/tech queue_position columns) and POST
+ * /tickets/reorder-queue are left in place untouched -- the dashboard's
+ * no-?sort lists still order by them -- so it can come back if wanted.
  *
  * Split view (shop feedback, Oct 2026; migration 063): whenever the list is
  * status-grouped, the statuses picked in Settings -> Queue split view are
  * pulled out of the main list into a right-hand column, in *that* setting's
  * order rather than the workflow order the main list follows. It's purely
- * a rendering split — one fetch, one `tickets` array — so drag-to-reorder
- * works in both columns unchanged: each card still drags by its index in
- * `tickets`, and a status section only ever lives in one column. On narrow
- * screens the two columns stack with the right one first.
+ * a rendering split — one fetch, one `tickets` array — and a status
+ * section only ever lives in one column. Only in Status sort (the other
+ * modes aren't grouped). On narrow screens the two columns stack with the
+ * right one first.
  *
- * Fast Track (same migration): a per-ticket flag with its own quick-filter
- * button. It combines with the instrument/category buttons (e.g. Fast Track
- * Wurlitzers) and, like search or priority, hides part of a status section
- * — so it turns dragging off. Custom Shop (migration 070) is the same kind of
+ * Lite (same migration; labelled "Fast Track" until Nov 2026, still
+ * `fast_track` in the DB and URL): a per-ticket flag with its own
+ * quick-filter button. It combines with the instrument/category buttons
+ * (e.g. Lite Wurlitzers). Custom Shop (migration 070) is the same kind of
  * flag and behaves identically.
+ *
+ * Priority (Nov 2026): every row leads with its priority as lightning bolts
+ * (PriorityBolts.vue), and tiers flagged in Settings -> Priority tiers'
+ * "Queue flag" column also get a tag beside the title, like Lite's.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
@@ -60,6 +67,24 @@ import QueueCard from '../components/QueueCard.vue';
 
 const route = useRoute();
 const router = useRouter();
+
+// Sort modes -- see the header. Remembered per device; storage can throw
+// (private mode, blocked site data), in which case it's just not remembered.
+const SORT_MODES = [
+  { key: 'date', label: 'Date' },
+  { key: 'status', label: 'Status' },
+  { key: 'priority', label: 'Priority' },
+];
+const SORT_STORAGE_KEY = 'mc2.queue.sort';
+const isSortMode = (v) => SORT_MODES.some((m) => m.key === v);
+function storedSort() {
+  try {
+    const v = localStorage.getItem(SORT_STORAGE_KEY);
+    return isSortMode(v) ? v : 'date';
+  } catch {
+    return 'date';
+  }
+}
 const settings = useSettings();
 const refData = useRefData();
 
@@ -71,14 +96,13 @@ const filters = ref({
   instrument_family: route.query.instrument_family || '',
   technician_id: route.query.technician_id || '',
   archived: route.query.archived === 'true',
-  // "Fast Track" quick-filter button (migration 063).
+  // "Lite" quick-filter button (migration 063; formerly "Fast Track").
   fast_track: route.query.fast_track === 'true',
   // "Custom Shop" quick-filter button (migration 070).
   custom_shop: route.query.custom_shop === 'true',
-  // '' = the usual priority/queue order; 'status' = ordered by each
-  // status's own position in the shop's workflow (Settings -> Ticket
-  // statuses), i.e. status progression rather than alphabetical.
-  sort: route.query.sort || '',
+  // 'date' | 'status' | 'priority' -- the header toggle. A URL wins over
+  // the device's remembered pick, so a shared link opens the way it was sent.
+  sort: isSortMode(route.query.sort) ? route.query.sort : storedSort(),
   // "Hide statuses" dropdown below — status keys to exclude, e.g. hiding
   // Done/On Hold while otherwise browsing everything.
   hide_status: (route.query.hide_status || '').split(',').filter(Boolean),
@@ -87,8 +111,6 @@ const filters = ref({
 const tickets = ref([]);
 const loading = ref(true);
 const error = ref('');
-const saving = ref(false);
-const dragIndex = ref(null);
 
 // `silent` keeps a filter tweak (ticking "Hide statuses", flipping "Show
 // archived", typing a search term) from blanking the whole list to
@@ -162,10 +184,16 @@ watch(filters, (f) => {
   load(true);
 }, { deep: true });
 
+watch(() => filters.value.sort, (mode) => {
+  try { localStorage.setItem(SORT_STORAGE_KEY, mode); } catch { /* not remembered, that's all */ }
+});
+
+// Keeps the sort mode: it's a way of viewing, not a filter (see header).
 function reset() {
   filters.value = {
     q: '', status: '', category: '', priority: '',
-    instrument_family: '', technician_id: '', archived: false, fast_track: false, custom_shop: false, sort: '',
+    instrument_family: '', technician_id: '', archived: false, fast_track: false, custom_shop: false,
+    sort: filters.value.sort,
     hide_status: [],
   };
 }
@@ -223,85 +251,15 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown);
 });
 
-// Mirrors routes/tickets.js's GET / ORDER BY branch selection: true
-// whenever the backend is actually returning one queue's own order
-// (status-first, then that queue's position column) rather than the plain
-// priority/updated_at fallback. Used to group the read-only table by
-// status even when dragging itself is disabled (see canReorder below).
-const isQueueOrdered = computed(() => {
-  const f = layoutFilters.value;
-  if (f.sort === 'status') return true;
-  // An explicit date sort wins over the queue order on the backend (GET /
-  // checks ?sort first), so the rows don't arrive status-sorted and
-  // grouping them would just fragment one status into many runs.
-  if (f.sort === 'date') return false;
-  if (f.category) return !f.technician_id;
-  if (f.technician_id === 'unassigned') return !f.instrument_family;
-  if (f.instrument_family) return !f.technician_id;
-  return false;
-});
+// Status is the one grouped mode: rows arrive section-first from the
+// backend (routes/tickets.js, sort=status), date-ordered inside each.
+const grouped = computed(() => layoutFilters.value.sort === 'status');
 
-// Narrower than isQueueOrdered: dragging is only offered when exactly one
-// of instrument/category is picked, nothing else is filtering out tickets
-// that belong in the section being dragged (search text or priority could;
-// "Show archived" pulls in a different set entirely, which the backend's
-// reorder-queue mismatch check doesn't recognize), and no explicit sort
-// override is replacing the queue's own order. Status/hide-status are
-// fine — they only ever drop whole status sections, never part of one —
-// *except* when they drop some but not all statuses of a shared section
-// (migration 065: e.g. filtering to just Reservation, which shares its
-// box with Not Started). That leaves part of a section on screen, which
-// the backend's reorder-queue membership check would reject, so it turns
-// dragging off the same way search text does (splitsASection).
-// 'date' (Q3) is excluded for the same reason 'status' already was: the
-// visual order it produces has nothing to do with the persisted queue
-// position, so dragging a row wouldn't mean what it looks like it means.
-const canReorder = computed(() => {
-  const f = layoutFilters.value;
-  const singleScope = Boolean(f.category) !== Boolean(f.instrument_family);
-  return singleScope && !f.technician_id && f.sort !== 'status' && f.sort !== 'date'
-    && f.q === '' && f.priority === '' && !f.archived && !f.fast_track && !f.custom_shop
-    && !splitsASection.value;
-});
-
-const splitsASection = computed(() => {
-  const f = layoutFilters.value;
-  const hidden = new Set(f.hide_status);
-  const bySection = new Map();
-  for (const row of settings.data.ticket_status || []) {
-    const sec = settings.queueSectionOf(row.key);
-    if (!bySection.has(sec)) bySection.set(sec, []);
-    bySection.get(sec).push(row.key);
-  }
-  for (const members of bySection.values()) {
-    if (members.length < 2) continue;
-    const shown = members.filter((k) => !hidden.has(k) && (!f.status || f.status === k));
-    if (shown.length && shown.length < members.length) return true;
-  }
-  return false;
-});
-
-// Per-row rendering info for the draggable view: which tickets start a new
-// status section (the backend already returns every queue status-sorted,
-// see routes/tickets.js's GET / ordering) and each ticket's 1-based
-// position *within* its own status section, since positions are scoped
-// per status (POST /reorder-queue below only ever renumbers one status
-// section at a time).
-// "Status section" now means queue *section* (migration 065): statuses that
-// share a queue_group in Settings (Reservation + Not Started) are one box,
-// one shared order, one drag scope. The backend tags every ticket with its
-// section (`queue_section`); an ungrouped status is a section of its own.
+// "Status section" means queue *section* (migration 065): statuses that
+// share a queue_group in Settings (Reservation + Not Started) are one box.
+// The backend tags every ticket with its section (`queue_section`); an
+// ungrouped status is a section of its own.
 const sectionOf = (t) => t.queue_section || t.status_key;
-
-const rowInfo = computed(() => {
-  let groupStart = 0;
-  return tickets.value.map((t, i) => {
-    if (i === 0 || sectionOf(tickets.value[i - 1]) !== sectionOf(t)) groupStart = i;
-    return {
-      ticket: t, index: i, isGroupStart: i === groupStart, posInGroup: i - groupStart + 1,
-    };
-  });
-});
 
 // --- split view (migration 063) -------------------------------------------
 // Right-column statuses that can actually appear under the current filters:
@@ -311,7 +269,7 @@ const rowInfo = computed(() => {
 // with "None" placeholders for statuses the user asked not to see.
 const sideKeys = computed(() => {
   const f = layoutFilters.value;
-  if (!canReorder.value && !isQueueOrdered.value) return [];
+  if (!grouped.value) return [];
   return settings.queueSideStatuses
     .filter((k) => !f.hide_status.includes(k) && (!f.status || f.status === k));
 });
@@ -323,10 +281,8 @@ const sideSectionKeys = computed(
 );
 const sideSet = computed(() => new Set(sideSectionKeys.value));
 
-// Main column: every row whose section isn't pulled out. Removing whole
-// sections keeps rowInfo's posInGroup valid as-is.
-const mainRows = computed(() => rowInfo.value.filter((r) => !sideSet.value.has(sectionOf(r.ticket))));
-const mainTickets = computed(() => mainRows.value.map((r) => r.ticket));
+// Main column: every ticket whose section isn't pulled out.
+const mainTickets = computed(() => tickets.value.filter((t) => !sideSet.value.has(sectionOf(t))));
 
 // The main column as one boxed panel per status (the shop's sketch: an "In
 // Progress" box, a "Not Started" box, ...), same as the right column.
@@ -335,11 +291,11 @@ const mainTickets = computed(() => mainRows.value.map((r) => r.ticket));
 const mainSections = computed(() => {
   const out = [];
   const seen = new Map();
-  for (const row of mainRows.value) {
+  for (const t of mainTickets.value) {
     const last = out[out.length - 1];
-    if (last && last.key === sectionOf(row.ticket)) last.rows.push(row);
+    if (last && last.key === sectionOf(t)) last.tickets.push(t);
     else {
-      const key = sectionOf(row.ticket);
+      const key = sectionOf(t);
       // Belt and braces for the fix above: if a section ever does come back
       // in two runs, it gets two boxes with distinct v-for keys rather than
       // duplicate keys that leave stale DOM behind.
@@ -348,9 +304,9 @@ const mainSections = computed(() => {
       out.push({
         key,
         uid: n === 1 ? key : `${key}#${n}`,
-        statusKey: row.ticket.queue_section_status_key || row.ticket.status_key,
-        label: row.ticket.queue_section_label || row.ticket.status_label || row.ticket.status_label_snapshot,
-        rows: [row],
+        statusKey: t.queue_section_status_key || t.status_key,
+        label: t.queue_section_label || t.status_label || t.status_label_snapshot,
+        tickets: [t],
       });
     }
   }
@@ -366,7 +322,7 @@ const sideSections = computed(() => sideSectionKeys.value.map((key) => {
     key,
     statusKey: lead?.key || key,
     label: lead?.label || settings.labelFor('ticket_status', key),
-    rows: rowInfo.value.filter((r) => sectionOf(r.ticket) === key),
+    tickets: tickets.value.filter((t) => sectionOf(t) === key),
   };
 }));
 
@@ -375,69 +331,6 @@ onMounted(() => {
   settings.load();
   refData.load();
 });
-
-function onDragStart(index, event) {
-  dragIndex.value = index;
-  event.dataTransfer.effectAllowed = 'move';
-  // Firefox won't start a drag at all unless setData is called.
-  event.dataTransfer.setData('text/plain', String(tickets.value[index].id));
-}
-
-// Live-reorders the on-screen list as the dragged row passes over others —
-// the actual save happens once, on drop/dragend, not on every one of these.
-function onDragOver(index) {
-  if (dragIndex.value === null || dragIndex.value === index) return;
-  // Confines drag-and-drop to one queue section: a drag-over that would
-  // cross into a different section's rows is simply ignored, so a ticket
-  // can never be spliced across the boundary in the first place. Within a
-  // shared section (Reservation + Not Started) it moves freely.
-  if (sectionOf(tickets.value[dragIndex.value]) !== sectionOf(tickets.value[index])) return;
-  const moved = tickets.value.splice(dragIndex.value, 1)[0];
-  tickets.value.splice(index, 0, moved);
-  dragIndex.value = index;
-}
-
-async function onDragEnd() {
-  if (dragIndex.value === null) return;
-  // Capture before clearing dragIndex — onDragOver's guard above means the
-  // dragged ticket never left its section during the drag, so this is
-  // exactly the one section that just got reordered.
-  const dragged = tickets.value[dragIndex.value];
-  dragIndex.value = null;
-  await persistOrder(sectionOf(dragged), dragged.status_key);
-}
-
-// Sends just the reordered id list for the one status section that was
-// dragged — the server checks it's exactly the set of tickets currently in
-// that queue+status (nobody else changed it mid-drag) and renumbers
-// positions to match, leaving every other status section's positions
-// untouched. A mismatch reloads the queue instead of silently applying a
-// stale order on top of whatever changed.
-// statusKey is the dragged ticket's own status; the server expands it to
-// its whole section (routes/tickets.js) and checks ticketIds against that.
-async function persistOrder(sectionKey, statusKey) {
-  error.value = '';
-  saving.value = true;
-  try {
-    const ticketIds = tickets.value.filter((t) => sectionOf(t) === sectionKey).map((t) => t.id);
-    // The queue these tickets were loaded for, not whatever the filters say
-    // this instant (see shownFilters).
-    const f = layoutFilters.value;
-    const body = f.category
-      ? {
-        scope: 'category', category_key: f.category, status_key: statusKey, ticket_ids: ticketIds,
-      }
-      : {
-        scope: 'family', family: f.instrument_family, status_key: statusKey, ticket_ids: ticketIds,
-      };
-    await api.post('/tickets/reorder-queue', body);
-  } catch (err) {
-    error.value = `${err.message} The queue below has been reloaded.`;
-    await load(true);
-  } finally {
-    saving.value = false;
-  }
-}
 
 // Customer column (QueueCard / TicketTable queueLayout): dropped for a queue
 // where nothing has a customer at all — Daily To-Do's, Housekeeping, ... —
@@ -458,13 +351,23 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
       <div>
         <h1 style="margin-bottom: 4px">Queue</h1>
         <p class="muted small" style="margin: 0">
-          Drag a ticket to move it within an instrument type's queue or a category's queue —
-          grouped by status (some statuses share a box, set in Settings → Ticket statuses), and only
-          reorderable within a box, with no other filters
-          narrowing the list. The new order saves as soon as you drop it.
+          Oldest Date of Order/Queue first. Sort by Status to group into one box per status
+          (oldest first inside each), or by Priority for the most urgent jobs first.
         </p>
       </div>
-      <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
+      <div class="row queue-head-actions">
+        <div class="sort-toggle" role="group" aria-label="Sort the queue by">
+          <span class="muted small">Sort by</span>
+          <button
+            v-for="m in SORT_MODES" :key="m.key" type="button" class="small"
+            :class="{ primary: filters.sort === m.key }" :aria-pressed="filters.sort === m.key"
+            @click="filters.sort = m.key"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+        <RouterLink to="/tickets/new" class="btn primary">New ticket</RouterLink>
+      </div>
     </div>
 
     <div class="card tight" style="margin-bottom: 16px">
@@ -513,7 +416,7 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
             type="button" class="small" :class="{ primary: filters.fast_track }"
             :aria-pressed="filters.fast_track" @click="filters.fast_track = !filters.fast_track"
           >
-            Fast Track
+            Lite
           </button>
           <button
             type="button" class="small" :class="{ primary: filters.custom_shop }"
@@ -572,14 +475,6 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
             <option v-for="e in refData.employees" :key="e.id" :value="e.id">{{ e.name }}</option>
           </select>
         </div>
-        <div>
-          <label>Sort by</label>
-          <select v-model="filters.sort">
-            <option value="">Priority / queue order</option>
-            <option value="status">Status progression</option>
-            <option value="date">Date of Order/Queue</option>
-          </select>
-        </div>
         <div ref="hideMenuEl" class="hide-status-field">
           <label>Hide statuses</label>
           <button type="button" class="hide-status-toggle" @click="hideMenuOpen = !hideMenuOpen">
@@ -614,71 +509,44 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
 
     <div
       v-else :class="['queue-layout', { split: splitActive }]"
-      :style="(saving || refreshing) ? `opacity: 0.6${canReorder ? '; pointer-events: none' : ''}` : ''"
+      :style="refreshing ? 'opacity: 0.6' : ''"
     >
       <div class="queue-main">
-        <!-- Not one queue's order at all (e.g. "All instruments" sorted by
-             priority) — the plain flat table, as before. -->
-        <div v-if="!canReorder && !isQueueOrdered" class="card tight queue-box">
-          <TicketTable
-            :tickets="mainTickets" queue-layout
-          />
+        <!-- Date / Priority: one flat table, in the order the backend sent. -->
+        <div v-if="!grouped" class="card tight queue-box">
+          <TicketTable :tickets="mainTickets" queue-layout />
         </div>
 
         <div v-else-if="!mainSections.length" class="empty">
           {{ splitActive ? 'Nothing else in this queue.' : 'No tickets in this queue.' }}
         </div>
 
-        <!-- One box per status. Cards when the queue is reorderable; when
-             it isn't (see canReorder), the same read-only table as before,
-             just one per box. -->
+        <!-- Status: one box per status section. -->
         <template v-else>
-        <section v-for="sec in mainSections" :key="sec.uid" class="card tight queue-section queue-box">
-          <div class="queue-section-head">
-            <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
-            <span class="muted small">{{ sec.rows.length }}</span>
-          </div>
-          <TicketTable
-            v-if="!canReorder" :tickets="sec.rows.map((r) => r.ticket)" queue-layout :show-status="false"
-          />
-          <template v-else>
-            <QueueCard
-              v-for="row in sec.rows" :key="row.ticket.id"
-              :ticket="row.ticket" :pos="row.posInGroup" :show-customer="showCustomer" :show-progress="showProgress"
-              :dragging="dragIndex === row.index"
-              draggable="true"
-              @dragstart="onDragStart(row.index, $event)"
-              @dragover.prevent="onDragOver(row.index)"
-              @drop.prevent
-              @dragend="onDragEnd"
-            />
-          </template>
-        </section>
+          <section v-for="sec in mainSections" :key="sec.uid" class="card tight queue-section queue-box">
+            <div class="queue-section-head">
+              <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
+              <span class="muted small">{{ sec.tickets.length }}</span>
+            </div>
+            <TicketTable :tickets="sec.tickets" queue-layout :show-status="false" />
+          </section>
         </template>
       </div>
 
       <!-- Right column (Settings -> Queue split view) — QC / Shipping /
-           Invoiced boxes in the shop's sketch. Always compact rows, even
-           when the main column has fallen back to tables: a 7-column table
-           doesn't fit a side column. Draggable exactly when the main
-           column is. Empty boxes stay, showing "None". -->
+           Invoiced boxes in the shop's sketch. Compact rows rather than
+           the main column's table: a 6-column table doesn't fit a side
+           column. Empty boxes stay, showing "None". -->
       <aside v-if="splitActive" class="queue-side">
         <section v-for="sec in sideSections" :key="sec.key" class="card tight queue-section queue-box">
           <div class="queue-section-head">
             <span :class="['pill', settings.colorFor(sec.statusKey)]">{{ sec.label }}</span>
-            <span class="muted small">{{ sec.rows.length }}</span>
+            <span class="muted small">{{ sec.tickets.length }}</span>
           </div>
-          <p v-if="!sec.rows.length" class="muted small" style="margin: 0">None</p>
+          <p v-if="!sec.tickets.length" class="muted small" style="margin: 0">None</p>
           <QueueCard
-            v-for="row in sec.rows" :key="row.ticket.id"
-            :ticket="row.ticket" :pos="canReorder ? row.posInGroup : null"
-            :show-customer="showCustomer" :show-progress="showProgress" compact
-            :dragging="dragIndex === row.index"
-            :draggable="canReorder ? 'true' : 'false'"
-            @dragstart="onDragStart(row.index, $event)"
-            @dragover.prevent="onDragOver(row.index)"
-            @drop.prevent
-            @dragend="onDragEnd"
+            v-for="t in sec.tickets" :key="t.id"
+            :ticket="t" :show-customer="showCustomer" :show-progress="showProgress" compact
           />
         </section>
       </aside>
@@ -687,6 +555,8 @@ const showProgress = computed(() => tickets.value.some((t) => t.progress_percent
 </template>
 
 <style scoped>
+.queue-head-actions { gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.sort-toggle { display: flex; align-items: center; gap: 6px; }
 /* Split view (migration 063): main statuses on the left, the statuses picked
    in Settings -> Queue split view stacked on the right — each status its own
    box, per the shop's sketch. */

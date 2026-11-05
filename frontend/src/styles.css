@@ -683,21 +683,30 @@ tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
 }
 
 /* Inbound / Outbound tag on shipping tickets (migration 069). Plain .tag grey
-   on purpose — Fast Track's accent colour stays the louder of the two. */
+   on purpose — Lite's accent colour stays the louder of the two. */
 .tag.direction-tag { margin-left: 6px; vertical-align: middle; }
 
-/* Custom Shop flag (migration 070) — blue-tinted so it sits next to Fast Track's
+/* Custom Shop flag (migration 070) — blue-tinted so it sits next to Lite's
    orange without the two blurring together. */
 .tag.custom-shop-tag {
   margin-left: 6px; background: rgba(59, 130, 246, 0.15); color: var(--blue);
   font-weight: 600; vertical-align: middle;
 }
 
-/* --- Fast Track (migration 063) ------------------------------------------ */
+/* --- Lite (migration 063; shown as "Fast Track" until Nov 2026) ----------- */
 /* Accent-tinted so it reads as distinct from the plain grey .tag used for
-   photo counts etc. Shared by QueueCard.vue and TicketTable.vue. */
+   photo counts etc. Shared by QueueCard.vue and TicketTable.vue. The class
+   and the tickets.fast_track column keep the old name -- only the label
+   changed. */
 .tag.fast-track-tag {
   margin-left: 6px; background: rgba(212, 129, 63, 0.15); color: var(--accent);
+  font-weight: 600; vertical-align: middle;
+}
+
+/* Priority flag (migration 080): tiers ticked in Settings -> Priority tiers'
+   "Queue flag" column get their label as a red tag beside the title. */
+.tag.priority-flag-tag {
+  margin-left: 6px; background: rgba(239, 68, 68, 0.15); color: var(--red);
   font-weight: 600; vertical-align: middle;
 }
 
