@@ -275,6 +275,13 @@ export const useSettings = defineStore('settings', {
   },
 });
 
+// Instrument family keys retired by migration 083 ('organ' and 'other' are
+// one family now, Kombo+). Old bookmarks and shared links still carry them
+// in ?family= / ?instrument_family=, so pages that read a family from the
+// URL pass it through this first.
+const RETIRED_FAMILIES = { organ: 'kombo', other: 'kombo' };
+export const canonicalFamily = (key) => RETIRED_FAMILIES[key] || key;
+
 export const useRefData = defineStore('refdata', {
   state: () => ({ employees: [], families: [], familyLabels: {}, loaded: false }),
   actions: {

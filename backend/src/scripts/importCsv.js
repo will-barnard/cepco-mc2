@@ -94,21 +94,16 @@ function classifyFamily(sheetFamily, instrumentText) {
     return 'strings';
   }
   if (sheetFamily === 'kombo') {
-    if (/organ|vox|farfisa|acetone|gibson g\d|rmi|continental|combo|hammond|leslie|philicorda|top \d/.test(s)) {
-      return 'organ';
-    }
-    // amp and rarity consolidated into 'other' (see migration 037 and
-    // NOTES.md) — telling an amp from "everything else non-organ" no
-    // longer matters when both land on the same family.
-    return 'other';
+    // Organs, amps and rarities are all one family now, Kombo+ (migrations
+    // 037 and 083) -- nothing on this sheet needs telling apart.
+    return 'kombo';
   }
   if (sheetFamily === 'job_queue') {
     if (/rhodes|mkii|mk ii|mki\b/.test(s)) return 'rhodes';
     if (/wurli|wurlitzer|206|200a|112|140/.test(s)) return 'wurlitzer';
     if (/clavinet|pianet|cembalet|hohner/.test(s)) return 'hohner';
     if (/cp-?\d|helpinstill|yamaha cp/.test(s)) return 'strings';
-    if (/organ|vox|farfisa|acetone|continental|hammond/.test(s)) return 'organ';
-    return 'other';
+    return 'kombo'; // organs and everything else (migration 083)
   }
   return sheetFamily; // rhodes | wurlitzer
 }
@@ -374,10 +369,10 @@ const FLEET_SECTIONS = {
   RHODES: 'rhodes',
   WURLITZER: 'wurlitzer',
   'HOHNER + STRINGS': 'hohner',
-  ORGANS: 'organ',
-  // Both consolidated into 'other' — see migration 037 and NOTES.md.
-  'MELLOTRON, SYNTH, & RARITIES': 'other',
-  AMPLIFIERS: 'other',
+  // All three are Kombo+ now -- migrations 037 and 083.
+  ORGANS: 'kombo',
+  'MELLOTRON, SYNTH, & RARITIES': 'kombo',
+  AMPLIFIERS: 'kombo',
 };
 
 async function importShowroomQc(file) {

@@ -50,13 +50,13 @@ const levels = computed(() => {
   return out;
 });
 
-// The 'other' brand is the catch-all family (see backend instruments.js
-// FAMILIES) and has no model tree, so an empty dropdown is useless there --
-// start on the free-text box instead. Same fallback for any family whose
-// tree comes back empty. `initial` is the first run on mount: a value that
+// A family whose tree comes back empty has nothing to pick from, so start
+// on the free-text box instead. (This used to special-case the 'other'
+// family, which never had a tree; it's part of Kombo+ since migration 083,
+// which does -- the organ brands -- and an amp or synth goes in the
+// free-text option.) `initial` is the first run on mount: a value that
 // already exists (editing, or a restored draft) is kept as the text rather
 // than cleared; after a brand change the old model no longer applies.
-const NO_MODELS_FAMILY = 'other';
 
 function defaultToManual(initial) {
   if (manual.value) return;
@@ -76,7 +76,6 @@ async function loadFamily(family, oldFamily) {
   path.value = [];
   if (!initial) { manual.value = false; manualText.value = ''; }
   if (!family) return;
-  if (family === NO_MODELS_FAMILY) defaultToManual(initial);
   const loaded = await api.get(`/instrument-models?family=${encodeURIComponent(family)}`);
   if (props.family !== family) return; // brand changed again while loading
   nodes.value = loaded;

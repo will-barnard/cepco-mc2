@@ -17,7 +17,9 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter, RouterLink } from 'vue-router';
 import api from '../api';
-import { useAuth, useRefData, useSettings } from '../stores';
+import {
+  useAuth, useRefData, useSettings, canonicalFamily,
+} from '../stores';
 import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import ReservedParts from '../components/ReservedParts.vue';
@@ -53,7 +55,8 @@ const STATUS_OPTIONS = [
 
 const tab = computed(() => (TABS.some((t) => t.key === route.query.tab) ? route.query.tab : 'instruments'));
 const status = computed(() => (STATUS_OPTIONS.some((s) => s.key === route.query.status) ? route.query.status : 'active'));
-const family = computed(() => String(route.query.family || ''));
+// canonicalFamily: an old ?family=organ / other link opens Kombo+ (migration 083).
+const family = computed(() => canonicalFamily(String(route.query.family || '')));
 const search = ref(String(route.query.q || ''));
 // Inventory audit (migration 077): checkboxes and the unaudited highlight
 // only exist while the audit is running (Settings -> Inventory audit).
@@ -85,8 +88,17 @@ async function load() {
 
 // --- filtering ------------------------------------------------------------
 const needle = computed(() => search.value.trim().toLowerCase());
+// "O-0123" / "x123" / "K-0123": stock numbers are a family letter plus the
+// row id, and Kombo+ pieces were O- or X- before migration 083 -- so a
+// stock-number-shaped search also matches on the id alone, whatever letter
+// was on the old tag.
+const stockSearchId = computed(() => {
+  const m = /^[a-z]-?0*(\d+)$/.exec(needle.value);
+  return m ? Number(m[1]) : null;
+});
 const matchesSearch = (i) => {
   if (!needle.value) return true;
+  if (stockSearchId.value !== null && i.id === stockSearchId.value) return true;
   return [i.nickname, i.model, i.serial_no, i.identifying_notes, i.stock_number, i.consignor_name,
     i.customer_name, i.sold_to_name, i.model_group, i.year]
     .some((v) => v && String(v).toLowerCase().includes(needle.value));

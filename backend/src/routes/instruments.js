@@ -18,13 +18,17 @@ router.use(requireAuth);
 // a family (instruments, qc_templates, standard_procedures,
 // instrument_default_technicians, instrument_models) — there's nothing
 // left anywhere in the schema still writing 'amp' or 'rarity'.
-const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'organ', 'other'];
+//
+// Nov 2026: 'organ' (Combo Organ) and 'other' went the same way, into one
+// 'kombo' family labelled "Kombo+" -- migration 083 moves every table that
+// stores a family. Nothing writes 'organ' or 'other' any more.
+const FAMILIES = ['rhodes', 'wurlitzer', 'hohner', 'strings', 'kombo'];
 
 router.get('/families', (req, res) => res.json(FAMILIES));
 
 // N7 (boss-list scope, scaffold): a few of these family keys read fine as
 // raw strings in a <select> ("rhodes", "wurlitzer") but the rest don't
-// ("strings" and "other" are internal shorthand, not what a customer or
+// ("strings" and "kombo" are internal shorthand, not what a customer or
 // even a tech would call the category out loud). Additive only — the
 // existing /families endpoint above keeps its plain-string-array shape so
 // none of its ~11 existing frontend consumers (`v-for="f in
@@ -35,8 +39,9 @@ const FAMILY_LABELS = {
   wurlitzer: 'Wurlitzer',
   hohner: 'Hohner',
   strings: 'Electric String Pianos',
-  organ: 'Combo Organ',
-  other: 'Other',
+  // Combo organs plus everything that isn't a keyboard piano: amps,
+  // Leslies, synths, Mellotrons (migration 083).
+  kombo: 'Kombo+',
 };
 
 router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));

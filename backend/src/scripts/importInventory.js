@@ -147,7 +147,8 @@ const SHEETS = [
   {
     key: 'combo',
     file: 'CEPCo Inventory Log - Combo Organs String Pianos.csv',
-    family: 'organ',
+    // 'organ' and 'other' are one family now, Kombo+ (migration 083).
+    family: 'kombo',
     layout: COMBO_LAYOUT,
     first: { group: 'Farfisa Organs', kind: 'instruments' },
     sections: {
@@ -156,14 +157,14 @@ const SHEETS = [
       'fender/gibson organs': { group: 'Fender/Gibson Organs', kind: 'instruments' },
       'other combos': { group: 'Other Combos', kind: 'instruments' },
       pianos: { group: 'Electric Grands & CP', kind: 'instruments', family: 'strings' },
-      mellotrons: { group: 'Mellotrons', kind: 'instruments', family: 'other' },
+      mellotrons: { group: 'Mellotrons', kind: 'instruments', family: 'kombo' },
       'sold organ/piano data tracking:': { kind: 'sold' },
     },
   },
   {
     key: 'other',
     file: 'CEPCo Inventory Log - Other.csv',
-    family: 'other',
+    family: 'kombo',
     layout: OTHER_LAYOUT,
     first: { group: 'Amps, Leslies & Synths', kind: 'instruments' },
     sections: {},
@@ -432,8 +433,7 @@ function untangleSold(row, layout, notes) {
 function guessSoldFamily(sheet, model) {
   if (sheet.key !== 'combo') return sheet.family;
   if (/cp\s?-?\s?\d|helpin|piano/i.test(model)) return 'strings';
-  if (/mellotron|optigan/i.test(model)) return 'other';
-  return 'organ';
+  return 'kombo'; // organs and Mellotrons alike since migration 083
 }
 
 // ---------------------------------------------------------------------------

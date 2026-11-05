@@ -53,12 +53,11 @@ const CONDITION_FIELDS = {
     { key: 'cosmetics', label: 'Cosmetics' }, { key: 'keys', label: 'Keys' },
     { key: 'interior', label: 'Interior' },
   ],
-  organ: [
+  // Kombo+ (migration 083): the old Combo Organ columns. Keys is blank for
+  // an amp or a Leslie, which is fine -- an empty grade just isn't shown.
+  kombo: [
     { key: 'cosmetics', label: 'Cosmetics' }, { key: 'keys', label: 'Keys' },
     { key: 'interior', label: 'Interior' },
-  ],
-  other: [
-    { key: 'cosmetics', label: 'Cosmetics' }, { key: 'interior', label: 'Interior' },
   ],
 };
 
@@ -67,9 +66,12 @@ const NFS_REASON_PRESETS = ['Floor', 'Rental', 'Floor/Rental', 'Private Collecti
 const PHOTO_SET_PRESETS = ['Intake', 'Pre-restoration', 'In progress', 'Post-restoration', 'Listing', 'Damage', 'Pack-out'];
 
 // Short shelf label, derived rather than stored so it can never disagree
-// with the row: R-0042 for a Rhodes, W- for Wurlitzer, and so on.
+// with the row: R-0042 for a Rhodes, W- for Wurlitzer, and so on. Kombo+
+// was O- (organ) and X- (other) before migration 083; the digits are the
+// row id and didn't change, so InventoryView's search matches old numbers
+// by their digits.
 const STOCK_PREFIX = {
-  rhodes: 'R', wurlitzer: 'W', hohner: 'H', strings: 'S', organ: 'O', other: 'X',
+  rhodes: 'R', wurlitzer: 'W', hohner: 'H', strings: 'S', kombo: 'K',
 };
 const stockNumber = (row) => `${STOCK_PREFIX[row.family] || 'X'}-${String(row.id).padStart(4, '0')}`;
 

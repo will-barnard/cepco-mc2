@@ -61,7 +61,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
 import api from '../api';
-import { useSettings, useRefData } from '../stores';
+import { useSettings, useRefData, canonicalFamily } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
 import QueueCard from '../components/QueueCard.vue';
 
@@ -93,7 +93,8 @@ const filters = ref({
   status: route.query.status || '',
   category: route.query.category || '',
   priority: route.query.priority || '',
-  instrument_family: route.query.instrument_family || '',
+  // An old ?instrument_family=organ / other link opens Kombo+ (migration 083).
+  instrument_family: canonicalFamily(route.query.instrument_family || ''),
   technician_id: route.query.technician_id || '',
   archived: route.query.archived === 'true',
   // "Lite" quick-filter button (migration 063; formerly "Fast Track").
