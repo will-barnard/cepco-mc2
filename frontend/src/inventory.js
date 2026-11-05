@@ -36,19 +36,32 @@ export function statusPill(i) {
 }
 
 /**
- * Colour a free-text condition grade by its leading grade word, the way
- * the sheet reads: MINT/NM green through F/Poor red. Anything that
- * doesn't start with a grade ("OG Cube", "yellow") stays uncoloured.
+ * Condition grades (migration 084) are keys from a fixed scale -- the list
+ * and labels come from GET /inventory/meta's condition_grades. These colour
+ * a grade the way the sheet read: Mint / Near Mint green through Poor red.
+ * Free text (anything from before 084 that slipped through) still gets
+ * coloured by its leading grade word, and otherwise stays plain.
  */
+const GRADE_CLASS = {
+  mint: 'grade-mint', near_mint: 'grade-mint', excellent: 'grade-ex',
+  very_good: 'grade-vg', good: 'grade-g', poor: 'grade-poor',
+};
 export function gradeClass(value) {
   const v = String(value || '').trim().toLowerCase();
   if (!v) return '';
+  if (GRADE_CLASS[v]) return GRADE_CLASS[v];
   if (/^(mint|m|nm|near mint)\b/.test(v)) return 'grade-mint';
   if (/^(ex|excellent)\b/.test(v)) return 'grade-ex';
   if (/^(vg|very good)\b/.test(v)) return 'grade-vg';
   if (/^(g|good)\b/.test(v)) return 'grade-g';
   if (/^(f|fair|poor|bad|rough)\b/.test(v)) return 'grade-poor';
   return '';
+}
+
+/** "very_good" -> "Very Good", given meta.condition_grades; unknown values as-is. */
+export function gradeLabel(value, grades) {
+  if (!value) return '';
+  return (grades || []).find((g) => g.key === value)?.label || value;
 }
 
 /** Next QC due date from last_qc_at + qc_interval_months, or null. */

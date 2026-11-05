@@ -24,7 +24,7 @@ import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import ReservedParts from '../components/ReservedParts.vue';
 import {
-  formatPrice, statusPill, gradeClass, ownershipLabel,
+  formatPrice, statusPill, gradeClass, gradeLabel, ownershipLabel,
 } from '../inventory';
 
 const route = useRoute();
@@ -158,7 +158,33 @@ function conditionSummary(i) {
   const fields = meta.value?.condition_fields[i.family] || [];
   return fields
     .filter((f) => i.condition?.[f.key])
-    .map((f) => ({ label: f.label.split('/')[0], value: i.condition[f.key] }));
+    .map((f) => ({
+      label: f.label.split('/')[0],
+      value: i.condition[f.key],
+      text: gradeLabel(i.condition[f.key], meta.value?.condition_grades),
+    }));
+}
+
+const grades = computed(() => meta.value?.condition_grades || []);
+const isGrade = (v) => grades.value.some((g) => g.key === v);
+const condNote = (i, key) => i.condition_notes?.[key] || '';
+
+// Editable condition cells (Nov 2026): pick a grade straight from the list,
+// saved on change. Optimistic like the audit ticks -- grading runs down a
+// column. The API stores condition as one object, so the whole map is sent
+// with this one field changed.
+async function setGrade(i, key, value) {
+  const before = { ...(i.condition || {}) };
+  const next = { ...before };
+  if (value) next[key] = value; else delete next[key];
+  i.condition = next;
+  try {
+    const row = await api.patch(`/inventory/${i.id}`, { condition: next });
+    i.condition = row.condition;
+  } catch (err) {
+    i.condition = before;
+    error.value = err.message;
+  }
 }
 
 const isSold = computed(() => status.value === 'sold');
@@ -251,7 +277,13 @@ function downloadCsv() {
     ...(auth.isAdmin ? ['Paid', 'Paid note'] : [])];
   const rows = filtered.value.map((i) => [
     i.stock_number, i.nickname, refData.familyLabel(i.family), i.model_group, i.year, i.model,
-    ...condKeys.map((f) => i.condition?.[f.key] || ''),
+    // Grade label plus its note, e.g. "Very Good (light scratches)".
+    ...condKeys.map((f) => {
+      const grade = gradeLabel(i.condition?.[f.key], meta.value?.condition_grades);
+      const note = condNote(i, f.key);
+      if (grade && note) return `${grade} (${note})`;
+      return grade || note;
+    }),
     i.identifying_notes, meta.value?.sale_status_labels[i.sale_status], i.nfs_reason || i.hold_for,
     i.asking_price, i.price_note, i.serial_no, i.on_website ? 'yes' : '', ownershipLabel(i.ownership),
     i.customer_name || i.consignor_name,
@@ -529,13 +561,28 @@ onMounted(async () => {
                       </span>
                       <div v-if="i.nfs_reason || i.hold_for" class="muted tiny-text reason">{{ i.nfs_reason || i.hold_for }}</div>
                     </td>
+                    <!-- Editable straight from the list (Nov 2026). A note is
+                         shown under the grade; edit notes on the piece's page. -->
                     <td
                       v-for="f in conditionFields" :key="f.key"
-                      :class="['cond-cell', gradeClass(i.condition?.[f.key])]"
-                    >{{ i.condition?.[f.key] }}</td>
+                      class="cond-cell" :title="condNote(i, f.key) || null" @click.stop
+                    >
+                      <select
+                        :value="i.condition?.[f.key] || ''" :class="['cond-select', gradeClass(i.condition?.[f.key])]"
+                        :aria-label="`${f.label}: ${i.nickname || i.model}`"
+                        @change="setGrade(i, f.key, $event.target.value)"
+                      >
+                        <option value="">—</option>
+                        <option v-for="g in grades" :key="g.key" :value="g.key">{{ g.label }}</option>
+                        <option v-if="i.condition?.[f.key] && !isGrade(i.condition[f.key])" :value="i.condition[f.key]">
+                          {{ i.condition[f.key] }}
+                        </option>
+                      </select>
+                      <div v-if="condNote(i, f.key)" class="muted tiny-text cond-note">{{ condNote(i, f.key) }}</div>
+                    </td>
                     <td v-if="!family" class="small cond-col">
                       <span v-for="c in conditionSummary(i).slice(0, 4)" :key="c.label" class="grade-chip">
-                        <span class="muted">{{ c.label }}</span> <span :class="gradeClass(c.value)">{{ c.value }}</span>
+                        <span class="muted">{{ c.label }}</span> <span :class="gradeClass(c.value)">{{ c.text }}</span>
                       </span>
                     </td>
                     <td class="nowrap small">{{ i.serial_no }}</td>
@@ -613,7 +660,17 @@ onMounted(async () => {
 .notes-col { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .price-note { margin-left: 3px; cursor: help; }
 .cond-col { min-width: 200px; max-width: 300px; }
-.cond-cell { max-width: 110px; }
+.cond-cell { min-width: 96px; max-width: 120px; }
+/* A grade picker that reads like the old cell text until you use it: no
+   arrow (seven columns of arrows cost the width "Very Good" / "Near Mint"
+   need), a border on hover/focus to show it's clickable. */
+.cond-select {
+  width: 100%; padding: 3px 4px; font-size: 13px; background-color: transparent; background-image: none;
+  border-color: transparent; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+}
+.cond-select:hover, .cond-select:focus { border-color: var(--border); background-color: var(--surface-2); }
+.cond-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-col { max-width: 150px; }
 .grade-chip { margin-right: 8px; white-space: nowrap; display: inline-block; }
 </style>

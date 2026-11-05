@@ -29,37 +29,87 @@ const SALE_STATUS_LABELS = {
   sold: 'Sold',
 };
 
-// Per-family condition columns, in the order the Inventory Log sheets use.
-// Keys are what's stored in instruments.condition (JSONB); labels are the
-// sheet's own column headers. Any key not listed here is still kept and
-// shown — this list drives the columns, it doesn't police the data.
+// Condition grades (migration 084): one fixed scale, worst to best, picked
+// from a dropdown. instruments.condition stores the key per field;
+// anything that isn't a grade ("OG Cube", "light scratches") lives beside
+// it in instruments.condition_notes under the same field key.
+const CONDITION_GRADES = [
+  { key: 'poor', label: 'Poor' },
+  { key: 'good', label: 'Good' },
+  { key: 'very_good', label: 'Very Good' },
+  { key: 'excellent', label: 'Excellent' },
+  { key: 'near_mint', label: 'Near Mint' },
+  { key: 'mint', label: 'Mint' },
+];
+const GRADE_KEYS = new Set(CONDITION_GRADES.map((g) => g.key));
+
+// Per-family condition columns, in the order the Inventory Log sheets use,
+// plus Hardware on every family (Nov 2026). Keys are what's stored in
+// instruments.condition / condition_notes; labels are the sheet's own column
+// headers. Any key not listed here is still kept and shown -- this list
+// drives the columns, it doesn't police the data.
+const HARDWARE = { key: 'hardware', label: 'Hardware' };
 const CONDITION_FIELDS = {
   rhodes: [
     { key: 'case', label: 'Tolex/Case' }, { key: 'keys', label: 'Keys' },
     { key: 'bushings', label: 'Bushings' }, { key: 'tines', label: 'Tines' },
-    { key: 'hammers', label: 'Hammers' }, { key: 'lid', label: 'Lid' },
+    { key: 'hammers', label: 'Hammers' }, { key: 'lid', label: 'Lid' }, HARDWARE,
   ],
   wurlitzer: [
     { key: 'body', label: 'Tolex/Body' }, { key: 'keys', label: 'Keys' },
     { key: 'bushings', label: 'Bushings' }, { key: 'reeds', label: 'Reeds' },
-    { key: 'hammers', label: 'Hammers' }, { key: 'lid', label: 'Lid' },
+    { key: 'hammers', label: 'Hammers' }, { key: 'lid', label: 'Lid' }, HARDWARE,
   ],
   hohner: [
     { key: 'cosmetics', label: 'Cosmetics' }, { key: 'keys', label: 'Keys' },
     { key: 'interior', label: 'Interior' }, { key: 'hammers', label: 'Hammers' },
-    { key: 'veneers', label: 'Veneers' },
+    { key: 'veneers', label: 'Veneers' }, HARDWARE,
   ],
   strings: [
     { key: 'cosmetics', label: 'Cosmetics' }, { key: 'keys', label: 'Keys' },
-    { key: 'interior', label: 'Interior' },
+    { key: 'interior', label: 'Interior' }, HARDWARE,
   ],
   // Kombo+ (migration 083): the old Combo Organ columns. Keys is blank for
   // an amp or a Leslie, which is fine -- an empty grade just isn't shown.
   kombo: [
     { key: 'cosmetics', label: 'Cosmetics' }, { key: 'keys', label: 'Keys' },
-    { key: 'interior', label: 'Interior' },
+    { key: 'interior', label: 'Interior' }, HARDWARE,
   ],
 };
+
+// The sheet's free-text grades -> { grade, note }, for the importer. The
+// same rules as migration 084's pg_temp.split_grade (which converted what
+// was already imported) -- keep the two in step. Only a grade at the start
+// counts ("VG (light scratches)" -> very_good + "light scratches"); a
+// plain grade word running into more words is describing something, so the
+// note keeps the whole phrase ("rough top, otherwise nice" -> poor + all of
+// it); no grade at the start -> the whole text is the note. Fair -> poor
+// and New -> mint, the shop's call; ranges ("VG-EX") take the lower grade.
+const GRADE_WORDS = '(near mint|very good|excellent|mint|good|fair|poor|bad|rough|new|nm|ex|vg|m|g|f)';
+const GRADE_RE = new RegExp(`^${GRADE_WORDS}(?![a-z0-9])(?:\\s*[-/]\\s*${GRADE_WORDS}(?![a-z0-9]))?([+-]?)(\\s*)(.*)$`, 'is');
+const GRADE_OF = {
+  mint: 'mint', m: 'mint', new: 'mint',
+  'near mint': 'near_mint', nm: 'near_mint',
+  excellent: 'excellent', ex: 'excellent',
+  'very good': 'very_good', vg: 'very_good',
+  good: 'good', g: 'good',
+  fair: 'poor', f: 'poor', poor: 'poor', bad: 'poor', rough: 'poor',
+};
+function splitGrade(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return { grade: null, note: null };
+  const m = GRADE_RE.exec(s);
+  if (!m) return { grade: null, note: s };
+  const word = m[1].toLowerCase();
+  const grade = GRADE_OF[word];
+  if (word.length > 2 && word !== 'mint' && m[3] === '' && m[4] !== '' && /^[a-z0-9]/i.test(m[5])) {
+    return { grade, note: s };
+  }
+  let rest = m[5].replace(/^[\s,;:./-]+/, '');
+  if (/^\(.*\)$/s.test(rest)) rest = rest.slice(1, -1);
+  rest = rest.trim();
+  return { grade, note: rest || null };
+}
 
 // Quick-picks only — both fields are free text.
 const NFS_REASON_PRESETS = ['Floor', 'Rental', 'Floor/Rental', 'Private Collection', 'Future Floor', 'Parts donor'];
@@ -109,6 +159,9 @@ module.exports = {
   CONSIGNMENT_STATUSES,
   CONSIGNMENT_STATUS_LABELS,
   CONDITION_FIELDS,
+  CONDITION_GRADES,
+  GRADE_KEYS,
+  splitGrade,
   NFS_REASON_PRESETS,
   PHOTO_SET_PRESETS,
   STOCK_PREFIX,

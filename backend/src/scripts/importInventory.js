@@ -452,10 +452,14 @@ function parseInstrumentRow(sheet, section, row, rowNumber, family) {
   let notes = cleanNotes(cell(row, L.notes), sheet.key);
   if (year && !isYearish(year)) { notes = [year, notes].filter(Boolean).join('; '); year = null; }
 
+  // Sheet cells are free text; split each into a grade and a note the way
+  // migration 084 converted the first import (services/inventory.js).
   const condition = {};
+  const conditionNotes = {};
   for (const [key, idx] of Object.entries(L.cond)) {
-    const v = cell(row, idx);
-    if (v) condition[key] = v;
+    const { grade, note } = inv.splitGrade(cell(row, idx));
+    if (grade) condition[key] = grade;
+    if (note) conditionNotes[key] = note;
   }
 
   const price = parsePrice(cell(row, L.price));
@@ -470,6 +474,7 @@ function parseInstrumentRow(sheet, section, row, rowNumber, family) {
     year,
     serial_no: null,
     condition,
+    condition_notes: conditionNotes,
     identifying_notes: notes,
     model_group: section.group || null,
     ownership: 'shop',
@@ -635,7 +640,7 @@ function parseSheet(sheet) {
 // Database apply
 // ---------------------------------------------------------------------------
 const INSTRUMENT_COLS = [
-  'family', 'nickname', 'model', 'year', 'serial_no', 'condition', 'identifying_notes', 'model_group',
+  'family', 'nickname', 'model', 'year', 'serial_no', 'condition', 'condition_notes', 'identifying_notes', 'model_group',
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'cost_paid',
   'cost_note', 'on_website', 'consignor_name', 'consignment_rate', 'sold_at', 'sold_price',
   'sold_to_name', 'sort_order', 'import_source', 'import_key', 'import_raw',
@@ -680,8 +685,8 @@ async function buildCustomerIndex(client) {
 }
 
 async function upsertInstrument(client, rec, targetId) {
-  const values = INSTRUMENT_COLS.map((c) => (c === 'condition' || c === 'import_raw'
-    ? JSON.stringify(rec[c] ?? (c === 'condition' ? {} : null)) : rec[c] ?? null));
+  const values = INSTRUMENT_COLS.map((c) => (c === 'condition' || c === 'condition_notes' || c === 'import_raw'
+    ? JSON.stringify(rec[c] ?? (c === 'import_raw' ? null : {})) : rec[c] ?? null));
   if (targetId) {
     // Matched to an existing row (re-run, old fleet, or app purchase):
     // sheet values win for the sheet's columns; everything the app owns

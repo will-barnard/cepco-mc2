@@ -113,9 +113,28 @@ const webUrl = (field) => (v) => {
   if (!['http:', 'https:'].includes(parsed.protocol)) throw badRequest(`${field} must be an http(s) link`);
   return s.slice(0, 1000);
 };
+// { field: grade key } -- grades are a fixed scale since migration 084
+// (services/inventory.js's CONDITION_GRADES), picked from a dropdown, so
+// anything else is refused rather than stored. A blank grade drops the
+// field. Field keys aren't policed (see CONDITION_FIELDS).
 const condition = (v) => {
   if (v === null) return {};
   if (typeof v !== 'object' || Array.isArray(v)) throw badRequest('condition must be an object');
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    const s = val === null || val === undefined ? '' : String(val).trim();
+    if (!s) continue;
+    if (!inv.GRADE_KEYS.has(s)) {
+      throw badRequest(`Condition "${s}" isn't a grade — pick one of: ${inv.CONDITION_GRADES.map((g) => g.label).join(', ')}`);
+    }
+    out[String(k).slice(0, 40)] = s;
+  }
+  return out;
+};
+// { field: free text } beside the grades -- "OG Cube", "light scratches".
+const conditionNotes = (v) => {
+  if (v === null) return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw badRequest('condition_notes must be an object');
   const out = {};
   for (const [k, val] of Object.entries(v)) {
     const s = val === null || val === undefined ? '' : String(val).trim();
@@ -140,6 +159,7 @@ const FIELDS = {
   price_note: text(500),
   on_website: bool,
   condition,
+  condition_notes: conditionNotes,
   customer_id: intOrNull('customer_id'), // the consignor, for a consignment
   consignor_name: text(200),
   consignment_rate: (v) => {
@@ -240,6 +260,7 @@ router.get('/meta', (req, res) => {
     consignment_statuses: inv.CONSIGNMENT_STATUSES,
     consignment_status_labels: inv.CONSIGNMENT_STATUS_LABELS,
     condition_fields: inv.CONDITION_FIELDS,
+    condition_grades: inv.CONDITION_GRADES,
     nfs_reason_presets: inv.NFS_REASON_PRESETS,
     photo_set_presets: inv.PHOTO_SET_PRESETS,
   });

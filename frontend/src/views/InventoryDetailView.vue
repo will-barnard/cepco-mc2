@@ -46,7 +46,10 @@ const EDITABLE = [
   'cost_paid', 'cost_note', 'est_hours',
 ];
 const form = ref({});
+// Condition (migration 084): a grade key per field from the dropdown, and a
+// free-text note per field beside it ("OG Cube", "light scratches").
 const conditionForm = ref({});
+const conditionNotesForm = ref({});
 
 const norm = (v) => (v === null || v === undefined ? '' : String(v));
 const moneyNorm = (v) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
@@ -61,6 +64,7 @@ function fillForm(row) {
   }
   form.value = f;
   conditionForm.value = { ...(row.condition || {}) };
+  conditionNotesForm.value = { ...(row.condition_notes || {}) };
 }
 
 const original = computed(() => {
@@ -92,11 +96,15 @@ const changes = computed(() => {
     }
     if (differs) out[k] = now === '' ? null : now;
   }
-  const condNow = Object.fromEntries(Object.entries(conditionForm.value).filter(([, v]) => String(v || '').trim()));
-  const condWas = item.value?.condition || {};
-  if (JSON.stringify(Object.entries(condNow).sort()) !== JSON.stringify(Object.entries(condWas).sort())) {
-    out.condition = condNow;
-  }
+  // Both condition maps are sent whole when they change -- the API stores
+  // each as one JSONB object. Blanks are dropped so "picked, then cleared"
+  // doesn't count as a change.
+  const filled = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => String(v || '').trim()));
+  const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
+  const condNow = filled(conditionForm.value);
+  if (!same(condNow, filled(item.value?.condition))) out.condition = condNow;
+  const notesNow = Object.fromEntries(Object.entries(filled(conditionNotesForm.value)).map(([k, v]) => [k, String(v).trim()]));
+  if (!same(notesNow, filled(item.value?.condition_notes))) out.condition_notes = notesNow;
   return out;
 });
 const dirty = computed(() => Object.keys(changes.value).length > 0);
@@ -171,7 +179,7 @@ const conditionFields = computed(() => {
   const listedKeys = new Set(listed.map((f) => f.key));
   // Keep any grade the row has that this family's list doesn't name (a
   // family change, or an odd sheet column) — visible and editable, not lost.
-  const extra = Object.keys(conditionForm.value)
+  const extra = [...new Set([...Object.keys(conditionForm.value), ...Object.keys(conditionNotesForm.value)])]
     .filter((k) => !listedKeys.has(k))
     .map((k) => ({ key: k, label: k }));
   return [...listed, ...extra];
@@ -388,18 +396,55 @@ watch(() => props.id, () => { loading.value = true; load(); });
 
           <section class="card">
             <h2>Condition</h2>
+            <!-- Migration 084: grades from a fixed scale, plus a short note per
+                 field for anything that isn't a grade ("OG Cube"). -->
             <div class="cond-grid">
               <div v-for="f in conditionFields" :key="f.key" class="field">
-                <label>{{ f.label }}</label>
-                <input v-model="conditionForm[f.key]" :class="gradeClass(conditionForm[f.key])" placeholder="EX, VG, OG…" />
+                <label :for="`cond-${f.key}`">{{ f.label }}</label>
+                <!-- :value + @change rather than v-model: an ungraded field
+                     is undefined, which v-model would show as a blank select
+                     instead of the "—" option. -->
+                <select
+                  :id="`cond-${f.key}`" :value="conditionForm[f.key] || ''"
+                  :class="['cond-select', gradeClass(conditionForm[f.key])]"
+                  @change="conditionForm[f.key] = $event.target.value"
+                >
+                  <option value="">—</option>
+                  <option v-for="g in meta?.condition_grades || []" :key="g.key" :value="g.key">{{ g.label }}</option>
+                  <!-- A value from before the fixed scale stays visible rather
+                       than the select silently showing blank. -->
+                  <option
+                    v-if="conditionForm[f.key] && !(meta?.condition_grades || []).some((g) => g.key === conditionForm[f.key])"
+                    :value="conditionForm[f.key]"
+                  >{{ conditionForm[f.key] }}</option>
+                </select>
+                <input
+                  v-model="conditionNotesForm[f.key]" class="cond-note" placeholder="Note"
+                  :aria-label="`${f.label} note`"
+                />
               </div>
             </div>
           </section>
 
-          <!-- Migration 078. Hours go through the Save bar like every other
-               field; part lines save themselves (InstrumentPartsUsed.vue). -->
+          <!-- Cost, parts & labor -- one box (Nov 2026; Cost used to be its
+               own card in the right column). Cost and hours go through the
+               Save bar like every other field; part lines save themselves
+               (InstrumentPartsUsed.vue, migration 078). Cost is admins only. -->
           <section class="card">
-            <h2>Parts &amp; labor</h2>
+            <h2 v-if="auth.isAdmin">Cost, parts &amp; labor</h2>
+            <h2 v-else>Parts &amp; labor</h2>
+            <template v-if="auth.isAdmin">
+              <h3 style="margin: 0 0 8px">Cost <span class="muted small">(admins only)</span></h3>
+              <div class="field-row">
+                <div class="field"><label>Paid</label><input v-model="form.cost_paid" inputmode="decimal" /></div>
+                <div class="field"><label>Note</label><input v-model="form.cost_note" placeholder="labor trade, +repairs…" /></div>
+              </div>
+              <div v-for="p in item.purchases" :key="p.id" class="small muted">
+                Bought from {{ p.seller_name }} on {{ day(p.purchase_date) }} for {{ formatPrice(p.price) }}
+                <template v-if="p.receipt_sent_at"> · receipt sent</template>
+              </div>
+              <h3 style="margin: 16px 0 8px">Labor</h3>
+            </template>
             <div class="row hours-row">
               <div class="field" style="margin-bottom: 0; max-width: 200px">
                 <label>Estimated hours worked</label>
@@ -541,17 +586,6 @@ watch(() => props.id, () => { loading.value = true; load(); });
             </template>
           </section>
 
-          <section v-if="auth.isAdmin" class="card">
-            <h2>Cost <span class="muted small">(admins only)</span></h2>
-            <div class="field-row">
-              <div class="field"><label>Paid</label><input v-model="form.cost_paid" inputmode="decimal" /></div>
-              <div class="field"><label>Note</label><input v-model="form.cost_note" placeholder="labor trade, +repairs…" /></div>
-            </div>
-            <div v-for="p in item.purchases" :key="p.id" class="small muted">
-              Bought from {{ p.seller_name }} on {{ day(p.purchase_date) }} for {{ formatPrice(p.price) }}
-              <template v-if="p.receipt_sent_at"> · receipt sent</template>
-            </div>
-          </section>
 
           <section class="card">
             <h2>QC</h2>
@@ -635,6 +669,8 @@ watch(() => props.id, () => { loading.value = true; load(); });
 .detail-grid { display: grid; gap: var(--gap); grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); padding-bottom: 70px; }
 @media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } }
 .album-field { margin-bottom: 14px; }
+.cond-select { width: 100%; }
+.cond-note { width: 100%; margin-top: 4px; font-size: 13px; padding-top: 4px; padding-bottom: 4px; }
 .cond-grid { display: grid; gap: 0 12px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .preset-row { gap: 10px; margin-top: 6px; }
 .audit-check {
