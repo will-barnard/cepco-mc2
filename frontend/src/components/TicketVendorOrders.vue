@@ -22,14 +22,21 @@
  * disclosure creates the first order (if any) at ticket-creation time, so
  * this card shows up already populated the first time the ticket loads,
  * same as it would for one added later via openForm() below.
+ *
+ * Also the home of what used to be the separate Vendor work box (migration
+ * 064 -> folded in by 081): Painting / Woodshop / Key Tops ... are ordinary
+ * vendors now, and their old rows are ordinary orders here. The CSV
+ * import's unmappable vendor text (tickets.vendor_tracks, e.g. "Woodshop:
+ * TBD") moved with it, shown read-only under "From the old sheet".
  */
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import api from '../api';
 import { formatYmd } from '../dates';
 
 const props = defineProps({ ticket: { type: Object, required: true } });
 
 const orders = ref([]);
+const legacy = computed(() => Object.entries(props.ticket.vendor_tracks || {}));
 const loading = ref(true);
 const error = ref('');
 const showForm = ref(false);
@@ -103,7 +110,7 @@ defineExpose({ openForm });
 </script>
 
 <template>
-  <div v-if="!loading && (orders.length || showForm || error)" class="card">
+  <div v-if="!loading && (orders.length || legacy.length || showForm || error)" class="card">
     <div class="row" style="margin-bottom: 12px">
       <h2 style="margin: 0">Vendor Orders</h2>
       <div class="spacer" />
@@ -143,8 +150,8 @@ defineExpose({ openForm });
       </div>
     </div>
 
-    <div v-if="!orders.length" class="empty">No orders yet.</div>
-    <div v-else class="table-wrap">
+    <div v-if="!orders.length && !legacy.length" class="empty">No orders yet.</div>
+    <div v-else-if="orders.length" class="table-wrap">
       <table>
         <thead>
           <tr><th>Vendor</th><th>Qty</th><th>Notes</th><th>Status</th><th /></tr>
@@ -153,7 +160,7 @@ defineExpose({ openForm });
           <tr v-for="o in orders" :key="o.id">
             <td>{{ o.vendor_name || '—' }}</td>
             <td class="small">{{ o.quantity || '—' }}</td>
-            <td class="small muted">{{ o.notes || '—' }}</td>
+            <td class="small muted order-notes">{{ o.notes || '—' }}</td>
             <td class="nowrap">
               <span :class="['pill', pill[o.status] || 'slate']">{{ o.status }}</span>
               <span v-if="o.status === 'ordered' && o.ordered_at" class="small muted" style="margin-left: 6px">
@@ -169,5 +176,17 @@ defineExpose({ openForm });
         </tbody>
       </table>
     </div>
+
+    <div v-if="legacy.length" class="field" style="margin: 12px 0 0">
+      <label class="small muted">From the old sheet</label>
+      <div class="row">
+        <span v-for="[k, v] in legacy" :key="k" class="tag">{{ k }}: {{ v }}</span>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+/* Migrated Vendor work notes carry their old status on a second line. */
+.order-notes { white-space: pre-line; }
+</style>

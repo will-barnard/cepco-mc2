@@ -26,12 +26,9 @@ const CATEGORIES = [
   ['ticket_status', 'Ticket statuses'],
   ['priority_tier', 'Priority tiers'],
   ['tech_level', 'Tech levels'],
-  // Migration 064: a ticket's Vendor work panel (TicketVendorWork.vue).
-  // Plain lists — the generic table below (rename/reorder/retire/add) is
-  // all either needs. Status colors live in meta.color, seeded by the
-  // migration.
-  ['vendor_track', 'Vendor work types'],
-  ['vendor_status', 'Vendor work statuses'],
+  // (Vendor work types / statuses, migration 064, used to be listed here.
+  // Vendor work was folded into Vendor Orders by migration 081 -- its types
+  // became Parts / Supplies vendors, edited under Parts / Supplies vendors.)
 ];
 
 const error = ref('');

@@ -27,6 +27,8 @@ const CATEGORIES = [
   'ceppy_category',
   // Migration 064: outside-vendor work on a ticket (Painting, Woodshop,
   // ...) and the statuses that work moves through — ticket_vendor_work.
+  // Folded into Vendor Orders by migration 081 and no longer shown in
+  // Settings; kept here so the existing rows still resolve.
   'vendor_track',
   'vendor_status',
   // 'qc_tier' used to live here — retired in migration 021 (see

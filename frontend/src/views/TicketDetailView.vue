@@ -12,7 +12,6 @@ import TicketPurchase from '../components/TicketPurchase.vue';
 import TicketShipment from '../components/TicketShipment.vue';
 import TicketSubTickets from '../components/TicketSubTickets.vue';
 import TicketVendorOrders from '../components/TicketVendorOrders.vue';
-import TicketVendorWork from '../components/TicketVendorWork.vue';
 import TicketServiceLog from '../components/TicketServiceLog.vue';
 import { xeroContactUrl } from '../xeroLinks';
 import TicketTasks from '../components/TicketTasks.vue';
@@ -46,8 +45,6 @@ const estimateRef = ref(null);
 // an open form, or an error, so this is what puts something in it for a
 // ticket that didn't get a Vendor Orders order at creation time.
 const vendorOrdersRef = ref(null);
-// Same idea for Vendor work (migration 064) — "+ Vendor work" up top.
-const vendorWorkRef = ref(null);
 // "Xero contact" button by the customer's name — resolved async since the
 // link may need the org's short code (xeroLinks.js).
 const xeroUrl = ref(null);
@@ -535,7 +532,6 @@ const showProgressUpdate = computed(() => (
           + Add estimate
         </button>
         <button class="small" @click="vendorOrdersRef?.openForm()">+ Vendor Orders</button>
-        <button class="small" @click="vendorWorkRef?.openForm()">+ Vendor work</button>
         <button
           v-if="showProgressUpdate && !progressUpdate" class="small"
           :disabled="generatingUpdate" @click="generateUpdate"
@@ -899,9 +895,6 @@ const showProgressUpdate = computed(() => (
             <TicketLinks :ticket="ticket" @changed="load(true)" />
           </div>
 
-          <!-- Imported vendor_tracks moved into the Vendor work card
-               (TicketVendorWork.vue, migration 064), editable now. -->
-
           <!-- Published notes (migration 061) — replaced the live-edited
                textarea; also posted to the customer's Xero history, with
                notes typed in Xero merged into the same list. -->
@@ -933,7 +926,6 @@ const showProgressUpdate = computed(() => (
         <TicketPurchase v-if="ticket.purchase_id" :ticket="ticket" @changed="load(true)" />
         <TicketEstimate v-if="!isShipping" ref="estimateRef" :ticket="ticket" @changed="load(true)" />
         <TicketVendorOrders ref="vendorOrdersRef" :ticket="ticket" />
-        <TicketVendorWork ref="vendorWorkRef" :ticket="ticket" @changed="load(true)" />
         <!-- TicketHours.vue (ticket-level manual hours entry) is hidden for now —
              hours are captured per-task instead, right where a task is marked done
              (see TicketTasks.vue's inline hours field, and routes/tasks.js's PATCH
