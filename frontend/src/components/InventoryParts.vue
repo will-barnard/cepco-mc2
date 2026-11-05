@@ -90,7 +90,7 @@ const draft = ref({});
 const busy = ref(false);
 
 const FIELDS = ['family', 'category', 'name', 'model', 'quantity', 'quantity_note', 'condition', 'price',
-  'price_note', 'for_sale', 'on_website', 'notes', 'cost_paid', 'cost_note'];
+  'price_note', 'for_sale', 'on_website', 'notes', 'photo_album_url', 'cost_paid', 'cost_note'];
 
 function startEdit(p) {
   error.value = '';
@@ -102,7 +102,8 @@ function startNew() {
   editingId.value = 'new';
   draft.value = {
     family: family.value || 'rhodes', category: '', name: '', model: '', quantity: '', quantity_note: '',
-    condition: '', price: '', price_note: '', for_sale: true, on_website: false, notes: '', cost_paid: '', cost_note: '',
+    condition: '', price: '', price_note: '', for_sale: true, on_website: false, notes: '', photo_album_url: '',
+    cost_paid: '', cost_note: '',
   };
 }
 function cancel() { editingId.value = null; }
@@ -202,6 +203,10 @@ onMounted(load);
         <div v-if="auth.isAdmin" class="field"><label>Paid</label><input v-model="draft.cost_paid" inputmode="decimal" /></div>
       </div>
       <div class="field"><label>Notes</label><input v-model="draft.notes" /></div>
+      <div class="field">
+        <label>Photo album link <span class="muted">(e.g. the Google Drive folder)</span></label>
+        <input v-model="draft.photo_album_url" type="url" placeholder="https://drive.google.com/…" />
+      </div>
       <div class="row">
         <label class="checkbox"><input v-model="draft.for_sale" type="checkbox" /> For sale</label>
         <label class="checkbox"><input v-model="draft.on_website" type="checkbox" /> On website</label>
@@ -241,7 +246,14 @@ onMounted(load);
                   @change="toggleAudit(p, $event.target.checked)"
                 />
               </td>
-              <td><strong>{{ p.name }}</strong></td>
+              <td>
+                <strong>{{ p.name }}</strong>
+                <!-- Migration 082: Drive photo folder from the old sheet. -->
+                <a
+                  v-if="p.photo_album_url" :href="p.photo_album_url" target="_blank" rel="noopener"
+                  class="album-link small" title="Open photo album" @click.stop
+                >Photos ↗</a>
+              </td>
               <td class="small">{{ p.model }}</td>
               <td class="right nowrap" @click.stop>
                 <button type="button" class="link qty-btn" title="One fewer" @click="adjust(p, -1)">−</button>
@@ -281,6 +293,10 @@ onMounted(load);
                     </template>
                   </div>
                   <div class="field"><label>Notes</label><input v-model="draft.notes" /></div>
+                  <div class="field">
+                    <label>Photo album link <span class="muted">(e.g. the Google Drive folder)</span></label>
+                    <input v-model="draft.photo_album_url" type="url" placeholder="https://drive.google.com/…" />
+                  </div>
                   <div class="row">
                     <label class="checkbox"><input v-model="draft.for_sale" type="checkbox" /> For sale</label>
                     <label class="checkbox"><input v-model="draft.on_website" type="checkbox" /> On website</label>
@@ -314,5 +330,6 @@ onMounted(load);
 .parts-table tr.unaudited > td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 .audit-progress { color: var(--amber); font-weight: 600; }
 .audit-progress.done { color: var(--green); }
+.album-link { margin-left: 6px; white-space: nowrap; }
 .notes-col { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

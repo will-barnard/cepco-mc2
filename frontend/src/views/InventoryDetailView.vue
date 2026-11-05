@@ -38,7 +38,7 @@ const xeroUrl = ref(null);
 // Everything the form edits. Money fields are strings in the form so a
 // half-typed "7,7" doesn't fight the input.
 const EDITABLE = [
-  'nickname', 'family', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes',
+  'nickname', 'family', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes', 'photo_album_url',
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'on_website',
   'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
   'sold_at', 'sold_price', 'sold_to_name', 'sold_to_customer_id',
@@ -346,6 +346,10 @@ watch(() => props.id, () => { loading.value = true; load(); });
           <!-- On a phone, Photos is three cards down — this is the shortcut for
                shooting an intake set at the bench. -->
           <a href="#photos" class="btn small">Photos ({{ item.photo_count }})</a>
+          <a
+            v-if="item.photo_album_url" :href="item.photo_album_url" target="_blank" rel="noopener"
+            class="btn small" title="This piece's photo folder (Google Drive, from the old Inventory Log)"
+          >Photo album ↗</a>
           <button type="button" class="small" :disabled="creatingTicket" @click="createTicket">New ticket</button>
           <button v-if="auth.isAdmin" type="button" class="small danger" @click="deletePiece">Delete</button>
         </div>
@@ -411,6 +415,19 @@ watch(() => props.id, () => { loading.value = true; load(); });
 
           <section id="photos" class="card">
             <h2>Photos</h2>
+            <!-- Migration 082: the Google Drive folder the old Inventory Log
+                 sheet linked from this piece's name. A link, not a copy --
+                 the photos stay in Drive. Saves with the Save bar. -->
+            <div class="field album-field">
+              <label>Photo album link <span class="muted">(Google Drive folder from the old sheet, or any album)</span></label>
+              <div class="row" style="flex-wrap: nowrap">
+                <input v-model="form.photo_album_url" type="url" placeholder="https://drive.google.com/…" style="flex: 1; min-width: 0" />
+                <a
+                  v-if="item.photo_album_url" :href="item.photo_album_url" target="_blank" rel="noopener"
+                  class="btn small nowrap"
+                >Open ↗</a>
+              </div>
+            </div>
             <InstrumentPhotoSets
               :instrument-id="item.id" :sets="item.photo_sets" :cover-photo-id="item.cover_photo_id"
               :presets="meta?.photo_set_presets || []" :tickets="openTickets"
@@ -617,6 +634,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
 .stock-no { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .detail-grid { display: grid; gap: var(--gap); grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); padding-bottom: 70px; }
 @media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } }
+.album-field { margin-bottom: 14px; }
 .cond-grid { display: grid; gap: 0 12px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .preset-row { gap: 10px; margin-top: 6px; }
 .audit-check {

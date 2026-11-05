@@ -102,6 +102,17 @@ const dateOrNull = (field) => (v) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw badRequest(`${field} must be YYYY-MM-DD`);
   return String(v);
 };
+// Links rendered as <a href>, so only http(s) gets through -- a
+// "javascript:" URL pasted into the field would otherwise run on click.
+const webUrl = (field) => (v) => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  let parsed;
+  try { parsed = new URL(s); } catch { throw badRequest(`${field} must be a full link starting with https://`); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw badRequest(`${field} must be an http(s) link`);
+  return s.slice(0, 1000);
+};
 const condition = (v) => {
   if (v === null) return {};
   if (typeof v !== 'object' || Array.isArray(v)) throw badRequest('condition must be an object');
@@ -152,6 +163,9 @@ const FIELDS = {
     return n;
   },
   cover_photo_id: intOrNull('cover_photo_id'),
+  // Google Drive photo folder from the old Inventory Log sheet (migration
+  // 082), or any album link added since.
+  photo_album_url: webUrl('photo_album_url'),
   est_hours: (v) => {
     if (v === null || v === '') return null;
     const n = Number(v);
@@ -252,6 +266,7 @@ const PART_FIELDS = {
   on_website: bool,
   notes: text(4000),
   sort_order: intOrNull('sort_order'),
+  photo_album_url: webUrl('photo_album_url'), // migration 082
   cost_paid: money('cost_paid'),
   cost_note: text(500),
 };
