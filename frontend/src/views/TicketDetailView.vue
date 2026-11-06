@@ -161,7 +161,7 @@ async function onInstrumentChange(event) {
 const addingInstrument = ref(false);
 const creatingInstrument = ref(false);
 const blankNewInstrument = () => ({
-  family: refData.families[0] || '', model: '', year: '', serial_no: '', nickname: '',
+  family: refData.families[0] || '', model: '', model_id: null, year: '', serial_no: '', nickname: '',
 });
 const newInstrumentDraft = ref(blankNewInstrument());
 function startAddInstrument() {
@@ -179,6 +179,7 @@ async function createAndAttachInstrument() {
     const created = await api.post('/instruments', {
       family: newInstrumentDraft.value.family,
       model: newInstrumentDraft.value.model,
+      model_id: newInstrumentDraft.value.model_id ?? null, // catalog link (migration 086)
       year: newInstrumentDraft.value.year || null,
       serial_no: newInstrumentDraft.value.serial_no || null,
       nickname: newInstrumentDraft.value.nickname.trim() || null,
@@ -845,7 +846,7 @@ const showProgressUpdate = computed(() => (
                       <div class="field">
                         <label>Model</label>
                         <InstrumentModelPicker
-                          :family="newInstrumentDraft.family" v-model="newInstrumentDraft.model"
+                          :family="newInstrumentDraft.family" v-model="newInstrumentDraft.model" v-model:model-id="newInstrumentDraft.model_id"
                         />
                       </div>
                     </div>

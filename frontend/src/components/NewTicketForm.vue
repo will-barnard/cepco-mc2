@@ -232,7 +232,7 @@ function pickSubcategory(key) {
 // on file are still offered as a shortcut above it -- picking one (via
 // form.instrument_id) replaces these fields rather than creating a
 // duplicate instrument record.
-const newInstrument = ref({ family: '', model: '', year: '', serial_no: '', nickname: '' });
+const newInstrument = ref({ family: '', model: '', model_id: null, year: '', serial_no: '', nickname: '' });
 const usingExistingInstrument = computed(() => Boolean(form.value.instrument_id));
 
 // Creating a customer inline: a walk-in customer shouldn't need a trip to
@@ -259,7 +259,7 @@ function blankSibling() {
     // Same default as the primary instrument: type it in, unless there's
     // something on file to pick.
     mode: instruments.value.length ? 'existing' : 'new', instrument_id: '',
-    family: '', model: '', year: '', serial_no: '', nickname: '',
+    family: '', model: '', model_id: null, year: '', serial_no: '', nickname: '',
   };
 }
 function addSibling() {
@@ -545,6 +545,7 @@ async function submit() {
       const created = await api.post('/instruments', {
         family: newInstrument.value.family,
         model: newInstrument.value.model || null,
+        model_id: newInstrument.value.model_id ?? null, // catalog link (migration 086)
         year: newInstrument.value.year || null,
         serial_no: newInstrument.value.serial_no || null,
         nickname: newInstrument.value.nickname.trim() || null,
@@ -617,6 +618,7 @@ async function submit() {
             const createdInst = await api.post('/instruments', {
               family: sib.family,
               model: sib.model || null,
+              model_id: sib.model_id ?? null,
               year: sib.year || null,
               serial_no: sib.serial_no || null,
               nickname: sib.nickname.trim() || null,
@@ -855,7 +857,7 @@ async function submit() {
         </div>
         <div class="field">
           <label>Model</label>
-          <InstrumentModelPicker :family="newInstrument.family" v-model="newInstrument.model" />
+          <InstrumentModelPicker :family="newInstrument.family" v-model="newInstrument.model" v-model:model-id="newInstrument.model_id" />
         </div>
       </div>
       <div v-if="!usingExistingInstrument && newInstrument.family" class="field-row">
@@ -991,7 +993,7 @@ async function submit() {
             </div>
             <div class="field" style="margin: 0">
               <label>Model</label>
-              <InstrumentModelPicker :family="sib.family" v-model="sib.model" />
+              <InstrumentModelPicker :family="sib.family" v-model="sib.model" v-model:model-id="sib.model_id" />
             </div>
             <div class="field" style="margin: 0">
               <label>Nickname</label>

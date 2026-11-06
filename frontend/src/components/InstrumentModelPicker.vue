@@ -16,6 +16,16 @@
  * where `allow_manual` is set — since the tree is placeholder seed data
  * right now (the boss's real list arrives later as a CSV; see NOTES.md)
  * and forcing a pick from it today would just get in the way.
+ *
+ * Migration 086: the instrument now remembers *which* catalog node it is,
+ * not just the text. `v-model:model-id` carries the deepest picked node's
+ * id (null for typed-in text -- the API links typed text itself when it
+ * names exactly one model), and a `facts` event hands the parent that
+ * node's inherited facts ({ mark, key_count, is_suitcase }, straight from
+ * GET /instrument-models, i.e. the instrument_model_facts view) so a form
+ * can show "Mark I (from model)" before anything is saved. An existing
+ * value opens on its node when it has a model_id, even if the node has
+ * since been renamed or deactivated.
  */
 import { ref, computed, watch } from 'vue';
 import api from '../api';
@@ -23,10 +33,11 @@ import api from '../api';
 const props = defineProps({
   family: { type: String, default: '' },
   modelValue: { type: String, default: '' },
+  modelId: { type: Number, default: null },
 });
-const emit = defineEmits(['update:modelValue']);
+const emit = defineEmits(['update:modelValue', 'update:modelId', 'facts']);
 
-const nodes = ref([]); // every active node for the current family, flat
+const nodes = ref([]); // every node for the current family, flat (inactive ones only offered on the current path)
 const manual = ref(false);
 const manualText = ref('');
 // One entry per depth reached so far: the id chosen at that level.
@@ -34,7 +45,7 @@ const path = ref([]);
 
 function childrenOf(parentId) {
   return nodes.value
-    .filter((n) => (n.parent_id || null) === parentId)
+    .filter((n) => (n.parent_id || null) === parentId && (n.active || path.value.includes(n.id)))
     .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
 }
 
@@ -74,12 +85,12 @@ async function loadFamily(family, oldFamily) {
   const initial = oldFamily === undefined;
   nodes.value = [];
   path.value = [];
-  if (!initial) { manual.value = false; manualText.value = ''; }
+  if (!initial) { manual.value = false; manualText.value = ''; emitPicked(); } // a brand change drops the old link
   if (!family) return;
-  const loaded = await api.get(`/instrument-models?family=${encodeURIComponent(family)}`);
+  const loaded = await api.get(`/instrument-models?family=${encodeURIComponent(family)}&include_inactive=true`);
   if (props.family !== family) return; // brand changed again while loading
   nodes.value = loaded;
-  if (!loaded.length) defaultToManual(initial);
+  if (!loaded.filter((n) => n.active).length) defaultToManual(initial);
 }
 
 function nameChain() {
@@ -90,6 +101,16 @@ function nameChain() {
     .join(' / ');
 }
 
+// The deepest picked node (or none, when typing) -> its id and facts.
+function emitPicked() {
+  const id = manual.value ? null : (path.value[path.value.length - 1] ?? null);
+  const node = id ? nodes.value.find((n) => n.id === id) : null;
+  emit('update:modelId', id);
+  emit('facts', node
+    ? { mark: node.effective_mark ?? null, key_count: node.effective_key_count ?? null, is_suitcase: !!node.effective_is_suitcase }
+    : null);
+}
+
 function pickAt(depth, id) {
   const numId = id ? Number(id) : null;
   path.value = path.value.slice(0, depth);
@@ -98,6 +119,7 @@ function pickAt(depth, id) {
     manual.value = false;
   }
   emit('update:modelValue', nameChain());
+  emitPicked();
 }
 
 function toggleManual(checked) {
@@ -109,6 +131,7 @@ function toggleManual(checked) {
     manualText.value = '';
     emit('update:modelValue', nameChain());
   }
+  emitPicked();
 }
 
 watch(manualText, (v) => { if (manual.value) emit('update:modelValue', v); });
@@ -120,6 +143,16 @@ watch(() => props.family, loadFamily, { immediate: true });
 // rather than silently discarding it or forcing a re-pick.
 watch([() => props.modelValue, nodes], () => {
   if (manual.value || path.value.length) return;
+  // A linked instrument opens on its node (and its ancestors) -- by id, so
+  // a renamed node or text that no longer matches the chain still works.
+  if (props.modelId && nodes.value.length) {
+    const byId = new Map(nodes.value.map((n) => [n.id, n]));
+    const chain = [];
+    for (let n = byId.get(props.modelId); n && chain.length <= byId.size; n = n.parent_id ? byId.get(n.parent_id) : null) {
+      chain.unshift(n.id);
+    }
+    if (chain.length) { path.value = chain; return; }
+  }
   if (!props.modelValue) return;
   const parts = props.modelValue.split(' / ');
   let parentId = null;

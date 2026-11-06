@@ -5,6 +5,8 @@ import api from '../api';
 import { useAuth, useSettings, useRefData } from '../stores';
 import AddressFields from '../components/AddressFields.vue';
 import XeroHistory from '../components/XeroHistory.vue';
+import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
+import MarkSelect from '../components/MarkSelect.vue';
 import {
   CUSTOMER_SOURCES, XERO_SOURCE, sourceLabel, blankAddress, addressFrom,
 } from '../customerSources';
@@ -251,7 +253,13 @@ async function saveCustomerEdit() {
 // through PATCH /instruments/:id; existing ticket titles are NOT rewritten
 // (a title is a snapshot) -- the ticket page's Rename button does that.
 const editingInstrumentId = ref(null);
-const instrumentForm = ref({ nickname: '', model: '', year: '', serial_no: '', family: '' });
+const instrumentForm = ref({ nickname: '', model: '', model_id: null, mark: '', year: '', serial_no: '', family: '' });
+// The picked model's facts (migration 086), for the Mark dropdown's
+// "Mark I (from model)" option.
+const instrumentFacts = ref(null);
+watch(() => instrumentForm.value.family, (fam) => {
+  if (!refData.marksFor(fam).some((m) => m.key === instrumentForm.value.mark)) instrumentForm.value.mark = '';
+});
 const savingInstrument = ref(false);
 const instrumentError = ref('');
 
@@ -259,10 +267,13 @@ function startEditInstrument(i) {
   instrumentForm.value = {
     nickname: i.nickname || '',
     model: i.model || '',
+    model_id: i.model_id ?? null,
+    mark: i.mark_override || '',
     year: i.year || '',
     serial_no: i.serial_no || '',
     family: i.family,
   };
+  instrumentFacts.value = i.model_id ? { mark: i.catalog_mark ?? null } : null;
   instrumentError.value = '';
   editingInstrumentId.value = i.id;
 }
@@ -283,6 +294,10 @@ async function saveInstrument(i) {
       year: f.year.trim(),
       serial_no: f.serial_no.trim(),
       family: f.family,
+      // Only when changed: an unchanged model_id/mark left out lets the API
+      // keep the link and override exactly as they are (migration 086).
+      ...((f.model_id ?? null) !== (i.model_id ?? null) ? { model_id: f.model_id ?? null } : {}),
+      ...(f.mark !== (i.mark_override || '') ? { mark: f.mark } : {}),
     });
     Object.assign(i, updated);
     editingInstrumentId.value = null;
@@ -589,17 +604,24 @@ const when = (ts) => new Date(ts).toLocaleString();
                   <input v-model="instrumentForm.nickname" placeholder="e.g. Old Betsy" />
                 </div>
                 <div class="field">
-                  <label>Model</label>
-                  <input v-model="instrumentForm.model" placeholder="e.g. Stage 73" />
-                </div>
-              </div>
-              <div class="field-row">
-                <div class="field">
                   <label>Brand</label>
                   <select v-model="instrumentForm.family">
                     <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
                   </select>
                 </div>
+                <MarkSelect
+                  v-model="instrumentForm.mark" :family="instrumentForm.family"
+                  :catalog-mark="instrumentFacts?.mark ?? null"
+                />
+              </div>
+              <div class="field">
+                <label>Model</label>
+                <InstrumentModelPicker
+                  v-model="instrumentForm.model" v-model:model-id="instrumentForm.model_id"
+                  :family="instrumentForm.family" @facts="instrumentFacts = $event"
+                />
+              </div>
+              <div class="field-row">
                 <div class="field">
                   <label>Year</label>
                   <input v-model="instrumentForm.year" />

@@ -51,6 +51,7 @@ const {
 const storage = require('../storage');
 const config = require('../config');
 const inv = require('../services/inventory');
+const catalog = require('../services/instrumentCatalog');
 const { createZipWriter } = require('../services/zipStream');
 
 const router = express.Router();
@@ -146,6 +147,10 @@ const conditionNotes = (v) => {
 const FIELDS = {
   family: oneOf('family', inv.FAMILIES),
   model: text(300),
+  // Catalog link + Mark (migration 086) -- both resolved by
+  // services/instrumentCatalog.js's resolveModel, not validated here.
+  model_id: (v) => (v === null || v === '' ? null : v),
+  mark: text(20),
   year: text(40),
   serial_no: text(120),
   nickname: text(120),
@@ -261,6 +266,7 @@ router.get('/meta', (req, res) => {
     consignment_status_labels: inv.CONSIGNMENT_STATUS_LABELS,
     condition_fields: inv.CONDITION_FIELDS,
     condition_grades: inv.CONDITION_GRADES,
+    marks: inv.MARKS,
     nfs_reason_presets: inv.NFS_REASON_PRESETS,
     photo_set_presets: inv.PHOTO_SET_PRESETS,
   });
@@ -599,9 +605,11 @@ const LIST_SELECT = `
          (SELECT count(*)::int FROM tickets t WHERE t.instrument_id = i.id AND t.archived = FALSE)
            AS open_tickets,
          (SELECT count(*)::int FROM instrument_photos p WHERE p.instrument_id = i.id)
-           AS photo_count
+           AS photo_count,
+         ${catalog.FACTS_COLUMNS}
     FROM instruments i
     LEFT JOIN customers c ON c.id = i.customer_id
+    ${catalog.FACTS_JOIN}
 `;
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -662,8 +670,9 @@ router.post('/', asyncHandler(async (req, res) => {
   applyConsignmentRules(f, {});
   delete f.cover_photo_id;
 
-  const cols = Object.keys(f);
-  const row = await withTransaction(async (client) => {
+  const created = await withTransaction(async (client) => {
+    await catalog.resolveModel(client, f, {});
+    const cols = Object.keys(f);
     const { rows } = await client.query(
       `INSERT INTO instruments (${cols.join(', ')})
        VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING *`,
@@ -676,6 +685,7 @@ router.post('/', asyncHandler(async (req, res) => {
     );
     return rows[0];
   });
+  const row = await loadInventoryRow(created.id);
   res.status(201).json(inv.redactForRole(row, req.user));
 }));
 
@@ -994,6 +1004,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       f.sold_at = new Date().toISOString().slice(0, 10);
     }
     applyConsignmentRules(f, old);
+    await catalog.resolveModel(client, f, old);
 
     const setCols = Object.keys(f);
     const { rows } = await client.query(

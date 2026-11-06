@@ -64,6 +64,12 @@ export function gradeLabel(value, grades) {
   return (grades || []).find((g) => g.key === value)?.label || value;
 }
 
+/** Rhodes "Mark I" etc. (migration 085) from meta.marks; '' if none. */
+export function markLabel(i, marks) {
+  if (!i?.mark) return '';
+  return (marks?.[i.family] || []).find((m) => m.key === i.mark)?.label || i.mark;
+}
+
 /** Next QC due date from last_qc_at + qc_interval_months, or null. */
 export function nextQcDue(i) {
   if (!i.last_qc_at || !i.qc_interval_months) return null;

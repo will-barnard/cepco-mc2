@@ -8,6 +8,7 @@ const { sendEmail } = require('../mailer');
 const { buildPurchaseReceiptEmail } = require('../templates/purchaseReceipt');
 const { FAMILIES } = require('./instruments');
 const settings = require('../services/settings');
+const catalog = require('../services/instrumentCatalog');
 const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
 
 const router = express.Router();
@@ -54,22 +55,29 @@ router.post('/', asyncHandler(async (req, res) => {
   });
 
   const result = await withTransaction(async (client) => {
+    // Catalog link + Mark (migration 086), same as every other create path.
+    const m = await catalog.resolveModel(client, {
+      family: instrument.family, model: instrument.model || null,
+      model_id: instrument.model_id, mark: instrument.mark,
+    }, {});
     const { rows: instRows } = await client.query(
       // Bought stock: shop-owned and for sale. (This used to set the old
       // is_fleet flag, which put every purchase on the showroom/rental
       // fleet page — see migration 072.) cost_paid mirrors the purchase
       // price so the inventory page's admin-only cost column is filled in.
       `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                                ownership, sale_status, cost_paid, nickname)
-       VALUES ($1,$2,$3,$4,$5,'shop','available',$6,$7) RETURNING *`,
+                                ownership, sale_status, cost_paid, nickname, model_id, mark_override)
+       VALUES ($1,$2,$3,$4,$5,'shop','available',$6,$7,$8,$9) RETURNING *`,
       [
         instrument.family,
-        instrument.model || null,
+        m.model || null,
         instrument.year || null,
         instrument.serial_no || null,
         instrument.identifying_notes || null,
         price,
         instrument.nickname ? String(instrument.nickname).trim() : null,
+        m.model_id ?? null,
+        m.mark_override ?? null,
       ],
     );
     const instrumentRow = instRows[0];

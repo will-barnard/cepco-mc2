@@ -210,13 +210,20 @@ function blockModelChain(block) {
   if (block.manual) return block.manualText.trim();
   return block.path.map((id) => nodeById(block, id)?.name).filter(Boolean).join(' / ');
 }
+// The catalog node a new instrument is being picked as (the deepest one on
+// its path), or null when typed in -- sent as model_id (migration 086) and
+// the source of its facts below.
+function blockModelNode(block) {
+  if (block.manual || !block.path.length) return null;
+  return nodeById(block, block.path[block.path.length - 1]) || null;
+}
 // Suitcase-style/self-contained-amp variant (migration 045's is_suitcase) —
 // gates whether the Electronics screen shows at all for a *new* instrument.
-// Only meaningful along a real tree path; a manually-typed model carries no
-// such flag.
+// The node's effective_is_suitcase is "flagged anywhere on its path" (the
+// instrument_model_facts view), same rule this used to check by hand; a
+// manually-typed model carries no such flag.
 function blockIsSuitcase(block) {
-  if (block.manual) return false;
-  return block.path.some((id) => nodeById(block, id)?.is_suitcase);
+  return !!blockModelNode(block)?.effective_is_suitcase;
 }
 
 function chooseExistingInstrument(block, instrumentId) {
@@ -276,11 +283,12 @@ function proceduresForCategory(block, categoryKey) {
 function blockShowsElectronics(block) {
   if (!proceduresForCategory(block, 'electronics').length) return false;
   if (block.mode === 'new') return blockIsSuitcase(block);
-  // An existing instrument has no stored is_suitcase (that lives on the
-  // instrument_models tree node it was picked from, not on the instrument
-  // row) — shown whenever its family has electronics procedures at all
+  // An existing instrument linked to the catalog (migration 086) carries its
+  // model's flag. One that isn't linked (typed-in or legacy text) still
+  // shows the screen whenever its family has electronics procedures,
   // rather than hiding real available work for lack of that one flag.
-  return true;
+  const inst = customerInstruments.value.find((i) => i.id === block.instrumentId);
+  return inst?.model_id ? !!inst.model_is_suitcase : true;
 }
 
 // Parts-by-variant (migration 043). Used to require the estimator to pick
@@ -303,6 +311,14 @@ const VARIANT_FIELDS = [
 function variantsFor(p) {
   return VARIANT_FIELDS.filter((v) => p[`parts_cost_${v.key}`] !== null && p[`parts_cost_${v.key}`] !== undefined);
 }
+// Since migration 086 the key count is a catalog fact (instrument_models.
+// key_count, inherited down the tree); the Rhodes Piano Bass is 32 keys.
+// The migration checked that every catalog model prices exactly as the text
+// rule below did, so this changed nothing for an existing estimate.
+const VARIANT_BY_KEY_COUNT = { 32: 'piano_bass', 54: '54_key', 73: '73_key', 88: '88_key' };
+const variantForKeyCount = (n) => VARIANT_BY_KEY_COUNT[n] || null;
+// The text rule is now only the fallback for a model that isn't linked to
+// the catalog (typed in, or legacy text the migration couldn't place).
 // Piano Bass checked before the digit patterns purely so a hypothetical
 // "Piano Bass 73-something" model (none exist today) would still resolve
 // to piano_bass rather than 73_key — the four are otherwise disjoint.
@@ -314,16 +330,16 @@ function detectVariantKey(modelText) {
   if (/\b88\b/.test(text)) return '88_key';
   return null;
 }
-// An existing instrument's key count lives in its already-saved `model`
-// text (set from this same blockModelChain() when it was first created);
-// a new instrument's lives in the tree path/manual text being built right
-// now.
+// Catalog first: a linked existing instrument's key_count (GET /instruments
+// returns it), or the picked node's for a new one; the model text only when
+// there's no catalog model to ask.
 function blockVariantKey(block) {
   if (block.mode === 'existing') {
     const inst = customerInstruments.value.find((i) => i.id === block.instrumentId);
-    return detectVariantKey(inst?.model);
+    return inst?.model_id ? variantForKeyCount(inst.key_count) : detectVariantKey(inst?.model);
   }
-  return detectVariantKey(blockModelChain(block));
+  const node = blockModelNode(block);
+  return node ? variantForKeyCount(node.effective_key_count) : detectVariantKey(blockModelChain(block));
 }
 // 'none' — procedure doesn't price parts by variant at all, nothing to resolve.
 // 'ok' — this instrument's detected key count has a price on this procedure.
@@ -588,6 +604,7 @@ async function submit(sendAfterCreate) {
         const created = await api.post('/instruments', {
           family: block.family,
           model: blockModelChain(block) || null,
+          model_id: blockModelNode(block)?.id ?? null, // catalog link (migration 086)
           year: block.year.trim() || null,
           nickname: block.nickname.trim() || null,
           customer_id: resolvedCustomerId || null,

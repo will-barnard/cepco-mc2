@@ -178,9 +178,11 @@ async function upsertInstrument({ family, model, customerId, isFleet, lastQc, no
     // The SHOWROOM QC sheet is superseded by scripts/importInventory.js,
     // which merges these rows into the inventory log — this path only still
     // runs for a fresh database built from the original sheets.
+    // model_id: linked to the catalog when the text names exactly one model
+    // (migration 086's instrument_model_match, same as every other path).
     `INSERT INTO instruments (family, model, customer_id, ownership, sale_status, nfs_reason,
-                              qc_notes, identifying_notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+                              qc_notes, identifying_notes, model_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, instrument_model_match($1, $2, NULL)) RETURNING id`,
     [family, trimmedModel || null, customerId || null,
       isFleet ? 'shop' : 'customer', isFleet ? 'not_for_sale' : null,
       isFleet ? 'Showroom/Rental' : null,

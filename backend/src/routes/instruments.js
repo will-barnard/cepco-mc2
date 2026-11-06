@@ -5,6 +5,8 @@ const { query, withTransaction } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 
+const catalog = require('../services/instrumentCatalog');
+
 const router = express.Router();
 router.use(requireAuth);
 
@@ -45,6 +47,10 @@ const FAMILY_LABELS = {
 };
 
 router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));
+
+// Rhodes generations (migration 086) -- the refData store loads this
+// alongside families, for every form that shows a Mark.
+router.get('/marks', (req, res) => res.json(catalog.MARKS));
 
 // ---------------------------------------------------------------------------
 // Default technicians per instrument family (migration 014). Registered
@@ -186,8 +192,10 @@ router.get('/', asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT i.*, c.name AS customer_name,
             (SELECT count(*)::int FROM tickets t WHERE t.instrument_id = i.id AND t.archived = FALSE)
-              AS open_tickets
+              AS open_tickets,
+            ${catalog.FACTS_COLUMNS}
        FROM instruments i LEFT JOIN customers c ON c.id = i.customer_id
+       ${catalog.FACTS_JOIN}
        ${where} ORDER BY i.family, i.model LIMIT 1000`,
     params,
   );
@@ -196,8 +204,8 @@ router.get('/', asyncHandler(async (req, res) => {
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const { rows } = await query(
-    `SELECT i.*, c.name AS customer_name FROM instruments i
-       LEFT JOIN customers c ON c.id = i.customer_id WHERE i.id = $1`,
+    `SELECT i.*, c.name AS customer_name, ${catalog.FACTS_COLUMNS} FROM instruments i
+       LEFT JOIN customers c ON c.id = i.customer_id ${catalog.FACTS_JOIN} WHERE i.id = $1`,
     [req.params.id],
   );
   if (!rows[0]) throw notFound('Instrument not found');
@@ -215,19 +223,27 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!b.family || !FAMILIES.includes(b.family)) {
     throw badRequest(`family must be one of: ${FAMILIES.join(', ')}`);
   }
-  const { rows } = await query(
-    // Customer instruments only — shop stock and consignments are created
-    // through POST /api/inventory, which owns ownership/sale_status.
-    `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                              customer_id, nickname)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [b.family, b.model || null, b.year || null, b.serial_no || null,
-      b.identifying_notes || null, b.customer_id || null,
-      // N1: only the New Ticket page's "add a new instrument instead" form
-      // sends this today — see composeTicketTitle in routes/tickets.js.
-      b.nickname || null],
-  );
-  res.status(201).json(rows[0]);
+  const created = await withTransaction(async (client) => {
+    // Catalog link + Mark (migration 086): the pickers send model_id with
+    // the chain text; free text gets linked if it names one model outright.
+    const m = await catalog.resolveModel(client, {
+      family: b.family, model: b.model || null, model_id: b.model_id, mark: b.mark,
+    }, {});
+    const { rows } = await client.query(
+      // Customer instruments only — shop stock and consignments are created
+      // through POST /api/inventory, which owns ownership/sale_status.
+      `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
+                                customer_id, nickname, model_id, mark_override)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [b.family, m.model || null, b.year || null, b.serial_no || null,
+        b.identifying_notes || null, b.customer_id || null,
+        // N1: only the New Ticket page's "add a new instrument instead" form
+        // sends this today — see composeTicketTitle in routes/tickets.js.
+        b.nickname || null, m.model_id ?? null, m.mark_override ?? null],
+    );
+    return catalog.selectWithFacts(client, rows[0].id);
+  });
+  res.status(201).json(created);
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
@@ -242,30 +258,38 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     && ![3, 6, 12].includes(Number(b.qc_interval_months))) {
     throw badRequest('qc_interval_months must be 3, 6, 12, or null');
   }
-  const { rows } = await query(
-    `UPDATE instruments SET
-       family = COALESCE($2, family), model = COALESCE($3, model),
-       year = CASE WHEN $14::boolean THEN $4 ELSE year END,
-       serial_no = CASE WHEN $15::boolean THEN $5 ELSE serial_no END,
-       identifying_notes = COALESCE($6, identifying_notes),
-       customer_id = CASE WHEN $7::boolean THEN $8 ELSE customer_id END,
-       nickname = CASE WHEN $16::boolean THEN $9 ELSE nickname END,
-       last_qc_at = CASE WHEN $10::boolean THEN $11 ELSE last_qc_at END,
-       qc_interval_months = CASE WHEN $12::boolean THEN $13 ELSE qc_interval_months END
-     WHERE id = $1 RETURNING *`,
-    [req.params.id, b.family || null, b.model ? String(b.model).trim() : null,
-      b.year || null, b.serial_no ? String(b.serial_no).trim() : null,
-      b.identifying_notes === undefined ? null : b.identifying_notes,
-      b.customer_id !== undefined, b.customer_id || null,
-      b.nickname ? String(b.nickname).trim() : null,
-      b.last_qc_at !== undefined, b.last_qc_at || null,
-      b.qc_interval_months !== undefined, b.qc_interval_months || null,
-      // Customers page instrument editor: year / serial / nickname can be
-      // blanked (a sent '' or null clears them); left unmentioned they stay.
-      b.year !== undefined, b.serial_no !== undefined, b.nickname !== undefined],
-  );
-  if (!rows[0]) throw notFound('Instrument not found');
-  res.json(rows[0]);
+  // Same field semantics as before migration 086 (family / model /
+  // identifying_notes only change when a value is sent; year / serial /
+  // nickname / customer / QC can be blanked), now built as one SET list so
+  // the catalog link and Mark can join it.
+  const f = {};
+  if (b.family) f.family = b.family;
+  if (b.model) f.model = String(b.model).trim();
+  if (b.identifying_notes !== undefined && b.identifying_notes !== null) f.identifying_notes = b.identifying_notes;
+  if (b.year !== undefined) f.year = b.year || null;
+  if (b.serial_no !== undefined) f.serial_no = b.serial_no ? String(b.serial_no).trim() : null;
+  if (b.nickname !== undefined) f.nickname = b.nickname ? String(b.nickname).trim() : null;
+  if (b.customer_id !== undefined) f.customer_id = b.customer_id || null;
+  if (b.last_qc_at !== undefined) f.last_qc_at = b.last_qc_at || null;
+  if (b.qc_interval_months !== undefined) f.qc_interval_months = b.qc_interval_months || null;
+  if (b.model_id !== undefined) f.model_id = b.model_id;
+  if (b.mark !== undefined) f.mark = b.mark;
+
+  const updated = await withTransaction(async (client) => {
+    const { rows: before } = await client.query('SELECT * FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
+    const old = before[0];
+    if (!old) throw notFound('Instrument not found');
+    await catalog.resolveModel(client, f, old);
+    const cols = Object.keys(f);
+    if (cols.length) {
+      await client.query(
+        `UPDATE instruments SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')} WHERE id = $1`,
+        [old.id, ...cols.map((c) => f[c])],
+      );
+    }
+    return catalog.selectWithFacts(client, old.id);
+  });
+  res.json(updated);
 }));
 
 // Customers page -> Instruments -> Edit -> Delete. Admin only (same bar as

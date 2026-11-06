@@ -23,8 +23,10 @@ import {
 import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import ReservedParts from '../components/ReservedParts.vue';
+import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
+import MarkSelect from '../components/MarkSelect.vue';
 import {
-  formatPrice, statusPill, gradeClass, gradeLabel, ownershipLabel,
+  formatPrice, statusPill, gradeClass, gradeLabel, ownershipLabel, markLabel,
 } from '../inventory';
 
 const route = useRoute();
@@ -100,7 +102,7 @@ const matchesSearch = (i) => {
   if (!needle.value) return true;
   if (stockSearchId.value !== null && i.id === stockSearchId.value) return true;
   return [i.nickname, i.model, i.serial_no, i.identifying_notes, i.stock_number, i.consignor_name,
-    i.customer_name, i.sold_to_name, i.model_group, i.year]
+    i.customer_name, i.sold_to_name, i.model_group, i.year, markLabel(i, meta.value?.marks)]
     .some((v) => v && String(v).toLowerCase().includes(needle.value));
 };
 const searched = computed(() => items.value.filter(
@@ -237,15 +239,31 @@ function open(i) {
   router.push({ name: 'inventory-item', params: { id: i.id } });
 }
 
+// The effective Mark beside the model, unless the model text already says
+// it ("Mark I / Stage 73" from the picker). Word-bounded so "Mark I" isn't
+// found inside "Mark II".
+function showMarkTag(i) {
+  const label = markLabel(i, meta.value?.marks);
+  if (!label) return false;
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return !new RegExp(`\\b${escaped}\\b`, 'i').test(i.model || '');
+}
+
 // --- add a piece ----------------------------------------------------------
 const adding = ref(false);
 const addBusy = ref(false);
 const addError = ref('');
 const blankNew = () => ({
-  family: family.value || 'rhodes', nickname: '', model: '', year: '', serial_no: '',
+  family: family.value || 'rhodes', nickname: '', mark: '', model: '', model_id: null, year: '', serial_no: '',
   ownership: 'shop', sale_status: 'available', asking_price: '',
 });
 const newPiece = ref(blankNew());
+// Model picked from the catalog + Mark override (migration 086). A
+// family without Marks can't keep one.
+const newPieceFacts = ref(null);
+watch(() => newPiece.value.family, (fam) => {
+  if (!refData.marksFor(fam).some((m) => m.key === newPiece.value.mark)) newPiece.value.mark = '';
+});
 function startAdd() {
   newPiece.value = blankNew();
   addError.value = '';
@@ -270,13 +288,14 @@ function downloadCsv() {
   const condKeys = family.value
     ? conditionFields.value
     : [...new Map(Object.values(meta.value?.condition_fields || {}).flat().map((f) => [f.key, f])).values()];
-  const header = ['Stock #', 'Name', 'Family', 'Section', 'Year', 'Model', ...condKeys.map((f) => f.label),
+  const header = ['Stock #', 'Name', 'Family', 'Section', 'Year', 'Mark', 'Model', ...condKeys.map((f) => f.label),
     'Notes', 'Status', 'Reason / hold', 'Price', 'Price note', 'Serial', 'On website', 'Ownership', 'Consignor',
     'Consignment status', 'Consignment terms',
     ...(isSold.value ? ['Sold price', 'Sold to', 'Sold on'] : []),
     ...(auth.isAdmin ? ['Paid', 'Paid note'] : [])];
   const rows = filtered.value.map((i) => [
-    i.stock_number, i.nickname, refData.familyLabel(i.family), i.model_group, i.year, i.model,
+    i.stock_number, i.nickname, refData.familyLabel(i.family), i.model_group, i.year,
+    markLabel(i, meta.value?.marks), i.model,
     // Grade label plus its note, e.g. "Very Good (light scratches)".
     ...condKeys.map((f) => {
       const grade = gradeLabel(i.condition?.[f.key], meta.value?.condition_grades);
@@ -363,7 +382,14 @@ onMounted(async () => {
           </select>
         </div>
         <div class="field"><label>Name</label><input v-model="newPiece.nickname" placeholder="Blitzen" /></div>
-        <div class="field"><label>Model</label><input v-model="newPiece.model" placeholder="Suitcase 73" /></div>
+        <MarkSelect v-model="newPiece.mark" :family="newPiece.family" :catalog-mark="newPieceFacts?.mark ?? null" />
+        <div class="field">
+          <label>Model</label>
+          <InstrumentModelPicker
+            v-model="newPiece.model" v-model:model-id="newPiece.model_id" :family="newPiece.family"
+            @facts="newPieceFacts = $event"
+          />
+        </div>
         <div class="field"><label>Year</label><input v-model="newPiece.year" /></div>
       </div>
       <div class="field-row">
@@ -519,7 +545,9 @@ onMounted(async () => {
                     <div class="muted tiny-text">{{ i.stock_number }}</div>
                   </td>
                   <td class="nowrap">{{ i.year }}</td>
-                  <td class="model-col">{{ i.model }}</td>
+                  <td class="model-col">
+                    <span v-if="showMarkTag(i)" class="mark-tag">{{ markLabel(i, meta?.marks) }}</span>{{ i.model }}
+                  </td>
                   <template v-if="isSold">
                     <td class="right nowrap">{{ formatPrice(i.sold_price) }}</td>
                     <td>{{ i.sold_to_name }}</td>
@@ -672,5 +700,6 @@ onMounted(async () => {
 .cond-select:hover, .cond-select:focus { border-color: var(--border); background-color: var(--surface-2); }
 .cond-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-col { max-width: 150px; }
+.mark-tag { font-weight: 600; margin-right: 6px; white-space: nowrap; }
 .grade-chip { margin-right: 8px; white-space: nowrap; display: inline-block; }
 </style>

@@ -4282,6 +4282,87 @@ their own Inventory tab, separate from Parts / Supplies (that's buying).
 - Stock cost (`inventory_parts.cost_paid`) stays admin-only: it pre-fills
   "Cost each" for admins when picking from stock; everyone else types it.
 
+### 2.106 Rhodes Mark + instruments linked to the model catalog (migrations 085-086)
+
+Shop feedback: Rhodes need a Mark (I, II, III, V, 7, 8) beside the Model
+(Stage / Suitcase). Doing it properly meant fixing an older gap first:
+an instrument only kept the *text* of the model it was picked as, so every
+fact about the model was re-derived from text -- key count for parts pricing
+by regex (`detectVariantKey`), the suitcase flag not at all for an existing
+instrument, and now the Mark.
+
+**The shape.** Customer instruments and inventory are already one
+`instruments` table (072). The hierarchy lives in data, not schema:
+`instrument_models` is the catalog (Rhodes -> Mark I -> Stage 73), and
+`instruments.model_id` points at the node a piece *is*. No table
+inheritance: families have been merged twice (037, 083), so the taxonomy
+has to stay editable rows.
+
+- **Facts inherit down the tree.** A node may set `mark` and `key_count`;
+  the view `instrument_model_facts` resolves each node's effective values
+  (own, else nearest ancestor), `is_suitcase` (anywhere on the path, as
+  before) and the `" / "` chain. So "Mark I" says mk1 once and its four
+  children inherit it. Settings -> Instrument models edits both, shows the
+  inherited value greyed, and shows how many instruments link to each node.
+- **`instruments.model` is untouched** -- it stays the text as written
+  (sheet text, free text, the picker's chain). `model_id` is the meaning.
+- **`mark_override`** (085's `mark`, renamed) is set only when a piece
+  differs from its model (a Mark II harp in a Mark I case). Every read
+  returns `mark` = `COALESCE(mark_override, catalog mark)` plus
+  `catalog_mark`, `model_chain`, `key_count`, `model_is_suitcase`
+  (`services/instrumentCatalog.js`'s `FACTS_COLUMNS` / `FACTS_JOIN`).
+- **Integrity in the database.** Composite FK `(model_id, family) ->
+  instrument_models (id, family)`: a Wurlitzer can't point at a Rhodes node,
+  a family merge on the catalog cascades, and a node with instruments under
+  it can't be deleted (API: 409, "deactivate it instead"). Re-parenting a
+  node under its own descendant is refused (it would cut the branch off the
+  tree).
+
+**Writes.** Every create/edit path -- `POST/PATCH /instruments` (tickets,
+estimates, Customers page), `POST/PATCH /inventory`, `POST /purchases` --
+goes through `resolveModel()`:
+- a picked `model_id` must be in the piece's family; text defaults to its chain;
+- text or family changed without a pick -> re-linked by
+  `instrument_model_match()` (below), so typing "Suitcase 73" for a Mark I
+  links it, and editing text away from the link unlinks it rather than
+  leaving it stale;
+- `mark` ('' = as the model says) must be on the family's list; equal to
+  the model's mark it's stored as no override; a model/family change drops
+  an override that's become redundant or invalid.
+The pickers send `model_id` (`v-model:model-id` on InstrumentModelPicker,
+which also emits the node's `facts`); `MarkSelect.vue` edits the override
+with "Mark I (from model)" as its blank option. Importers link with the same
+SQL function.
+
+**Readers switched to the catalog.** Estimate wizard: key count ->
+parts variant (32 Piano Bass / 54 / 73 / 88) and the Electronics screen's
+suitcase flag now come from the node (new instruments) or the linked model
+(existing ones); the text regex is only the fallback for unlinked models.
+
+**Backfill (086), unambiguous only.** `instrument_model_match(family,
+text, mark)`: the text equals one node's full chain (case / spacing around
+"/" ignored), else exactly one node's own name, using the piece's 085 mark
+to break a tie (Mark I vs Mark II "Suitcase 73"); otherwise no link. Never
+linked when it would change how the piece prices. Sheet text like "1977 FR
+Stage 73" stays unlinked -- pick the model on the piece to link it. Every
+decision is kept in `instrument_model_link_audit` (text, mark before, node,
+or why not). The migration aborts and rolls back if: any catalog node is
+unreachable (a parent cycle); any node's parts variant would differ from
+what the old regex gave its chain; or any instrument's text, family or
+mark would read differently afterwards.
+
+**Marks** (`services/instrumentCatalog.js` `MARKS`, served at
+`GET /instruments/marks`): Pre-Mark (1965-69), Mark I, II, III (EK-10),
+V, 7, 8. Mark IV and VI were prototypes only. Catalog nodes got marks only
+where the name says so (Mark I, Mark II, Mark V, Mark 8); Sparkletop,
+Rhodes 54 and Piano Bass are left for the shop to set in Settings.
+
+**Not done / next.** No "Electric Piano" level above families: nothing
+behaves differently by it yet (a `category` per family is enough if
+reports want one). Linking the unlinked legacy rows is a by-hand job on
+each piece (or a small review screen over `instrument_model_link_audit`
+if there are many).
+
 ## 4. Suggested first moves after deploy
 
 

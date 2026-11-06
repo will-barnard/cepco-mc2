@@ -13,7 +13,7 @@ const refData = useRefData();
 const shopToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
 
 const instrument = ref({
-  family: 'rhodes', nickname: '', model: '', year: '', serial_no: '', identifying_notes: '',
+  family: 'rhodes', nickname: '', model: '', model_id: null, year: '', serial_no: '', identifying_notes: '',
 });
 const seller = ref({
   name: '', email: '', phone: '', address: '',
@@ -88,7 +88,7 @@ async function submit() {
         </div>
         <div class="field">
           <label>Model</label>
-          <InstrumentModelPicker :family="instrument.family" v-model="instrument.model" />
+          <InstrumentModelPicker :family="instrument.family" v-model="instrument.model" v-model:model-id="instrument.model_id" />
         </div>
         <div class="field">
           <label>Year</label>

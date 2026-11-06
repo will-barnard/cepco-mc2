@@ -12,8 +12,29 @@
 const express = require('express');
 const { query } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
-const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
+const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 const { FAMILIES } = require('./instruments');
+const catalog = require('../services/instrumentCatalog');
+
+// Catalog facts (migration 086). '' / null clears either one, which means
+// "inherit from the parent" -- the facts view resolves it down the tree.
+function markFor(family, v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  if (!catalog.markKeys(family).includes(v)) {
+    throw badRequest(catalog.MARKS[family]
+      ? `mark must be one of: ${catalog.MARKS[family].map((m) => m.label).join(', ')}`
+      : 'Only Rhodes models have a Mark');
+  }
+  return v;
+}
+function keyCountOf(v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 128) throw badRequest('key_count must be a whole number of keys');
+  return n;
+}
 
 const router = express.Router();
 router.use(requireAuth);
@@ -34,11 +55,20 @@ async function validateParent(parentId, family) {
 router.get('/', asyncHandler(async (req, res) => {
   const clauses = [];
   const params = [];
-  if (req.query.family) { params.push(req.query.family); clauses.push(`family = $${params.length}`); }
-  if (req.query.include_inactive !== 'true') clauses.push('active = TRUE');
+  if (req.query.family) { params.push(req.query.family); clauses.push(`n.family = $${params.length}`); }
+  if (req.query.include_inactive !== 'true') clauses.push('n.active = TRUE');
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const { rows } = await query(
-    `SELECT * FROM instrument_models ${where} ORDER BY family, parent_id NULLS FIRST, sort_order, name`,
+    // Each node with what it resolves to after inheritance (migration 086)
+    // and how many instruments are linked to it -- Settings shows both, and
+    // the pickers ignore the extras.
+    `SELECT n.*, f.chain, f.mark AS effective_mark, f.key_count AS effective_key_count,
+            f.is_suitcase AS effective_is_suitcase,
+            (SELECT count(*)::int FROM instruments i WHERE i.model_id = n.id) AS instrument_count
+       FROM instrument_models n
+       LEFT JOIN instrument_model_facts f ON f.id = n.id
+       ${where}
+      ORDER BY n.family, n.parent_id NULLS FIRST, n.sort_order, n.name`,
     params,
   );
   res.json(rows);
@@ -58,8 +88,9 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
     [b.family, b.parent_id || null],
   );
   const { rows } = await query(
-    `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual, is_suitcase)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual, is_suitcase,
+                                    mark, key_count)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [b.family, b.parent_id || null, String(b.name).trim(),
       b.sort_order === undefined ? maxRow[0].next : Number(b.sort_order),
       b.allow_manual === true,
@@ -68,7 +99,9 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
       // estimate wizard's Electronics screen shows at all for a given
       // instrument (see migration 045's header). Same plain boolean
       // convention as allow_manual just above.
-      b.is_suitcase === true],
+      b.is_suitcase === true,
+      markFor(b.family, b.mark) ?? null,
+      keyCountOf(b.key_count) ?? null],
   );
   res.status(201).json(rows[0]);
 }));
@@ -86,7 +119,20 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
   if (b.parent_id !== undefined && b.parent_id !== null) {
     if (Number(b.parent_id) === existing.id) throw badRequest('A node cannot be its own parent');
     await validateParent(b.parent_id, existing.family);
+    // Nor under one of its own descendants: that loop would cut the whole
+    // branch off from the tree (and from every instrument's facts).
+    const { rows: loop } = await query(
+      `WITH RECURSIVE up AS (
+         SELECT id, parent_id FROM instrument_models WHERE id = $1
+         UNION ALL
+         SELECT n.id, n.parent_id FROM instrument_models n JOIN up ON n.id = up.parent_id
+       ) SELECT 1 FROM up WHERE id = $2 LIMIT 1`,
+      [b.parent_id, existing.id],
+    );
+    if (loop.length) throw badRequest("A node can't move under one of its own children");
   }
+  const mark = markFor(existing.family, b.mark);
+  const keyCount = keyCountOf(b.key_count);
 
   const { rows } = await query(
     `UPDATE instrument_models SET
@@ -96,6 +142,8 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
        allow_manual = COALESCE($6, allow_manual),
        is_suitcase  = COALESCE($7, is_suitcase),
        active       = COALESCE($8, active),
+       mark         = CASE WHEN $9::boolean THEN $10 ELSE mark END,
+       key_count    = CASE WHEN $11::boolean THEN $12 ELSE key_count END,
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
     [req.params.id,
@@ -104,17 +152,31 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       b.sort_order === undefined ? null : Number(b.sort_order),
       b.allow_manual === undefined ? null : b.allow_manual,
       b.is_suitcase === undefined ? null : b.is_suitcase,
-      b.active === undefined ? null : b.active],
+      b.active === undefined ? null : b.active,
+      mark !== undefined, mark ?? null,
+      keyCount !== undefined, keyCount ?? null],
   );
   res.json(rows[0]);
 }));
 
 router.delete('/:id', requireAdmin, asyncHandler(async (req, res) => {
-  // ON DELETE CASCADE (migration 036) takes the whole subtree with it —
-  // deliberate: a branch node with children is "a whole model line," not
-  // just one row, and there's nothing else in the app referencing these
-  // ids yet (instruments.model stays a plain string the picker fills in,
-  // never a foreign key) for a cascade to orphan.
+  // ON DELETE CASCADE (migration 036) takes the whole subtree with it --
+  // a branch node is "a whole model line". Since migration 086 instruments
+  // point at these nodes, so a branch any instrument is linked into can't
+  // go (the FK refuses it too); deactivating hides it from the pickers
+  // while keeping every link.
+  const { rows: inUse } = await query(
+    `WITH RECURSIVE sub AS (
+       SELECT id FROM instrument_models WHERE id = $1
+       UNION ALL
+       SELECT n.id FROM instrument_models n JOIN sub ON n.parent_id = sub.id
+     ) SELECT count(*)::int AS n FROM instruments WHERE model_id IN (SELECT id FROM sub)`,
+    [req.params.id],
+  );
+  if (inUse[0].n) {
+    throw conflict(`${inUse[0].n} instrument${inUse[0].n === 1 ? ' is' : 's are'} linked to this model`
+      + ' (or one under it) -- deactivate it instead');
+  }
   const { rowCount } = await query('DELETE FROM instrument_models WHERE id = $1', [req.params.id]);
   if (!rowCount) throw notFound('Instrument model not found');
   res.json({ deleted: true });
