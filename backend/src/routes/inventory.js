@@ -52,6 +52,8 @@ const storage = require('../storage');
 const config = require('../config');
 const inv = require('../services/inventory');
 const catalog = require('../services/instrumentCatalog');
+const detail = require('../services/instrumentDetail');
+const ownership = require('../services/ownership');
 const { createZipWriter } = require('../services/zipStream');
 
 const router = express.Router();
@@ -175,10 +177,9 @@ const FIELDS = {
   },
   consignment_status: (v) => (v === null || v === '' ? null : oneOf('consignment_status', inv.CONSIGNMENT_STATUSES)(v)),
   consignment_terms: text(500),
-  sold_at: dateOrNull('sold_at'),
-  sold_price: money('sold_price'),
-  sold_to_name: text(200),
-  sold_to_customer_id: intOrNull('sold_to_customer_id'),
+  // sold_at / sold_price / sold_to_* aren't editable here any more: a sale
+  // is POST /:id/sell (migration 087), and its details live on the sale's
+  // ownership period, edited through PATCH /instruments/ownership/:id.
   qc_notes: text(4000),
   last_qc_at: dateOrNull('last_qc_at'),
   qc_interval_months: (v) => {
@@ -237,6 +238,9 @@ function applyConsignmentRules(f, old) {
 }
 
 function pickFields(body, req) {
+  if (body.sale_status === 'sold') {
+    throw badRequest('Use "Mark sold" — a sale moves the piece to its buyer (and records who and for how much)');
+  }
   const out = {};
   for (const [field, normalise] of Object.entries(FIELDS)) {
     if (body[field] === undefined) continue;
@@ -599,61 +603,106 @@ const STATUS_FILTERS = {
   all: [],
 };
 
-const LIST_SELECT = `
-  SELECT i.*, c.name AS customer_name, c.xero_contact_id AS customer_xero_contact_id,
+// The list row shape lives with the instrument page's loader
+// (services/instrumentDetail.js) so the two can't drift apart.
+const { LIST_SELECT } = detail;
+
+// Sales (migration 087). A sold piece is its buyer's instrument now, so the
+// Sold tab -- and sold consignments -- come from the sale periods in
+// instrument_ownership, each shaped like the inventory row it was at the
+// sale (shop or consignment, the consignor, the deal, the price and buyer).
+// `row_key` tells a sale apart from the same instrument back in stock.
+const SALES_SELECT = `
+  SELECT to_jsonb(i) || jsonb_build_object(
+           'ownership', s.kind, 'sale_status', 'sold',
+           'customer_id', s.customer_id, 'customer_name', sc.name,
+           'consignor_name', s.owner_name,
+           'consignment_status', s.payout_status, 'consignment_rate', s.consignment_rate,
+           'consignment_terms', s.consignment_terms,
+           'sold_at', s.ended_on, 'sold_price', s.sale_price,
+           'sold_to_name', COALESCE(s.sold_to_name, bc.name), 'sold_to_customer_id', s.sold_to_customer_id,
+           'sale_id', s.id, 'owner_customer_id', i.customer_id, 'row_key', 's' || s.id) AS row,
          (SELECT e.name FROM employees e WHERE e.id = i.audited_by) AS audited_by_name,
-         (SELECT count(*)::int FROM tickets t WHERE t.instrument_id = i.id AND t.archived = FALSE)
-           AS open_tickets,
-         (SELECT count(*)::int FROM instrument_photos p WHERE p.instrument_id = i.id)
-           AS photo_count,
+         (SELECT count(*)::int FROM tickets t WHERE t.instrument_id = i.id AND t.archived = FALSE) AS open_tickets,
+         (SELECT count(*)::int FROM instrument_photos p WHERE p.instrument_id = i.id) AS photo_count,
          ${catalog.FACTS_COLUMNS}
-    FROM instruments i
-    LEFT JOIN customers c ON c.id = i.customer_id
+    FROM instrument_ownership s
+    JOIN instruments i ON i.id = s.instrument_id
+    LEFT JOIN customers sc ON sc.id = s.customer_id
+    LEFT JOIN customers bc ON bc.id = s.sold_to_customer_id
     ${catalog.FACTS_JOIN}
-`;
+   WHERE s.end_reason = 'sale'`;
+
+async function listSales(req, { consignmentsOnly }) {
+  const clauses = [];
+  const params = [];
+  if (consignmentsOnly) clauses.push("s.kind = 'consignment'");
+  if (req.query.family) { params.push(req.query.family); clauses.push(`i.family = $${params.length}`); }
+  if (req.query.ownership) { params.push(req.query.ownership); clauses.push(`s.kind = $${params.length}`); }
+  if (req.query.q) {
+    params.push(`%${req.query.q}%`);
+    const p = `$${params.length}`;
+    clauses.push(`(i.nickname ILIKE ${p} OR i.model ILIKE ${p} OR i.serial_no ILIKE ${p}
+                   OR i.identifying_notes ILIKE ${p} OR s.owner_name ILIKE ${p}
+                   OR s.sold_to_name ILIKE ${p} OR bc.name ILIKE ${p} OR sc.name ILIKE ${p})`);
+  }
+  const { rows } = await query(
+    `${SALES_SELECT} ${clauses.map((c) => `AND ${c}`).join(' ')}
+      ORDER BY s.ended_on DESC NULLS LAST, s.id DESC LIMIT 2000`,
+    params,
+  );
+  return rows.map(({ row, ...rest }) => ({ ...row, ...rest }));
+}
 
 router.get('/', asyncHandler(async (req, res) => {
   const status = req.query.status || 'active';
   if (!STATUS_FILTERS[status]) {
     throw badRequest(`status must be one of: ${Object.keys(STATUS_FILTERS).join(', ')}`);
   }
-  const clauses = ["i.ownership <> 'customer'", ...STATUS_FILTERS[status]];
-  const params = [];
-  if (req.query.family) { params.push(req.query.family); clauses.push(`i.family = $${params.length}`); }
-  if (req.query.ownership) { params.push(req.query.ownership); clauses.push(`i.ownership = $${params.length}`); }
-  if (req.query.on_website === 'true') clauses.push('i.on_website = TRUE');
-  if (req.query.on_website === 'false') clauses.push('i.on_website = FALSE');
-  if (req.query.q) {
-    params.push(`%${req.query.q}%`);
-    const p = `$${params.length}`;
-    clauses.push(`(i.nickname ILIKE ${p} OR i.model ILIKE ${p} OR i.serial_no ILIKE ${p}
-                   OR i.identifying_notes ILIKE ${p} OR i.consignor_name ILIKE ${p}
-                   OR i.sold_to_name ILIKE ${p} OR c.name ILIKE ${p})`);
-  }
-  params.push(inv.FAMILIES);
-  const familyOrder = `array_position($${params.length}::text[], i.family)`;
-  // Sold pieces read best newest-first; everything else in sheet order
-  // (family, then section in the order it first appears, then row).
-  // Consignments group by where the deal stands, payout due first (money
-  // owed), then newest sale.
-  let order;
-  if (status === 'sold') {
-    order = `i.sold_at DESC NULLS LAST, ${familyOrder}, i.sort_order NULLS LAST, i.id DESC`;
-  } else if (status === 'consignments') {
-    // Only pushed here: an unused bind parameter is an error in Postgres.
-    params.push(['payout_due', 'contracted', 'for_sale', 'paid_out']);
-    order = `array_position($${params.length}::text[], i.consignment_status) NULLS LAST,
-       i.sold_at DESC NULLS LAST, ${familyOrder}, i.sort_order NULLS LAST, i.id`;
-  } else {
-    order = `${familyOrder},
-       MIN(i.sort_order) OVER (PARTITION BY i.family, COALESCE(i.model_group, '')) NULLS LAST,
-       i.model_group NULLS LAST, i.sort_order NULLS LAST, i.id`;
+  // Pieces in stock (or consigned) now -- everything but the Sold tab.
+  let current = [];
+  if (status !== 'sold') {
+    const clauses = ["i.ownership <> 'customer'", ...STATUS_FILTERS[status]];
+    const params = [];
+    if (req.query.family) { params.push(req.query.family); clauses.push(`i.family = $${params.length}`); }
+    if (req.query.ownership) { params.push(req.query.ownership); clauses.push(`i.ownership = $${params.length}`); }
+    if (req.query.on_website === 'true') clauses.push('i.on_website = TRUE');
+    if (req.query.on_website === 'false') clauses.push('i.on_website = FALSE');
+    if (req.query.q) {
+      params.push(`%${req.query.q}%`);
+      const p = `$${params.length}`;
+      clauses.push(`(i.nickname ILIKE ${p} OR i.model ILIKE ${p} OR i.serial_no ILIKE ${p}
+                     OR i.identifying_notes ILIKE ${p} OR i.consignor_name ILIKE ${p}
+                     OR c.name ILIKE ${p})`);
+    }
+    params.push(inv.FAMILIES);
+    // Sheet order: family, then section in the order it first appears, then row.
+    const familyOrder = `array_position($${params.length}::text[], i.family)`;
+    const { rows } = await query(
+      `${LIST_SELECT} WHERE ${clauses.join(' AND ')}
+        ORDER BY ${familyOrder},
+          MIN(i.sort_order) OVER (PARTITION BY i.family, COALESCE(i.model_group, '')) NULLS LAST,
+          i.model_group NULLS LAST, i.sort_order NULLS LAST, i.id
+        LIMIT 2000`,
+      params,
+    );
+    current = rows.map((r) => ({ ...r, row_key: `i${r.id}` }));
   }
 
-  const { rows } = await query(
-    `${LIST_SELECT} WHERE ${clauses.join(' AND ')} ORDER BY ${order} LIMIT 2000`,
-    params,
-  );
+  // Sales: the Sold tab, sold consignments, and "all". Website filters
+  // don't apply -- a sold piece isn't listed.
+  const wantsSales = ['sold', 'consignments', 'all'].includes(status) && req.query.on_website === undefined;
+  const sales = wantsSales ? await listSales(req, { consignmentsOnly: status === 'consignments' }) : [];
+
+  let rows = [...current, ...sales];
+  if (status === 'consignments') {
+    // By where the deal stands, payout due first (money owed), then newest sale.
+    const rank = { payout_due: 0, contracted: 1, for_sale: 2, paid_out: 3 };
+    const r = (cs) => (cs in rank ? rank[cs] : 4);
+    rows = rows.sort((a, b) => r(a.consignment_status) - r(b.consignment_status)
+      || String(b.sold_at || '').localeCompare(String(a.sold_at || ''))
+      || a.id - b.id);
+  }
   res.json(rows.map((r) => inv.redactForRole(r, req.user)));
 }));
 
@@ -666,12 +715,12 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!f.model && !f.nickname) throw badRequest('Give it a name or a model');
   f.ownership = f.ownership || 'shop';
   f.sale_status = f.sale_status || 'available';
-  if (f.sale_status === 'sold' && !f.sold_at) f.sold_at = new Date().toISOString().slice(0, 10);
   applyConsignmentRules(f, {});
   delete f.cover_photo_id;
 
   const created = await withTransaction(async (client) => {
     await catalog.resolveModel(client, f, {});
+    await ownership.setContext(client, { reason: 'added', employeeId: req.user.id });
     const cols = Object.keys(f);
     const { rows } = await client.query(
       `INSERT INTO instruments (${cols.join(', ')})
@@ -692,14 +741,10 @@ router.post('/', asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Detail
 // ---------------------------------------------------------------------------
-async function loadInventoryRow(id) {
-  const { rows } = await query(`${LIST_SELECT} WHERE i.id = $1`, [id]);
-  if (!rows[0]) throw notFound('Instrument not found');
-  if (rows[0].ownership === 'customer') {
-    throw badRequest('That instrument belongs to a customer — it is not part of inventory');
-  }
-  return rows[0];
-}
+// Any instrument -- since migration 087 the instrument page, its photos,
+// parts and audit work for customer instruments and sold pieces too. What
+// stays inventory-only (sale / ownership edits) checks ownership itself.
+const loadInventoryRow = (id) => detail.loadRow(id);
 
 // ---------------------------------------------------------------------------
 // Inventory audit (migration 077). The summary counts every shop-held piece
@@ -708,8 +753,12 @@ async function loadInventoryRow(id) {
 // ---------------------------------------------------------------------------
 router.get('/audit', asyncHandler(async (req, res) => {
   const { rows: [i] } = await query(
+    // Shop pieces, plus the ones the shop has sold (they're their buyers'
+    // instruments since migration 087, but the audit covered them).
     `SELECT count(*)::int AS total, count(audited_at)::int AS audited
-       FROM instruments WHERE ownership <> 'customer'`,
+       FROM instruments i
+      WHERE i.ownership <> 'customer'
+         OR EXISTS (SELECT 1 FROM instrument_ownership s WHERE s.instrument_id = i.id AND s.end_reason = 'sale')`,
   );
   const { rows: [p] } = await query(
     'SELECT count(*)::int AS total, count(audited_at)::int AS audited FROM inventory_parts',
@@ -885,76 +934,7 @@ router.put('/:id/audit', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const row = await loadInventoryRow(req.params.id);
-  const id = row.id;
-
-  const [tickets, rentals, purchases, sets, photos, ticketPhotos, events, soldTo, logged] = await Promise.all([
-    query(
-      `SELECT t.id, t.title, t.status_key, t.archived, t.updated_at, t.category_key,
-              s.label AS status_label
-         FROM tickets t
-         LEFT JOIN settings s ON s.category = 'ticket_status' AND s.key = t.status_key
-        WHERE t.instrument_id = $1 ORDER BY t.archived, t.updated_at DESC`,
-      [id],
-    ),
-    query('SELECT * FROM instrument_rentals WHERE instrument_id = $1 ORDER BY start_date DESC', [id]),
-    // What the shop paid the seller is cost information — admins only.
-    isAdmin(req)
-      ? query('SELECT * FROM instrument_purchases WHERE instrument_id = $1 ORDER BY purchase_date DESC', [id])
-      : Promise.resolve({ rows: [] }),
-    query(
-      `SELECT s.*, e.name AS created_by_name, t.title AS ticket_title
-         FROM instrument_photo_sets s
-         LEFT JOIN employees e ON e.id = s.created_by
-         LEFT JOIN tickets t ON t.id = s.ticket_id
-        WHERE s.instrument_id = $1 ORDER BY s.taken_on DESC, s.id DESC`,
-      [id],
-    ),
-    query(
-      `SELECT p.*, e.name AS uploader_name FROM instrument_photos p
-         LEFT JOIN employees e ON e.id = p.uploader_id
-        WHERE p.instrument_id = $1 ORDER BY p.sort_order, p.uploaded_at, p.id`,
-      [id],
-    ),
-    // Read-only: photos taken on this piece's tickets, so the history is in
-    // one place without copying files around.
-    query(
-      `SELECT a.id, a.ticket_id, a.caption, a.file_name, a.uploaded_at, t.title AS ticket_title
-         FROM ticket_attachments a JOIN tickets t ON t.id = a.ticket_id
-        WHERE t.instrument_id = $1 ORDER BY a.uploaded_at DESC`,
-      [id],
-    ),
-    query(
-      `SELECT ev.*, e.name AS employee_name FROM instrument_events ev
-         LEFT JOIN employees e ON e.id = ev.employee_id
-        WHERE ev.instrument_id = $1 ORDER BY ev.created_at DESC, ev.id DESC LIMIT 100`,
-      [id],
-    ),
-    row.sold_to_customer_id
-      ? query('SELECT id, name, email FROM customers WHERE id = $1', [row.sold_to_customer_id])
-      : Promise.resolve({ rows: [] }),
-    // Shown beside the hand-entered est_hours for reference (migration 078).
-    query(
-      `SELECT COALESCE(sum(h.hours), 0)::float AS hours
-         FROM hours_log h JOIN tickets t ON t.id = h.ticket_id WHERE t.instrument_id = $1`,
-      [id],
-    ),
-  ]);
-
-  const photosBySet = {};
-  for (const p of photos.rows) (photosBySet[p.set_id] ||= []).push(p);
-
-  res.json({
-    ...inv.redactForRole(row, req.user),
-    sold_to_customer: soldTo.rows[0] || null,
-    tickets: tickets.rows,
-    rentals: rentals.rows,
-    purchases: purchases.rows,
-    photo_sets: sets.rows.map((s) => ({ ...s, photos: photosBySet[s.id] || [] })),
-    ticket_photos: ticketPhotos.rows,
-    logged_hours: logged.rows[0].hours,
-    events: events.rows.filter((e) => isAdmin(req) || e.field !== 'cost_paid'),
-  });
+  res.json(await detail.loadDetail(req.params.id, req.user));
 }));
 
 router.post('/:id/photo-sets', asyncHandler(async (req, res) => {
@@ -997,11 +977,15 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       );
       if (!rowCount) throw badRequest("That photo isn't one of this instrument's");
     }
-    // Marking something sold without a date: today. Moving it back out of
-    // sold keeps the sale fields — easy to see what was undone, and a mistaken
-    // click doesn't wipe the buyer.
-    if (f.sale_status === 'sold' && old.sale_status !== 'sold' && f.sold_at === undefined && !old.sold_at) {
-      f.sold_at = new Date().toISOString().slice(0, 10);
+    // Owner changes are written to the ownership history by a trigger
+    // (migration 087); say why. A different consignor on the same
+    // consignment is fixing who it is, not a new owner.
+    const newOwnership = f.ownership ?? old.ownership;
+    if (newOwnership !== old.ownership
+        || (f.customer_id !== undefined && (f.customer_id ?? null) !== (old.customer_id ?? null))) {
+      await ownership.setContext(client, {
+        reason: newOwnership === old.ownership ? 'correction' : 'changed', employeeId: req.user.id,
+      });
     }
     applyConsignmentRules(f, old);
     await catalog.resolveModel(client, f, old);
@@ -1032,6 +1016,78 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 
   const row = await loadInventoryRow(updated.id);
   res.json(inv.redactForRole(row, req.user));
+}));
+
+// ---------------------------------------------------------------------------
+// Sell (migration 087): the piece becomes the buyer's instrument -- with a
+// customer record, it's on their page from now on; without one, it's held
+// under the buyer's name until someone links the record (from the piece's
+// ownership history). The sale itself lives on the closed shop/consignment
+// period; undo is POST /instruments/:id/undo-sale.
+// ---------------------------------------------------------------------------
+router.post('/:id/sell', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const soldOn = (b.sold_at ? dateOrNull('sold_at')(b.sold_at) : null) || new Date().toISOString().slice(0, 10);
+  const price = money('sold_price')(b.sold_price ?? null);
+  const buyerId = intOrNull('sold_to_customer_id')(b.sold_to_customer_id ?? null);
+  let buyerName = text(200)(b.sold_to_name);
+  if (buyerId) {
+    const { rows } = await query('SELECT name FROM customers WHERE id = $1', [buyerId]);
+    if (!rows[0]) throw badRequest("That buyer isn't a customer record");
+    buyerName = buyerName || rows[0].name;
+  }
+  if (!buyerId && !buyerName) throw badRequest('Who bought it? Link their customer record or type a name');
+
+  const id = await withTransaction(async (client) => {
+    const { rows: [old] } = await client.query('SELECT * FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!old) throw notFound('Instrument not found');
+    if (old.ownership === 'customer') throw badRequest('Only shop stock or a consignment can be sold');
+    await ownership.recordSale(client, old.id, {
+      soldOn, price, buyerId, buyerName, employeeId: req.user.id,
+    });
+    await client.query(
+      `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+       VALUES ($1, $2, 'sold', $3, $4)`,
+      [old.id, req.user.id, old.sale_status, buyerName],
+    );
+    return old.id;
+  });
+  res.json(await detail.loadDetail(id, req.user));
+}));
+
+// A consignment goes back to its owner unsold. The deal as it stood is kept
+// on the closed consignment period.
+router.post('/:id/return-to-owner', asyncHandler(async (req, res) => {
+  const id = await withTransaction(async (client) => {
+    const { rows: [old] } = await client.query('SELECT * FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!old) throw notFound('Instrument not found');
+    if (old.ownership !== 'consignment') throw badRequest('Only a consignment can go back to its owner');
+    if (!old.customer_id) throw badRequest("Link the consignor's customer record first — that's who it goes back to");
+    await ownership.setContext(client, { reason: 'consignment_returned', employeeId: req.user.id });
+    await client.query(
+      `UPDATE instruments
+          SET ownership = 'customer', sale_status = NULL, consignment_status = NULL,
+              consignment_rate = NULL, consignment_terms = NULL, consignor_name = NULL,
+              on_website = FALSE, hold_for = NULL
+        WHERE id = $1`,
+      [old.id],
+    );
+    await client.query(
+      `UPDATE instrument_ownership
+          SET consignment_rate = $2, consignment_terms = $3, payout_status = $4,
+              owner_name = COALESCE(owner_name, $5)
+        WHERE id = (SELECT max(id) FROM instrument_ownership
+                     WHERE instrument_id = $1 AND end_reason = 'consignment_returned')`,
+      [old.id, old.consignment_rate, old.consignment_terms, old.consignment_status, old.consignor_name],
+    );
+    await client.query(
+      `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+       VALUES ($1, $2, 'ownership', 'consignment', 'customer')`,
+      [old.id, req.user.id],
+    );
+    return old.id;
+  });
+  res.json(await detail.loadDetail(id, req.user));
 }));
 
 module.exports = router;

@@ -236,7 +236,7 @@ const totals = computed(() => {
 });
 
 function open(i) {
-  router.push({ name: 'inventory-item', params: { id: i.id } });
+  router.push({ name: 'instrument', params: { id: i.id } });
 }
 
 // The effective Mark beside the model, unless the model text already says
@@ -274,7 +274,7 @@ async function submitAdd() {
   addError.value = '';
   try {
     const created = await api.post('/inventory', newPiece.value);
-    router.push({ name: 'inventory-item', params: { id: created.id } });
+    router.push({ name: 'instrument', params: { id: created.id } });
   } catch (err) {
     addError.value = err.message;
   } finally {
@@ -519,7 +519,7 @@ onMounted(async () => {
                   </td>
                 </tr>
                 <tr
-                  v-for="i in g.rows" :key="i.id" class="clickable"
+                  v-for="i in g.rows" :key="i.row_key || i.id" class="clickable"
                   :class="{ unaudited: auditOn && !i.audited_at }" @click="open(i)"
                 >
                   <td v-if="auditOn" class="audit-col" :title="auditTitle(i)" @click.stop>
@@ -535,7 +535,7 @@ onMounted(async () => {
                     />
                   </td>
                   <td class="name-col">
-                    <RouterLink :to="{ name: 'inventory-item', params: { id: i.id } }" @click.stop>
+                    <RouterLink :to="{ name: 'instrument', params: { id: i.id } }" @click.stop>
                       {{ i.nickname || i.model || 'Unnamed' }}
                     </RouterLink>
                     <span

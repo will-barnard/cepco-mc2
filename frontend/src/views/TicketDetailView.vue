@@ -804,10 +804,10 @@ const showProgressUpdate = computed(() => (
                 <span v-if="ticket.instrument_family">
                   {{ refData.familyLabel(ticket.instrument_family) }} · {{ ticket.instrument_model }}
                   <RouterLink
-                    v-if="ticket.instrument_in_inventory"
-                    :to="{ name: 'inventory-item', params: { id: ticket.instrument_id } }" class="small"
+                    v-if="ticket.instrument_id"
+                    :to="{ name: 'instrument', params: { id: ticket.instrument_id } }" class="small"
                     style="margin-left: 6px"
-                  >Inventory page →</RouterLink>
+                  >Instrument page →</RouterLink>
                 </span>
                 <span v-else class="muted">None</span>
               </div>

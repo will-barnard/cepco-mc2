@@ -694,6 +694,13 @@ async function upsertInstrument(client, rec, targetId) {
   const values = INSTRUMENT_COLS.map((c) => (c === 'condition' || c === 'condition_notes' || c === 'import_raw'
     ? JSON.stringify(rec[c] ?? (c === 'import_raw' ? null : {})) : rec[c] ?? null));
   if (targetId) {
+    // Since migration 087 a sold piece is its buyer's instrument. A re-run
+    // must not pull it back into stock from the sheet's old row.
+    const { rows: [cur] } = await client.query('SELECT ownership FROM instruments WHERE id = $1', [targetId]);
+    if (cur && cur.ownership === 'customer') {
+      report.counts.instruments_skipped_now_customer = (report.counts.instruments_skipped_now_customer || 0) + 1;
+      return targetId;
+    }
     // Matched to an existing row (re-run, old fleet, or app purchase):
     // sheet values win for the sheet's columns; everything the app owns
     // (QC cycle, qc_notes, photos, cover, customer link already set by hand)
@@ -717,6 +724,7 @@ async function upsertInstrument(client, rec, targetId) {
     );
     report.counts.instruments_updated += 1;
     await relinkModel(client, targetId);
+    await recordSheetSale(client, targetId, rec);
     return targetId;
   }
   const { rows } = await client.query(
@@ -728,7 +736,19 @@ async function upsertInstrument(client, rec, targetId) {
   );
   report.counts.instruments_created += 1;
   await relinkModel(client, rows[0].id);
+  await recordSheetSale(client, rows[0].id, rec);
   return rows[0].id;
+}
+
+// A sheet row marked sold goes through the same sale as the app's "Mark
+// sold" (migration 087's instrument_record_sale): the shop's period closes
+// with the sale on it and the piece becomes the buyer's.
+async function recordSheetSale(client, id, rec) {
+  if (rec.sale_status !== 'sold') return;
+  await client.query(
+    'SELECT instrument_record_sale($1, $2, $3, $4, $5, NULL)',
+    [id, rec.sold_at || null, rec.sold_price ?? null, rec.sold_to_customer_id || null, rec.sold_to_name || null],
+  );
 }
 
 // Catalog link (migration 086): an unlinked row is linked when its text

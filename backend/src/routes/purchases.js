@@ -9,6 +9,7 @@ const { buildPurchaseReceiptEmail } = require('../templates/purchaseReceipt');
 const { FAMILIES } = require('./instruments');
 const settings = require('../services/settings');
 const catalog = require('../services/instrumentCatalog');
+const ownership = require('../services/ownership');
 const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
 
 const router = express.Router();
@@ -26,6 +27,54 @@ const PREFERRED_CATEGORY_KEY = 'inventory_restoration';
 function validPrice(value) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+// ---------------------------------------------------------------------------
+// The purchase itself, shared with POST /instruments/:id/acquire (buying a
+// customer's own instrument, migration 087): the restoration ticket
+// (optional there) and the purchase record, on the caller's transaction,
+// and the purchase noted on the ownership history -- the shop's new period
+// and, when the shop bought it from an owner on file, the period it ended.
+// ---------------------------------------------------------------------------
+async function restorationTicketFields(priorityKey) {
+  return resolveNewTicketFields({
+    category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_CATEGORY_KEY),
+    priority_key: priorityKey || await settings.defaultKeyPreferring('priority_tier', PREFERRED_PRIORITY_KEY),
+  });
+}
+
+async function insertPurchase(client, {
+  instrumentRow, seller, sellerCustomerId = null, price, purchaseDate, notes, resolved, openTicket = true, userId,
+}) {
+  let ticket = null;
+  if (openTicket) {
+    const title = `Inventory — ${instrumentRow.family}${instrumentRow.model ? ` ${instrumentRow.model}` : ''}`;
+    ticket = await insertTicketRow(client, { title, notes: notes || null, instrument_id: instrumentRow.id }, resolved, userId);
+  }
+  const { rows: purchaseRows } = await client.query(
+    `INSERT INTO instrument_purchases
+       (instrument_id, ticket_id, seller_name, seller_email, seller_phone,
+        seller_address, price, purchase_date, notes, created_by, seller_customer_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [
+      instrumentRow.id, ticket ? ticket.id : null,
+      String(seller.name).trim(), seller.email ? String(seller.email).trim() : null,
+      seller.phone || null, seller.address || null,
+      price, purchaseDate, notes || null, userId, sellerCustomerId,
+    ],
+  );
+  const purchase = purchaseRows[0];
+  await client.query(
+    `UPDATE instrument_ownership SET purchase_id = $2, started_on = $3
+      WHERE instrument_id = $1 AND end_reason IS NULL`,
+    [instrumentRow.id, purchase.id, purchaseDate],
+  );
+  await client.query(
+    `UPDATE instrument_ownership SET purchase_id = $2, ended_on = $3
+      WHERE id = (SELECT max(id) FROM instrument_ownership WHERE instrument_id = $1 AND end_reason = 'purchase')`,
+    [instrumentRow.id, purchase.id, purchaseDate],
+  );
+  return { ticket, purchase };
 }
 
 // ---------------------------------------------------------------------------
@@ -49,12 +98,11 @@ router.post('/', asyncHandler(async (req, res) => {
   if (price === null) throw badRequest('price must be a non-negative number');
   if (!b.purchase_date) throw badRequest('purchase_date is required');
 
-  const resolved = await resolveNewTicketFields({
-    category_key: await settings.defaultKeyPreferring('ticket_category', PREFERRED_CATEGORY_KEY),
-    priority_key: b.priority_key || await settings.defaultKeyPreferring('priority_tier', PREFERRED_PRIORITY_KEY),
-  });
+  const resolved = await restorationTicketFields(b.priority_key);
 
   const result = await withTransaction(async (client) => {
+    // Its ownership history starts with this purchase (migration 087).
+    await ownership.setContext(client, { reason: 'purchase', employeeId: req.user.id });
     // Catalog link + Mark (migration 086), same as every other create path.
     const m = await catalog.resolveModel(client, {
       family: instrument.family, model: instrument.model || null,
@@ -81,29 +129,10 @@ router.post('/', asyncHandler(async (req, res) => {
       ],
     );
     const instrumentRow = instRows[0];
-
-    const title = `Inventory — ${instrumentRow.family}${instrumentRow.model ? ` ${instrumentRow.model}` : ''}`;
-    const ticket = await insertTicketRow(
-      client,
-      { title, notes: b.notes || null, instrument_id: instrumentRow.id },
-      resolved,
-      req.user.id,
-    );
-
-    const { rows: purchaseRows } = await client.query(
-      `INSERT INTO instrument_purchases
-         (instrument_id, ticket_id, seller_name, seller_email, seller_phone,
-          seller_address, price, purchase_date, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [
-        instrumentRow.id, ticket.id,
-        String(seller.name).trim(), String(seller.email).trim(),
-        seller.phone || null, seller.address || null,
-        price, b.purchase_date, b.notes || null, req.user.id,
-      ],
-    );
-
-    return { instrument: instrumentRow, ticket, purchase: purchaseRows[0] };
+    const { ticket, purchase } = await insertPurchase(client, {
+      instrumentRow, seller, price, purchaseDate: b.purchase_date, notes: b.notes, resolved, userId: req.user.id,
+    });
+    return { instrument: instrumentRow, ticket, purchase };
   });
 
   res.status(201).json(result);
@@ -189,3 +218,5 @@ router.post('/:id/send-receipt', asyncHandler(async (req, res) => {
 }));
 
 module.exports = router;
+module.exports.restorationTicketFields = restorationTicketFields;
+module.exports.insertPurchase = insertPurchase;

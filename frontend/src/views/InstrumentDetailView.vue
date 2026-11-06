@@ -1,12 +1,20 @@
 <script setup>
 /**
- * One inventory piece — everything the sheet row had, editable, plus what
- * the sheet couldn't hold: photo sets, tickets, rentals, QC cycle, and a
- * history of status/price changes.
+ * One instrument -- the same page for every instrument, whoever owns it
+ * (NOTES.md §2.107; it was the inventory piece page).
+ *
+ * Always: details (model, Mark, serial...), photos (sets, plus the photos
+ * on its tickets), tickets, ownership history, change log.
+ * Shop stock / consignments add the inventory side: condition, cost, parts
+ * & labor, sale, ownership terms, QC, rentals -- and "Mark sold", which
+ * makes the piece its buyer's instrument.
+ * A customer's instrument adds its owner, and "Add to inventory" for when
+ * the shop buys it or takes it on consignment.
  *
  * Editing is one form with a sticky Save bar that appears once something
- * changes, and only the changed fields are sent (PATCH /inventory/:id).
- * Photos save on their own as they upload.
+ * changes, and only the changed fields are sent (PATCH /inventory/:id for
+ * shop pieces, PATCH /instruments/:id for a customer's). Photos and the
+ * ownership actions save on their own.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter, RouterLink } from 'vue-router';
@@ -17,6 +25,9 @@ import InstrumentPhotoSets from '../components/InstrumentPhotoSets.vue';
 import InstrumentPartsUsed from '../components/InstrumentPartsUsed.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import MarkSelect from '../components/MarkSelect.vue';
+import OwnershipHistory from '../components/OwnershipHistory.vue';
+import InstrumentAcquire from '../components/InstrumentAcquire.vue';
+import InstrumentSell from '../components/InstrumentSell.vue';
 import { xeroContactUrl } from '../xeroLinks';
 import {
   formatPrice, statusPill, gradeClass, ownershipLabel, nextQcDue, markLabel,
@@ -43,10 +54,12 @@ const EDITABLE = [
   'nickname', 'family', 'model_id', 'mark', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes', 'photo_album_url',
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'on_website',
   'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
-  'sold_at', 'sold_price', 'sold_to_name', 'sold_to_customer_id',
   'qc_notes', 'last_qc_at', 'qc_interval_months',
   'cost_paid', 'cost_note', 'est_hours',
 ];
+// A customer's instrument edits only its details (PATCH /instruments/:id);
+// everything else on the form is the inventory side.
+const CUSTOMER_EDITABLE = ['nickname', 'family', 'model_id', 'mark', 'model', 'year', 'serial_no', 'identifying_notes'];
 const form = ref({});
 // Condition (migration 084): a grade key per field from the dropdown, and a
 // free-text note per field beside it ("OG Cube", "light scratches").
@@ -71,8 +84,8 @@ function fillForm(row) {
     if (k === 'model_id') f[k] = row.model_id ?? null;
     else if (k === 'mark') f[k] = norm(row.mark_override);
     else if (k === 'on_website') f[k] = !!row[k];
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
-    else if (['last_qc_at', 'sold_at'].includes(k)) f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
+    else if (['asking_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
+    else if (k === 'last_qc_at') f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
     else f[k] = norm(row[k]);
   }
   form.value = f;
@@ -88,22 +101,28 @@ const original = computed(() => {
     const row = item.value;
     if (k === 'mark') f[k] = norm(rowValue(row, k));
     else if (k === 'on_website') f[k] = !!row[k];
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
-    else if (['last_qc_at', 'sold_at'].includes(k)) f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
+    else if (['asking_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
+    else if (k === 'last_qc_at') f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
     else f[k] = norm(row[k]);
   }
   return f;
 });
 
+const isInventory = computed(() => !!item.value && item.value.ownership !== 'customer');
+// An owner with no customer record (a buyer known by name): the current
+// ownership period keeps the name.
+const ownerName = computed(() => (item.value?.ownership_history || []).find((h) => !h.end_reason)?.owner_name || '');
+
 const changes = computed(() => {
   const out = {};
   for (const k of EDITABLE) {
+    if (!isInventory.value && !CUSTOMER_EDITABLE.includes(k)) continue;
     if (!auth.isAdmin && (k === 'cost_paid' || k === 'cost_note')) continue;
     const now = form.value[k];
     const was = original.value[k];
     let differs;
     if (k === 'on_website') differs = !!now !== was;
-    else if (['asking_price', 'sold_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) {
+    else if (['asking_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) {
       differs = moneyNorm(String(now).replace(/[$,%]/g, '') || null) !== was;
     } else {
       // CustomerSearchSelect hands back numbers, the form holds strings.
@@ -114,6 +133,7 @@ const changes = computed(() => {
   // Both condition maps are sent whole when they change -- the API stores
   // each as one JSONB object. Blanks are dropped so "picked, then cleared"
   // doesn't count as a change.
+  if (!isInventory.value) return out;
   const filled = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => String(v || '').trim()));
   const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
   const condNow = filled(conditionForm.value);
@@ -164,7 +184,15 @@ async function save() {
   saving.value = true;
   error.value = '';
   try {
-    const updated = await api.patch(`/inventory/${props.id}`, changes.value);
+    let updated;
+    if (isInventory.value) {
+      updated = await api.patch(`/inventory/${props.id}`, changes.value);
+    } else {
+      // That endpoint reads a null note as "leave it" -- send '' to clear it.
+      const body = { ...changes.value };
+      if ('identifying_notes' in body && body.identifying_notes === null) body.identifying_notes = '';
+      updated = await api.patch(`/instruments/${props.id}`, body);
+    }
     await reloadKeepingEdits();
     fillForm({ ...item.value, ...updated });
     savedAt.value = new Date();
@@ -181,7 +209,7 @@ function discard() {
 
 async function setCover(photoId) {
   try {
-    await api.patch(`/inventory/${props.id}`, { cover_photo_id: photoId });
+    await api.patch(`/${isInventory.value ? 'inventory' : 'instruments'}/${props.id}`, { cover_photo_id: photoId });
     await reloadKeepingEdits();
   } catch (err) {
     error.value = err.message;
@@ -210,6 +238,8 @@ const qcDue = computed(() => nextQcDue({
   last_qc_at: form.value.last_qc_at, qc_interval_months: form.value.qc_interval_months,
 }));
 const openTickets = computed(() => (item.value?.tickets || []).filter((t) => !t.archived));
+// Status options for a piece in stock: "Sold" is the Mark sold action.
+const editableStatuses = computed(() => (meta.value?.sale_statuses || []).filter((st) => st !== 'sold'));
 const coverUrl = computed(() => (item.value?.cover_photo_id ? `/api/inventory/photos/${item.value.cover_photo_id}/view` : null));
 
 const consignorLinkedName = computed(() => item.value?.customer_name || '');
@@ -220,14 +250,6 @@ watch(() => item.value?.customer_xero_contact_id, async (id) => {
   xeroUrl.value = id ? await xeroContactUrl(id) : null;
 });
 
-// Picking "Sold" fills today's date in the form so it's visible before
-// saving (the API would do the same).
-watch(() => form.value.sale_status, (s, prev) => {
-  if (s === 'sold' && prev && prev !== 'sold' && !form.value.sold_at) {
-    form.value.sold_at = new Date().toISOString().slice(0, 10);
-    if (!form.value.sold_price && form.value.asking_price) form.value.sold_price = form.value.asking_price;
-  }
-});
 
 // --- consignor as a real customer (and so Xero) ---------------------------
 const creatingCustomer = ref(false);
@@ -250,6 +272,13 @@ async function createConsignorCustomer() {
 // Same "don't assume a settings key survives" fallback the old Fleet page used.
 const creatingTicket = ref(false);
 async function createTicket() {
+  if (!isInventory.value) {
+    router.push({
+      path: '/new',
+      query: { tab: 'ticket', customer_id: item.value.customer_id || undefined, instrument_id: item.value.id },
+    });
+    return;
+  }
   creatingTicket.value = true;
   error.value = '';
   try {
@@ -270,12 +299,40 @@ async function createTicket() {
   }
 }
 
+// --- ownership (migration 087) ------------------------------------------
+// Buying or consigning a customer's instrument, selling a shop piece, and
+// sending a consignment back all change who owns it: the server records the
+// history and hands back the whole page, which replaces this one.
+const showAcquire = ref(false);
+const showSell = ref(false);
+function applyDetail(d) {
+  item.value = d;
+  fillForm(d);
+  showAcquire.value = false;
+  showSell.value = false;
+  error.value = '';
+}
+const returning = ref(false);
+async function returnToOwner() {
+  if (!confirm(`Give ${title.value} back to ${item.value.customer_name || 'its owner'} unsold? The consignment ends.`)) return;
+  returning.value = true;
+  try {
+    applyDetail(await api.post(`/inventory/${props.id}/return-to-owner`));
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    returning.value = false;
+  }
+}
+
 // --- delete ------------------------------------------------------------
 async function deletePiece() {
-  if (!confirm(`Delete ${title.value} from inventory entirely? Tickets keep their titles but lose the link. This can't be undone.`)) return;
+  const where = isInventory.value ? 'from inventory entirely' : 'and its photos';
+  if (!confirm(`Delete ${title.value} ${where}? Tickets keep their titles but lose the link. This can't be undone.`)) return;
   try {
     await api.del(`/instruments/${item.value.id}`);
-    router.push({ name: 'inventory' });
+    if (isInventory.value) router.push({ name: 'inventory' });
+    else router.push({ name: 'customers', query: item.value.customer_id ? { id: item.value.customer_id } : {} });
   } catch (err) {
     error.value = err.message;
   }
@@ -286,6 +343,7 @@ const FIELD_LABELS = {
   sale_status: 'Status', asking_price: 'Price', ownership: 'Ownership', on_website: 'On website',
   hold_for: 'Held for', nfs_reason: 'NFS reason', sold_price: 'Sold price', customer_id: 'Consignor',
   cost_paid: 'Paid', created: 'Added', consignment_status: 'Consignment', audited: 'Audited',
+  sold: 'Sold',
 };
 function eventText(e) {
   const label = FIELD_LABELS[e.field] || e.field;
@@ -299,6 +357,7 @@ function eventText(e) {
     return v;
   };
   if (e.field === 'created') return `Added (${fmt(e.new_value)})`;
+  if (e.field === 'sold') return e.new_value === 'undone' ? 'Sale undone' : `Sold to ${e.new_value || '—'}`;
   return `${label}: ${fmt(e.old_value)} → ${fmt(e.new_value)}`;
 }
 
@@ -319,13 +378,17 @@ watch(() => props.id, () => { loading.value = true; load(); });
     <div v-if="loading" class="empty">Loading…</div>
     <div v-else-if="!item" class="card">
       <div class="alert">{{ error || 'Not found' }}</div>
-      <RouterLink :to="{ name: 'inventory' }">← Back to inventory</RouterLink>
+      <RouterLink :to="{ name: 'inventory' }">← Inventory</RouterLink>
     </div>
 
     <template v-else>
-      <RouterLink :to="{ name: 'inventory', query: { family: item.family } }" class="small muted">
+      <RouterLink v-if="isInventory" :to="{ name: 'inventory', query: { family: item.family } }" class="small muted">
         ← {{ refData.familyLabel(item.family) }} inventory
       </RouterLink>
+      <RouterLink v-else-if="item.customer_id" :to="{ name: 'customers', query: { id: item.customer_id } }" class="small muted">
+        ← {{ item.customer_name || 'Customer' }}
+      </RouterLink>
+      <RouterLink v-else :to="{ name: 'customers' }" class="small muted">← Customers</RouterLink>
 
       <div class="page-head detail-head">
         <div class="row" style="gap: 14px; align-items: flex-start; flex-wrap: nowrap">
@@ -333,14 +396,24 @@ watch(() => props.id, () => { loading.value = true; load(); });
           <div>
             <h1 style="margin: 0 0 4px">{{ title }}</h1>
             <div class="muted">
-              <span class="stock-no">{{ item.stock_number }}</span>
-              · {{ refData.familyLabel(item.family) }}
+              <template v-if="isInventory"><span class="stock-no">{{ item.stock_number }}</span> · </template>
+              {{ refData.familyLabel(item.family) }}
               <template v-if="item.mark"> {{ markLabel(item, meta?.marks) }}</template>
               <template v-if="item.model && item.nickname"> · {{ item.model }}</template>
               <template v-if="item.year"> · {{ item.year }}</template>
               <template v-if="item.serial_no"> · SN {{ item.serial_no }}</template>
             </div>
-            <div class="row" style="margin-top: 8px">
+            <div v-if="!isInventory" class="row" style="margin-top: 8px">
+              <span class="pill slate">Customer's instrument</span>
+              <span v-if="item.owner">
+                Owner: <RouterLink :to="{ name: 'customers', query: { id: item.owner.id } }">{{ item.owner.name }}</RouterLink>
+              </span>
+              <span v-else-if="ownerName" class="muted">
+                Owner: {{ ownerName }} <span class="small">(no customer record — link it under Ownership history)</span>
+              </span>
+              <span v-else class="muted small">No owner on file</span>
+            </div>
+            <div v-else class="row" style="margin-top: 8px">
               <span :class="['pill', pill.color]" :title="pill.title">{{ pill.label }}</span>
               <span v-if="item.ownership === 'consignment'" class="pill violet">Consignment</span>
               <span
@@ -361,11 +434,8 @@ watch(() => props.id, () => { loading.value = true; load(); });
                   {{ item.audited_by_name ? `by ${item.audited_by_name} · ` : '' }}{{ new Date(item.audited_at).toLocaleDateString() }}
                 </span>
               </label>
-              <strong v-if="item.asking_price !== null && item.sale_status !== 'sold'" style="font-size: 18px">
+              <strong v-if="item.asking_price !== null" style="font-size: 18px">
                 {{ formatPrice(item.asking_price) }}
-              </strong>
-              <strong v-if="item.sale_status === 'sold' && item.sold_price !== null">
-                Sold for {{ formatPrice(item.sold_price) }}
               </strong>
             </div>
           </div>
@@ -379,11 +449,19 @@ watch(() => props.id, () => { loading.value = true; load(); });
             class="btn small" title="This piece's photo folder (Google Drive, from the old Inventory Log)"
           >Photo album ↗</a>
           <button type="button" class="small" :disabled="creatingTicket" @click="createTicket">New ticket</button>
+          <button v-if="!isInventory" type="button" class="small primary" @click="showAcquire = !showAcquire">
+            {{ showAcquire ? 'Cancel' : 'Add to inventory' }}
+          </button>
           <button v-if="auth.isAdmin" type="button" class="small danger" @click="deletePiece">Delete</button>
         </div>
       </div>
 
       <div v-if="error" class="alert" style="margin-bottom: 14px">{{ error }}</div>
+
+      <InstrumentAcquire
+        v-if="showAcquire && !isInventory" :item="item" style="margin-bottom: var(--gap)"
+        @done="applyDetail" @cancel="showAcquire = false"
+      />
 
       <div class="detail-grid">
         <!-- Left column: the sheet row, editable ------------------------- -->
@@ -421,7 +499,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
             </div>
           </section>
 
-          <section class="card">
+          <section v-if="isInventory" class="card">
             <h2>Condition</h2>
             <!-- Migration 084: grades from a fixed scale, plus a short note per
                  field for anything that isn't a grade ("OG Cube"). -->
@@ -457,7 +535,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
                own card in the right column). Cost and hours go through the
                Save bar like every other field; part lines save themselves
                (InstrumentPartsUsed.vue, migration 078). Cost is admins only. -->
-          <section class="card">
+          <section v-if="isInventory" class="card">
             <h2 v-if="auth.isAdmin">Cost, parts &amp; labor</h2>
             <h2 v-else>Parts &amp; labor</h2>
             <template v-if="auth.isAdmin">
@@ -490,7 +568,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <!-- Migration 082: the Google Drive folder the old Inventory Log
                  sheet linked from this piece's name. A link, not a copy --
                  the photos stay in Drive. Saves with the Save bar. -->
-            <div class="field album-field">
+            <div v-if="isInventory || item.photo_album_url" class="field album-field">
               <label>Photo album link <span class="muted">(Google Drive folder from the old sheet, or any album)</span></label>
               <div class="row" style="flex-wrap: nowrap">
                 <input v-model="form.photo_album_url" type="url" placeholder="https://drive.google.com/…" style="flex: 1; min-width: 0" />
@@ -508,24 +586,42 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <template v-if="item.ticket_photos.length">
               <h3 style="margin-top: 16px">From tickets</h3>
               <p class="muted small" style="margin-top: -6px">Photos attached to this piece's tickets — open the ticket to manage them.</p>
-              <ul class="ticket-photo-list">
-                <li v-for="p in item.ticket_photos" :key="p.id">
-                  <RouterLink :to="{ name: 'ticket', params: { id: p.ticket_id } }">#{{ p.ticket_id }} {{ p.ticket_title }}</RouterLink>
-                  <span class="muted small"> · {{ p.caption || p.file_name }} · {{ day(p.uploaded_at) }}</span>
-                </li>
-              </ul>
+              <div class="ticket-photo-grid">
+                <figure v-for="p in item.ticket_photos" :key="p.id">
+                  <a :href="`/api/attachments/${p.id}/view`" target="_blank" rel="noopener">
+                    <img :src="`/api/attachments/${p.id}/view`" :alt="p.caption || p.file_name || 'Ticket photo'" loading="lazy" />
+                  </a>
+                  <figcaption class="small">
+                    <RouterLink :to="{ name: 'ticket', params: { id: p.ticket_id } }">#{{ p.ticket_id }}</RouterLink>
+                    <span class="muted"> · {{ p.caption || day(p.uploaded_at) }}</span>
+                  </figcaption>
+                </figure>
+              </div>
             </template>
           </section>
         </div>
 
         <!-- Right column: sale, ownership, cost, QC, links ---------------- -->
         <div class="stack">
-          <section class="card">
+          <section v-if="!isInventory" class="card">
+            <h2>Owner</h2>
+            <template v-if="item.owner">
+              <RouterLink :to="{ name: 'customers', query: { id: item.owner.id } }"><strong>{{ item.owner.name }}</strong></RouterLink>
+              <div v-if="item.owner.email" class="small"><a :href="`mailto:${item.owner.email}`">{{ item.owner.email }}</a></div>
+              <div v-if="item.owner.phone" class="small">{{ item.owner.phone }}</div>
+            </template>
+            <p v-else class="muted small" style="margin: 0">
+              {{ ownerName ? `${ownerName} — no customer record yet.` : 'No owner on file.' }}
+              Link one from the ownership history below.
+            </p>
+          </section>
+
+          <section v-if="isInventory" class="card">
             <h2>Sale</h2>
             <div class="field">
               <label>Status</label>
               <select v-model="form.sale_status">
-                <option v-for="s in meta?.sale_statuses || []" :key="s" :value="s">{{ meta.sale_status_labels[s] }}</option>
+                <option v-for="st in editableStatuses" :key="st" :value="st">{{ meta.sale_status_labels[st] }}</option>
               </select>
             </div>
             <div v-if="form.sale_status === 'not_for_sale'" class="field">
@@ -549,20 +645,16 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <label class="checkbox" style="margin-bottom: 12px">
               <input v-model="form.on_website" type="checkbox" /> Listed on the website
             </label>
-            <template v-if="form.sale_status === 'sold'">
-              <div class="field-row">
-                <div class="field"><label>Sold for</label><input v-model="form.sold_price" inputmode="decimal" /></div>
-                <div class="field"><label>Sold on</label><input v-model="form.sold_at" type="date" /></div>
-              </div>
-              <div class="field"><label>Sold to (name)</label><input v-model="form.sold_to_name" /></div>
-              <div class="field" style="margin-bottom: 0">
-                <label>Buyer's customer record</label>
-                <CustomerSearchSelect v-model="form.sold_to_customer_id" placeholder="Link the buyer (optional)…" />
-              </div>
-            </template>
+            <!-- A sale makes the piece its buyer's instrument (migration 087):
+                 its own action, saved on its own, not through the Save bar. -->
+            <button v-if="!showSell" type="button" class="primary" :disabled="dirty" @click="showSell = true">
+              Mark sold…
+            </button>
+            <p v-if="dirty && !showSell" class="muted small" style="margin: 6px 0 0">Save or discard your changes first.</p>
+            <InstrumentSell v-if="showSell" :item="item" @done="applyDetail" @cancel="showSell = false" />
           </section>
 
-          <section class="card">
+          <section v-if="isInventory" class="card">
             <h2>Ownership</h2>
             <div class="field">
               <select v-model="form.ownership">
@@ -610,11 +702,16 @@ watch(() => props.id, () => { loading.value = true; load(); });
                   <input v-model="form.consignment_terms" placeholder="Services + 25% of sale" />
                 </div>
               </div>
+              <button
+                v-if="item.ownership === 'consignment'" type="button" class="small"
+                :disabled="returning || dirty" :title="dirty ? 'Save or discard your changes first' : ''"
+                @click="returnToOwner"
+              >Return to owner unsold</button>
             </template>
           </section>
 
 
-          <section class="card">
+          <section v-if="isInventory" class="card">
             <h2>QC</h2>
             <div class="field-row">
               <div class="field"><label>Last QC</label><input v-model="form.last_qc_at" type="date" /></div>
@@ -649,7 +746,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
             </ul>
           </section>
 
-          <section v-if="item.rentals.length || item.sale_status === 'not_for_sale'" class="card">
+          <section v-if="item.rentals.length || (isInventory && item.sale_status === 'not_for_sale')" class="card">
             <h2>Rentals</h2>
             <p v-if="!item.rentals.length" class="muted small" style="margin: 0 0 8px">None recorded.</p>
             <ul v-else class="plain-list">
@@ -661,8 +758,10 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <RouterLink :to="{ name: 'fleet-calendar' }" class="small">Rental calendar →</RouterLink>
           </section>
 
+          <OwnershipHistory :item="item" @changed="applyDetail" />
+
           <section class="card">
-            <h2>History</h2>
+            <h2>Change log</h2>
             <p v-if="!item.events.length" class="muted small" style="margin: 0">
               No changes recorded yet<template v-if="item.import_source === 'inventory_log'"> — imported from the Inventory Log sheet</template>.
             </p>
@@ -712,7 +811,12 @@ watch(() => props.id, () => { loading.value = true; load(); });
 .plain-list { list-style: none; margin: 0; padding: 0; }
 .plain-list li { padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
 .plain-list li:last-child { border-bottom: none; }
-.ticket-photo-list { margin: 0; padding-left: 18px; font-size: 14px; }
+.ticket-photo-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.ticket-photo-grid figure { margin: 0; }
+.ticket-photo-grid img {
+  width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block;
+  border-radius: var(--radius); border: 1px solid var(--border);
+}
 .save-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; align-items: center; gap: 8px;

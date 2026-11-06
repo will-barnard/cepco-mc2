@@ -127,6 +127,25 @@ router.get('/ticket/:ticketId', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+/**
+ * The file itself, for an <img src> -- a redirect to a signed URL on GCS,
+ * streamed for local. The instrument page shows a piece's ticket photos as
+ * thumbnails with this (same shape as /inventory/photos/:id/view).
+ */
+router.get('/:id/view', asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    'SELECT storage_key, content_type FROM ticket_attachments WHERE id = $1', [req.params.id],
+  );
+  if (!rows[0]) throw notFound('Attachment not found');
+  res.set('Cache-Control', 'private, max-age=300');
+  if (storage.supportsDirectUpload) {
+    return res.redirect(302, await storage.getDownloadUrl(rows[0].storage_key));
+  }
+  const buffer = await storage.readObject(rows[0].storage_key);
+  res.set('Content-Type', rows[0].content_type || 'application/octet-stream');
+  return res.send(buffer);
+}));
+
 /** Resolve a viewable URL — signed for GCS, proxied for local. */
 router.get('/:id/url', asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM ticket_attachments WHERE id = $1', [req.params.id]);

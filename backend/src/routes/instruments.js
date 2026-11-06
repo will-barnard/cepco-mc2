@@ -2,10 +2,18 @@
 
 const express = require('express');
 const { query, withTransaction } = require('../db');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requireAdmin, requireRole } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 
 const catalog = require('../services/instrumentCatalog');
+const ownership = require('../services/ownership');
+const storage = require('../storage');
+
+// Required lazily: both reach back into this file for FAMILIES (through
+// services/inventory.js / routes/purchases.js), which isn't exported yet
+// while this file is still loading.
+const instrumentDetail = () => require('../services/instrumentDetail');
+const purchases = () => require('./purchases');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -202,20 +210,10 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+// Everything about one instrument, for the instrument page -- customer
+// instruments and shop stock alike (services/instrumentDetail.js).
 router.get('/:id', asyncHandler(async (req, res) => {
-  const { rows } = await query(
-    `SELECT i.*, c.name AS customer_name, ${catalog.FACTS_COLUMNS} FROM instruments i
-       LEFT JOIN customers c ON c.id = i.customer_id ${catalog.FACTS_JOIN} WHERE i.id = $1`,
-    [req.params.id],
-  );
-  if (!rows[0]) throw notFound('Instrument not found');
-  const tickets = await query(
-    `SELECT t.*, s.label AS status_label FROM tickets t
-       LEFT JOIN settings s ON s.category='ticket_status' AND s.key=t.status_key
-      WHERE t.instrument_id = $1 ORDER BY t.updated_at DESC`,
-    [req.params.id],
-  );
-  res.json({ ...rows[0], tickets: tickets.rows });
+  res.json(await instrumentDetail().loadDetail(req.params.id, req.user));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -274,12 +272,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.qc_interval_months !== undefined) f.qc_interval_months = b.qc_interval_months || null;
   if (b.model_id !== undefined) f.model_id = b.model_id;
   if (b.mark !== undefined) f.mark = b.mark;
+  if (b.cover_photo_id !== undefined) f.cover_photo_id = b.cover_photo_id || null;
 
   const updated = await withTransaction(async (client) => {
     const { rows: before } = await client.query('SELECT * FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
     const old = before[0];
     if (!old) throw notFound('Instrument not found');
     await catalog.resolveModel(client, f, old);
+    if (f.cover_photo_id) {
+      const { rowCount } = await client.query(
+        'SELECT 1 FROM instrument_photos WHERE id = $1 AND instrument_id = $2', [f.cover_photo_id, old.id],
+      );
+      if (!rowCount) throw badRequest("That photo isn't one of this instrument's");
+    }
+    // Moving an instrument to a different customer from its edit form is
+    // fixing who it was entered under, not a sale between them -- the
+    // ownership history (migration 087) corrects the current owner.
+    if (f.customer_id !== undefined && (f.customer_id ?? null) !== (old.customer_id ?? null)) {
+      await ownership.setContext(client, { reason: 'correction', employeeId: req.user.id });
+    }
     const cols = Object.keys(f);
     if (cols.length) {
       await client.query(
@@ -321,10 +332,209 @@ router.delete('/:id', requireAdmin, asyncHandler(async (req, res) => {
       'UPDATE tickets SET instrument_id = NULL, family_queue_position = NULL WHERE instrument_id = $1',
       [req.params.id],
     );
+    // Photo rows cascade with the instrument; their stored files don't.
+    const { rows: photos } = await client.query(
+      'SELECT storage_key FROM instrument_photos WHERE instrument_id = $1', [req.params.id],
+    );
     await client.query('DELETE FROM instruments WHERE id = $1', [req.params.id]);
-    return { deleted: true, tickets_detached: detached.rowCount };
+    return { deleted: true, tickets_detached: detached.rowCount, photoKeys: photos.map((p) => p.storage_key) };
   });
-  res.json(result);
+  // After the commit, best effort: a file that fails to delete is an
+  // orphan in storage, not a reason to undo the delete.
+  const { photoKeys, ...out } = result;
+  await Promise.all(photoKeys.map((key) => storage.deleteObject(key).catch((err) => {
+    console.warn(`[instruments] couldn't delete photo file ${key}: ${err.message}`);
+  })));
+  res.json({ ...out, photos_deleted: photoKeys.length });
+}));
+
+// ---------------------------------------------------------------------------
+// Ownership changes (migration 087). The database writes the history; these
+// routes make the change and say why. Selling lives with inventory
+// (POST /inventory/:id/sell), since only shop stock or a consignment sells.
+// ---------------------------------------------------------------------------
+const today = () => new Date().toISOString().slice(0, 10);
+const dateOrToday = (v, field) => {
+  if (v === undefined || v === null || v === '') return today();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw badRequest(`${field} must be YYYY-MM-DD`);
+  return String(v);
+};
+const moneyOrNull = (v, field) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(String(v).replace(/[$,]/g, ''));
+  if (!Number.isFinite(n) || n < 0) throw badRequest(`${field} must be a non-negative amount`);
+  return n;
+};
+
+/**
+ * The shop takes a customer's instrument: buys it (purchase record, cost,
+ * optional restoration ticket -- the same steps as Record a purchase) or
+ * takes it on consignment (the owner becomes the consignor). Same
+ * instrument row either way, so its tickets, photos and model carry over.
+ */
+router.post('/:id/acquire', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  if (!['buy', 'consign'].includes(b.mode)) throw badRequest('mode must be buy or consign');
+  const openTicket = b.mode === 'buy' && b.open_ticket !== false;
+  const resolved = openTicket ? await purchases().restorationTicketFields(b.priority_key) : null;
+
+  const out = await withTransaction(async (client) => {
+    const { rows: [old] } = await client.query(
+      `SELECT i.*, c.name AS owner_name, c.email AS owner_email, c.phone AS owner_phone,
+              NULLIF(concat_ws(', ', c.address_line1, c.address_line2, c.city,
+                               concat_ws(' ', c.region, c.postal_code), c.country), '') AS owner_address
+         FROM instruments i LEFT JOIN customers c ON c.id = i.customer_id
+        WHERE i.id = $1 FOR UPDATE OF i`,
+      [req.params.id],
+    );
+    if (!old) throw notFound('Instrument not found');
+    if (old.ownership !== 'customer') throw badRequest("It's already shop stock or a consignment");
+
+    if (b.mode === 'buy') {
+      const price = moneyOrNull(b.price, 'price');
+      if (price === null) throw badRequest('What did the shop pay?');
+      const purchaseDate = dateOrToday(b.purchase_date, 'purchase_date');
+      const seller = {
+        name: old.owner_name || (b.seller_name ? String(b.seller_name).trim() : ''),
+        email: b.seller_email ?? old.owner_email,
+        phone: old.owner_phone,
+        address: old.owner_address,
+      };
+      if (!seller.name) throw badRequest('Who did the shop buy it from? This instrument has no owner on file');
+      await ownership.setContext(client, { reason: 'purchase', employeeId: req.user.id });
+      const { rows: [row] } = await client.query(
+        `UPDATE instruments
+            SET ownership = 'shop', customer_id = NULL, sale_status = 'available', cost_paid = $2
+          WHERE id = $1 RETURNING *`,
+        [old.id, price],
+      );
+      const { ticket, purchase } = await purchases().insertPurchase(client, {
+        instrumentRow: row, seller, sellerCustomerId: old.customer_id, price, purchaseDate,
+        notes: b.notes, resolved, openTicket, userId: req.user.id,
+      });
+      await client.query(
+        `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+         VALUES ($1, $2, 'ownership', 'customer', 'shop')`,
+        [old.id, req.user.id],
+      );
+      return { id: old.id, purchase_id: purchase.id, ticket_id: ticket ? ticket.id : null };
+    }
+
+    // consign
+    if (!old.customer_id) throw badRequest("Link the owner's customer record first -- they'll be the consignor");
+    const rate = b.consignment_rate === undefined || b.consignment_rate === null || b.consignment_rate === ''
+      ? null : Number(String(b.consignment_rate).replace('%', ''));
+    if (rate !== null && (!Number.isFinite(rate) || rate < 0 || rate > 100)) {
+      throw badRequest('consignment_rate must be 0-100');
+    }
+    await ownership.setContext(client, { reason: 'consignment', employeeId: req.user.id });
+    await client.query(
+      `UPDATE instruments
+          SET ownership = 'consignment', sale_status = 'available', consignment_status = 'for_sale',
+              consignment_rate = $2, consignment_terms = $3, consignor_name = $4,
+              asking_price = COALESCE($5, asking_price)
+        WHERE id = $1`,
+      [old.id, rate, b.consignment_terms ? String(b.consignment_terms).trim().slice(0, 500) : null,
+        old.owner_name, moneyOrNull(b.asking_price, 'asking_price')],
+    );
+    await client.query(
+      `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+       VALUES ($1, $2, 'ownership', 'customer', 'consignment')`,
+      [old.id, req.user.id],
+    );
+    return { id: old.id };
+  });
+
+  const { id, ...extra } = out;
+  res.status(201).json({ ...(await instrumentDetail().loadDetail(id, req.user)), ...extra });
+}));
+
+// Undo the most recent sale while its buyer is still the owner: the piece
+// goes back to available stock / an active consignment. Seniors and admins.
+router.post('/:id/undo-sale', requireRole('senior'), asyncHandler(async (req, res) => {
+  await withTransaction(async (client) => {
+    await ownership.undoSale(client, req.params.id);
+    await client.query(
+      `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
+       VALUES ($1, $2, 'sold', 'sold', 'undone')`,
+      [req.params.id, req.user.id],
+    );
+  });
+  res.json(await instrumentDetail().loadDetail(req.params.id, req.user));
+}));
+
+/**
+ * Fix or fill in one entry of the history: a sale's date, price and buyer
+ * (linking the buyer's customer record also makes the piece theirs, if
+ * they still own it), or a sold consignment's payout status.
+ */
+router.patch('/ownership/:periodId', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const instrumentId = await withTransaction(async (client) => {
+    const { rows: [per] } = await client.query(
+      'SELECT * FROM instrument_ownership WHERE id = $1 FOR UPDATE', [req.params.periodId],
+    );
+    if (!per) throw notFound('History entry not found');
+    const isSale = per.end_reason === 'sale';
+    const sets = {};
+    const saleOnly = (field) => {
+      if (!isSale) throw badRequest(`${field} is only for a sale`);
+    };
+    if (b.payout_status !== undefined) {
+      if (!isSale || per.kind !== 'consignment') throw badRequest('Payout status is only for a sold consignment');
+      const v = b.payout_status || null;
+      if (v && !['contracted', 'for_sale', 'payout_due', 'paid_out'].includes(v)) throw badRequest('Unknown payout status');
+      sets.payout_status = v;
+    }
+    if (b.sale_price !== undefined) { saleOnly('sale_price'); sets.sale_price = moneyOrNull(b.sale_price, 'sale_price'); }
+    if (b.sold_to_name !== undefined) {
+      saleOnly('sold_to_name');
+      sets.sold_to_name = b.sold_to_name ? String(b.sold_to_name).trim().slice(0, 200) : null;
+    }
+    // The buyer's period is the one this sale opened (the next one).
+    const { rows: [next] } = await client.query(
+      'SELECT * FROM instrument_ownership WHERE instrument_id = $1 AND id > $2 ORDER BY id LIMIT 1',
+      [per.instrument_id, per.id],
+    );
+    const buyerPeriod = isSale && next && next.start_reason === 'sale' ? next : null;
+    if (b.sold_on !== undefined) {
+      saleOnly('sold_on');
+      sets.ended_on = dateOrToday(b.sold_on, 'sold_on');
+      if (buyerPeriod) {
+        await client.query('UPDATE instrument_ownership SET started_on = $2 WHERE id = $1', [buyerPeriod.id, sets.ended_on]);
+      }
+    }
+    if (b.sold_to_customer_id !== undefined) {
+      saleOnly('sold_to_customer_id');
+      const buyerId = b.sold_to_customer_id ? Number(b.sold_to_customer_id) : null;
+      if (buyerId) {
+        const { rows } = await client.query('SELECT name FROM customers WHERE id = $1', [buyerId]);
+        if (!rows[0]) throw badRequest("That buyer isn't a customer record");
+      }
+      sets.sold_to_customer_id = buyerId;
+      if (buyerPeriod && buyerPeriod.end_reason === null) {
+        // Still theirs: the instrument moves to (or off) that customer, and
+        // the trigger corrects the current period to match.
+        await ownership.setContext(client, { reason: 'correction', employeeId: req.user.id });
+        await client.query('UPDATE instruments SET customer_id = $2 WHERE id = $1', [per.instrument_id, buyerId]);
+        await client.query(
+          'UPDATE instrument_ownership SET owner_name = CASE WHEN $2::int IS NULL THEN owner_name END WHERE id = $1',
+          [buyerPeriod.id, buyerId],
+        );
+      } else if (buyerPeriod) {
+        await client.query('UPDATE instrument_ownership SET customer_id = $2 WHERE id = $1', [buyerPeriod.id, buyerId]);
+      }
+    }
+    const cols = Object.keys(sets);
+    if (cols.length) {
+      await client.query(
+        `UPDATE instrument_ownership SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')} WHERE id = $1`,
+        [per.id, ...cols.map((c) => sets[c])],
+      );
+    }
+    return per.instrument_id;
+  });
+  res.json(await instrumentDetail().loadDetail(instrumentId, req.user));
 }));
 
 module.exports = router;

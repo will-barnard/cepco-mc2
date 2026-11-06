@@ -113,7 +113,7 @@ onMounted(load);
         <tbody v-for="g in groups" :key="g.id">
           <tr class="group-row">
             <td colspan="99">
-              <RouterLink :to="{ name: 'inventory-item', params: { id: g.id } }"><strong>{{ g.name }}</strong></RouterLink>
+              <RouterLink :to="{ name: 'instrument', params: { id: g.id } }"><strong>{{ g.name }}</strong></RouterLink>
               <span class="muted small"> · {{ g.stock_number }}<template v-if="g.model"> · {{ g.model }}</template></span>
               <span :class="['pill', g.pill.color]" style="margin-left: 8px">{{ g.pill.label }}</span>
             </td>

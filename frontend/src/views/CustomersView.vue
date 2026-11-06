@@ -308,6 +308,15 @@ async function saveInstrument(i) {
   }
 }
 
+// How a past ownership (migration 087) ended, in words.
+function previousLabel(p) {
+  if (p.end_reason === 'purchase') return 'Sold to CEPCo';
+  if (p.end_reason === 'sale') return p.kind === 'consignment' ? 'Sold on consignment' : 'Sold';
+  if (p.end_reason === 'consignment') return 'Consigned to CEPCo';
+  if (p.end_reason === 'consignment_returned') return 'Consignment returned';
+  return 'Owner changed';
+}
+
 // Delete (admins only -- the button is hidden otherwise and the API enforces
 // it). Looks up how many tickets use the instrument so the confirm can say
 // they'll just lose the link; rentals/purchases are refused by the API.
@@ -651,9 +660,12 @@ const when = (ts) => new Date(ts).toLocaleString();
             </form>
             <template v-else>
               <div class="row">
-                <strong>
-                  <template v-if="i.nickname">“{{ i.nickname }}” </template>{{ i.model || refData.familyLabel(i.family) }}
-                </strong>
+                <RouterLink :to="{ name: 'instrument', params: { id: i.id } }">
+                  <strong>
+                    <template v-if="i.nickname">“{{ i.nickname }}” </template>{{ i.model || refData.familyLabel(i.family) }}
+                  </strong>
+                </RouterLink>
+                <span v-if="i.ownership === 'consignment'" class="pill violet tiny" title="They still own it; the shop is selling it for them">Consigned to CEPCo</span>
                 <span class="spacer" />
                 <button class="small" type="button" :aria-label="`Edit instrument ${i.model || i.family}`" @click="startEditInstrument(i)">
                   Edit
@@ -665,6 +677,21 @@ const when = (ts) => new Date(ts).toLocaleString();
             </template>
           </li>
         </ul>
+
+        <!-- Migration 087: what they used to own or consign, and how it ended. -->
+        <template v-if="(selected.previous_instruments || []).length">
+          <h3 style="margin-top: 20px">Previously owned</h3>
+          <ul class="timeline">
+            <li v-for="p in selected.previous_instruments" :key="p.period_id">
+              <RouterLink :to="{ name: 'instrument', params: { id: p.id } }">
+                <template v-if="p.nickname">“{{ p.nickname }}” </template>{{ p.model || refData.familyLabel(p.family) }}
+              </RouterLink>
+              <div class="muted small">
+                {{ refData.familyLabel(p.family) }} · {{ previousLabel(p) }}<template v-if="p.ended_on"> {{ new Date(`${String(p.ended_on).slice(0, 10)}T00:00:00`).toLocaleDateString() }}</template>
+              </div>
+            </li>
+          </ul>
+        </template>
 
         <XeroHistory v-if="selected.xero_contact_id" :customer-id="selected.id" style="margin-top: 20px" />
 

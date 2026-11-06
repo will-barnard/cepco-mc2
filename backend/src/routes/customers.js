@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { query } = require('../db');
+const catalog = require('../services/instrumentCatalog');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const {
@@ -68,13 +69,33 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
   if (!rows[0]) throw notFound('Customer not found');
-  const [instruments, tickets] = await Promise.all([
-    query('SELECT * FROM instruments WHERE customer_id = $1 ORDER BY family, model', [req.params.id]),
+  const [instruments, tickets, previous] = await Promise.all([
+    // Theirs now -- owned, or consigned to the shop (the consignor still owns it).
+    query(
+      `SELECT i.*, ${catalog.FACTS_COLUMNS}
+         FROM instruments i ${catalog.FACTS_JOIN}
+        WHERE i.customer_id = $1 ORDER BY i.family, i.model`,
+      [req.params.id],
+    ),
     query(`SELECT t.*, s.label AS status_label FROM tickets t
              LEFT JOIN settings s ON s.category='ticket_status' AND s.key=t.status_key
             WHERE t.customer_id = $1 ORDER BY t.updated_at DESC`, [req.params.id]),
+    // Instruments they used to own or consign (migration 087), and how
+    // that ended -- sold to the shop, sold through the shop, etc. One that's
+    // theirs again now is in the list above instead.
+    query(
+      `SELECT o.id AS period_id, o.kind, o.started_on, o.ended_on, o.end_reason, o.sale_price,
+              i.id, i.family, i.model, i.nickname, i.year, i.serial_no
+         FROM instrument_ownership o JOIN instruments i ON i.id = o.instrument_id
+        WHERE o.customer_id = $1 AND o.end_reason IS NOT NULL
+          AND i.customer_id IS DISTINCT FROM $1
+        ORDER BY o.ended_on DESC NULLS LAST, o.id DESC`,
+      [req.params.id],
+    ),
   ]);
-  res.json({ ...rows[0], instruments: instruments.rows, tickets: tickets.rows });
+  res.json({
+    ...rows[0], instruments: instruments.rows, tickets: tickets.rows, previous_instruments: previous.rows,
+  });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

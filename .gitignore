@@ -7,3 +7,6 @@ dist/
 uploads/
 coverage/
 Claude outputs/
+
+# Scratch output from Claude sessions -- not part of the app or its build
+/Claude outputs/

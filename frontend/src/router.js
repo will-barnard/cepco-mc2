@@ -39,9 +39,15 @@ const routes = [
   { path: '/fleet', redirect: { path: '/inventory', query: { status: 'not_for_sale' } } },
   { path: '/inventory', name: 'inventory', component: () => import('./views/InventoryView.vue') },
   { path: '/inventory/new', name: 'inventory-purchase-new', component: () => import('./views/InventoryPurchaseNewView.vue') },
+  // Every instrument -- a customer's or the shop's -- has one page
+  // (NOTES.md §2.107). Inventory links from before keep working.
+  {
+    path: '/instruments/:id(\\d+)', name: 'instrument',
+    component: () => import('./views/InstrumentDetailView.vue'), props: true,
+  },
   {
     path: '/inventory/:id(\\d+)', name: 'inventory-item',
-    component: () => import('./views/InventoryDetailView.vue'), props: true,
+    redirect: (to) => ({ name: 'instrument', params: { id: to.params.id } }),
   },
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },

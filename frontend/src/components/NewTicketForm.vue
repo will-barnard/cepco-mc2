@@ -8,7 +8,7 @@
  * -- nothing here assumes a particular parent, so it takes no props.
  */
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
-import { useRouter, RouterLink } from 'vue-router';
+import { useRouter, useRoute, RouterLink } from 'vue-router';
 import api from '../api';
 import { useSettings, useRefData } from '../stores';
 import {
@@ -28,6 +28,7 @@ import { useDraft } from '../drafts';
 const shopToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
 
 const router = useRouter();
+const route = useRoute();
 const settings = useSettings();
 const refData = useRefData();
 
@@ -474,9 +475,29 @@ onMounted(async () => {
   // Needs the category above: the starting status depends on it (shop-wide
   // default, category override, shipping).
   form.value.status_key = defaultStatusKey.value;
+  await prefillFromQuery();
   await nextTick();
   ticketDraft.start();
 });
+
+// "New ticket" on an instrument's page (InstrumentDetailView) lands here
+// with ?customer_id=&instrument_id= -- start with both picked, the same as
+// choosing them by hand.
+async function prefillFromQuery() {
+  const customerId = Number(route.query.customer_id) || null;
+  const instrumentId = Number(route.query.instrument_id) || null;
+  if (!customerId) return;
+  try {
+    selectedCustomer.value = await api.get(`/customers/${customerId}`);
+    form.value.customer_id = customerId;
+    instruments.value = await api.get('/instruments', { customer_id: customerId });
+    if (instrumentId && instruments.value.some((i) => i.id === instrumentId)) {
+      form.value.instrument_id = instrumentId;
+    }
+  } catch {
+    // A stale link just leaves the form blank.
+  }
+}
 
 async function submit() {
   error.value = '';

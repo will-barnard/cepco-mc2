@@ -4363,6 +4363,102 @@ reports want one). Linking the unlinked legacy rows is a by-hand job on
 each piece (or a small review screen over `instrument_model_link_audit`
 if there are many).
 
+### 2.107 One instrument page; ownership history; a sale moves the piece to its buyer (migrations 087-088)
+
+An instrument is one row for its whole life -- serviced for a customer,
+bought by the shop, restored, sold to someone else, back in for service.
+Three things now follow from that.
+
+**One page for every instrument.** `/instruments/:id`
+(`InstrumentDetailView.vue`, which was InventoryDetailView; `/inventory/:id`
+redirects). The Customers page and the ticket page link to it.
+- Always: details (model picker, Mark, serial, notes), photos (sets, plus
+  the image attachments on its tickets as thumbnails --
+  `GET /attachments/:id/view`), tickets, ownership history, change log.
+- Shop stock / consignments add: condition, cost, parts & labor, sale,
+  ownership terms, QC, rentals.
+- A customer's instrument adds: its owner (linked), "Add to inventory", and
+  "New ticket" opens the normal form prefilled
+  (`/new?tab=ticket&customer_id=&instrument_id=`).
+- Payload: `services/instrumentDetail.js` `loadDetail()`, served at
+  `GET /instruments/:id` and `GET /inventory/:id`. The inventory list's row
+  shape (`LIST_SELECT`) lives there too. Photos, parts and audit routes take
+  any instrument now; sale/ownership edits still refuse a customer's
+  (`PATCH /inventory/:id`). A customer's details save through
+  `PATCH /instruments/:id` (now also takes `cover_photo_id`).
+- Deleting an instrument now deletes its photo files from storage too
+  (after the commit, best effort).
+
+**Ownership history** -- `instrument_ownership`, one row per period:
+`kind` (customer / shop / consignment), `customer_id` (owner or consignor;
+`owner_name` when there's no customer record), dates, and how it started and
+ended (`on_file`, `added`, `purchase`, `sale`, `consignment`,
+`consignment_returned`, `changed`). A sale's price, buyer and -- for a
+consignment -- deal terms and payout status sit on the period the sale
+ended; a purchase links its `instrument_purchases` row.
+- **Kept in step by the database.** Trigger `instrument_ownership_track`
+  closes and opens periods whenever `instruments.ownership` / `customer_id`
+  change, on every write path (API, importers, psql). Routes say *why* with
+  `services/ownership.js` `setContext(client, { reason })` in the same
+  transaction. Linking or unlinking an owner's customer record, or reason
+  `correction`, fixes the current period instead of starting a new one
+  (the `correction` case is migration 088, which replaces the trigger
+  function -- 087 shipped without it).
+- **Checked at commit.** Deferred constraint trigger
+  `instrument_ownership_check`: exactly one current period per instrument,
+  matching the row, or the transaction rolls back.
+- The page's "Ownership history" card (`OwnershipHistory.vue`) shows it
+  with customer links, and edits a sale's date, price and buyer, and a sold
+  consignment's payout status (`PATCH /instruments/ownership/:id`).
+- The Customers page lists "Previously owned" (`previous_instruments` on
+  `GET /customers/:id`). Consigned pieces stay in the owner's instrument
+  list, labelled "Consigned to CEPCo".
+
+**A sale moves the piece to its buyer.** "Mark sold" (`InstrumentSell.vue`,
+`POST /inventory/:id/sell`) calls `instrument_record_sale()`, the one way a
+sale happens (the API, the inventory importer, and 087's backfill all use
+it): the shop/consignment period closes with the sale on it, the buyer's
+opens, and the row becomes theirs (`ownership = 'customer'`,
+`customer_id` = buyer, `sale_status` NULL). A buyer with no customer record
+gets it by name; linking the record later (from the history) moves it onto
+their page. `instrument_undo_sale()` (`POST /instruments/:id/undo-sale`,
+seniors/admins) reverses the latest sale while the buyer still owns it.
+`PATCH /inventory/:id` refuses `sale_status = 'sold'`; the sold_* fields are
+no longer editable there.
+- **Sold tab and sold consignments** read the sale periods (each shaped
+  like the inventory row it was at the sale; `row_key` tells a sale from
+  the same instrument back in stock). The Consignments tab is active
+  consignments plus sold ones by payout status. The audit still counts
+  pieces the shop has sold.
+- `instruments.sold_at / sold_price / sold_to_*` are frozen: left as they
+  were by 087, not written since. The ledger is the record of sales.
+
+**The shop takes a customer's instrument.** "Add to inventory"
+(`InstrumentAcquire.vue`, `POST /instruments/:id/acquire`):
+- buy -- purchase record (`instrument_purchases.seller_customer_id` = the
+  owner), cost = price, optional restoration ticket and seller receipt
+  email (`routes/purchases.js` `insertPurchase()`, shared with Record a
+  purchase);
+- consign -- the owner becomes the consignor, with commission / terms.
+"Return to owner unsold" (`POST /inventory/:id/return-to-owner`) ends a
+consignment, keeping the deal on the closed period.
+
+**Backfill (087).** Every instrument gets its current period (purchase date
+and record where there is one; otherwise "on file", no start date). Every
+sold piece gets its shop/consignment period, closed by the sale exactly as
+the row had it, plus its buyer's period, and becomes the buyer's. The
+consignment fields of a sold consignment move onto its sale period. The
+migration aborts and rolls back unless: every instrument has one matching
+current period; every sale carried over field for field; sold pieces
+changed only in owner / consignment fields; every other instrument is
+byte-for-byte unchanged.
+
+**Decided, worth knowing.**
+- Moving an instrument to a different customer from its edit form counts
+  as fixing who it was entered under, not a sale between customers.
+- A re-run of the inventory importer skips sheet rows whose piece is now a
+  customer's (it won't pull a sold piece back into stock).
+
 ## 4. Suggested first moves after deploy
 
 
