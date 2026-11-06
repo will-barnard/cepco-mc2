@@ -24,9 +24,10 @@ import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import ReservedParts from '../components/ReservedParts.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
-import MarkSelect from '../components/MarkSelect.vue';
+import AttributeFields from '../components/AttributeFields.vue';
+import { attrsSummary, keepForFamily, valueLabel } from '../instrumentAttrs';
 import {
-  formatPrice, statusPill, gradeClass, gradeLabel, ownershipLabel, markLabel,
+  formatPrice, statusPill, gradeClass, gradeLabel, ownershipLabel,
 } from '../inventory';
 
 const route = useRoute();
@@ -102,7 +103,7 @@ const matchesSearch = (i) => {
   if (!needle.value) return true;
   if (stockSearchId.value !== null && i.id === stockSearchId.value) return true;
   return [i.nickname, i.model, i.serial_no, i.identifying_notes, i.stock_number, i.consignor_name,
-    i.customer_name, i.sold_to_name, i.model_group, i.year, markLabel(i, meta.value?.marks)]
+    i.customer_name, i.sold_to_name, i.model_group, i.year, ...attrsSummary(refData.attributes, i)]
     .some((v) => v && String(v).toLowerCase().includes(needle.value));
 };
 const searched = computed(() => items.value.filter(
@@ -239,14 +240,14 @@ function open(i) {
   router.push({ name: 'instrument', params: { id: i.id } });
 }
 
-// The effective Mark beside the model, unless the model text already says
-// it ("Mark I / Stage 73" from the picker). Word-bounded so "Mark I" isn't
-// found inside "Mark II".
-function showMarkTag(i) {
-  const label = markLabel(i, meta.value?.marks);
-  if (!label) return false;
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return !new RegExp(`\\b${escaped}\\b`, 'i').test(i.model || '');
+// A piece's attributes (Mark, suitcase amp...) beside its model, minus any
+// the model text already says ("Mark I / Stage 73" from the picker).
+// Word-bounded so "Mark I" isn't found inside "Mark II".
+function attrTags(i) {
+  return attrsSummary(refData.attributes, i).filter((label) => {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return !new RegExp(`\\b${escaped}\\b`, 'i').test(i.model || '');
+  });
 }
 
 // --- add a piece ----------------------------------------------------------
@@ -254,15 +255,15 @@ const adding = ref(false);
 const addBusy = ref(false);
 const addError = ref('');
 const blankNew = () => ({
-  family: family.value || 'rhodes', nickname: '', mark: '', model: '', model_id: null, year: '', serial_no: '',
+  family: family.value || 'rhodes', nickname: '', attrs: {}, model: '', model_id: null, year: '', serial_no: '',
   ownership: 'shop', sale_status: 'available', asking_price: '',
 });
 const newPiece = ref(blankNew());
-// Model picked from the catalog + Mark override (migration 086). A
-// family without Marks can't keep one.
+// Model picked from the catalog + attribute overrides (migrations 086 /
+// 089). A family change drops attributes the new family doesn't have.
 const newPieceFacts = ref(null);
 watch(() => newPiece.value.family, (fam) => {
-  if (!refData.marksFor(fam).some((m) => m.key === newPiece.value.mark)) newPiece.value.mark = '';
+  newPiece.value.attrs = keepForFamily(refData.attributes, fam, newPiece.value.attrs);
 });
 function startAdd() {
   newPiece.value = blankNew();
@@ -288,14 +289,17 @@ function downloadCsv() {
   const condKeys = family.value
     ? conditionFields.value
     : [...new Map(Object.values(meta.value?.condition_fields || {}).flat().map((f) => [f.key, f])).values()];
-  const header = ['Stock #', 'Name', 'Family', 'Section', 'Year', 'Mark', 'Model', ...condKeys.map((f) => f.label),
+  // One column per attribute (Mark, Suitcase amp...) any listed family has.
+  const csvAttrs = (refData.attributes || []).filter((a) => (family.value
+    ? (a.families[family.value] || []).length : Object.keys(a.families).length));
+  const header = ['Stock #', 'Name', 'Family', 'Section', 'Year', ...csvAttrs.map((a) => a.label), 'Model', ...condKeys.map((f) => f.label),
     'Notes', 'Status', 'Reason / hold', 'Price', 'Price note', 'Serial', 'On website', 'Ownership', 'Consignor',
     'Consignment status', 'Consignment terms',
     ...(isSold.value ? ['Sold price', 'Sold to', 'Sold on'] : []),
     ...(auth.isAdmin ? ['Paid', 'Paid note'] : [])];
   const rows = filtered.value.map((i) => [
     i.stock_number, i.nickname, refData.familyLabel(i.family), i.model_group, i.year,
-    markLabel(i, meta.value?.marks), i.model,
+    ...csvAttrs.map((a) => valueLabel(refData.attributes, a.key, i.family, (i.attrs || {})[a.key])), i.model,
     // Grade label plus its note, e.g. "Very Good (light scratches)".
     ...condKeys.map((f) => {
       const grade = gradeLabel(i.condition?.[f.key], meta.value?.condition_grades);
@@ -382,7 +386,10 @@ onMounted(async () => {
           </select>
         </div>
         <div class="field"><label>Name</label><input v-model="newPiece.nickname" placeholder="Blitzen" /></div>
-        <MarkSelect v-model="newPiece.mark" :family="newPiece.family" :catalog-mark="newPieceFacts?.mark ?? null" />
+        <AttributeFields
+          v-model="newPiece.attrs" :family="newPiece.family" :catalog-attrs="newPieceFacts?.attrs || {}"
+          :suitcase="newPieceFacts ? newPieceFacts.is_suitcase : null"
+        />
         <div class="field">
           <label>Model</label>
           <InstrumentModelPicker
@@ -546,7 +553,7 @@ onMounted(async () => {
                   </td>
                   <td class="nowrap">{{ i.year }}</td>
                   <td class="model-col">
-                    <span v-if="showMarkTag(i)" class="mark-tag">{{ markLabel(i, meta?.marks) }}</span>{{ i.model }}
+                    <span v-for="t in attrTags(i)" :key="t" class="mark-tag">{{ t }}</span>{{ i.model }}
                   </td>
                   <template v-if="isSold">
                     <td class="right nowrap">{{ formatPrice(i.sold_price) }}</td>

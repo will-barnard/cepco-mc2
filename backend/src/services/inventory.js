@@ -7,9 +7,10 @@
  */
 
 const { FAMILIES } = require('../routes/instruments');
-// Marks live with the model catalog now (migration 086); re-exported here
-// because /inventory/meta and the importer already reach for them here.
-const { MARKS, markKeys, markFromText } = require('./instrumentCatalog');
+// Instrument attributes (Mark, suitcase amp...) live with the model
+// catalog (migrations 086 / 089); re-exported for /inventory/meta and the
+// importer.
+const { ATTRIBUTES, attrsFromText } = require('./instrumentCatalog');
 
 const OWNERSHIPS = ['shop', 'consignment']; // 'customer' exists too, but isn't inventory
 const SALE_STATUSES = ['available', 'on_hold', 'not_for_sale', 'sold'];
@@ -163,9 +164,8 @@ module.exports = {
   CONSIGNMENT_STATUS_LABELS,
   CONDITION_FIELDS,
   CONDITION_GRADES,
-  MARKS,
-  markKeys,
-  markFromText,
+  ATTRIBUTES,
+  attrsFromText,
   GRADE_KEYS,
   splitGrade,
   NFS_REASON_PRESETS,

@@ -6,7 +6,8 @@ import { useAuth, useSettings, useRefData } from '../stores';
 import AddressFields from '../components/AddressFields.vue';
 import XeroHistory from '../components/XeroHistory.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
-import MarkSelect from '../components/MarkSelect.vue';
+import AttributeFields from '../components/AttributeFields.vue';
+import { overridesPatch, keepForFamily } from '../instrumentAttrs';
 import {
   CUSTOMER_SOURCES, XERO_SOURCE, sourceLabel, blankAddress, addressFrom,
 } from '../customerSources';
@@ -253,12 +254,12 @@ async function saveCustomerEdit() {
 // through PATCH /instruments/:id; existing ticket titles are NOT rewritten
 // (a title is a snapshot) -- the ticket page's Rename button does that.
 const editingInstrumentId = ref(null);
-const instrumentForm = ref({ nickname: '', model: '', model_id: null, mark: '', year: '', serial_no: '', family: '' });
-// The picked model's facts (migration 086), for the Mark dropdown's
-// "Mark I (from model)" option.
+const instrumentForm = ref({ nickname: '', model: '', model_id: null, attrs: {}, year: '', serial_no: '', family: '' });
+// The picked model's facts (migration 086), for the attribute dropdowns'
+// "Mark I (from model)" options and whether the suitcase amp applies.
 const instrumentFacts = ref(null);
 watch(() => instrumentForm.value.family, (fam) => {
-  if (!refData.marksFor(fam).some((m) => m.key === instrumentForm.value.mark)) instrumentForm.value.mark = '';
+  instrumentForm.value.attrs = keepForFamily(refData.attributes, fam, instrumentForm.value.attrs);
 });
 const savingInstrument = ref(false);
 const instrumentError = ref('');
@@ -268,12 +269,12 @@ function startEditInstrument(i) {
     nickname: i.nickname || '',
     model: i.model || '',
     model_id: i.model_id ?? null,
-    mark: i.mark_override || '',
+    attrs: { ...(i.attr_overrides || {}) },
     year: i.year || '',
     serial_no: i.serial_no || '',
     family: i.family,
   };
-  instrumentFacts.value = i.model_id ? { mark: i.catalog_mark ?? null } : null;
+  instrumentFacts.value = i.model_id ? { attrs: i.catalog_attrs || {}, is_suitcase: !!i.model_is_suitcase } : null;
   instrumentError.value = '';
   editingInstrumentId.value = i.id;
 }
@@ -297,7 +298,7 @@ async function saveInstrument(i) {
       // Only when changed: an unchanged model_id/mark left out lets the API
       // keep the link and override exactly as they are (migration 086).
       ...((f.model_id ?? null) !== (i.model_id ?? null) ? { model_id: f.model_id ?? null } : {}),
-      ...(f.mark !== (i.mark_override || '') ? { mark: f.mark } : {}),
+      ...(overridesPatch(i.attr_overrides, f.attrs) ? { attrs: overridesPatch(i.attr_overrides, f.attrs) } : {}),
     });
     Object.assign(i, updated);
     editingInstrumentId.value = null;
@@ -618,9 +619,10 @@ const when = (ts) => new Date(ts).toLocaleString();
                     <option v-for="f in refData.families" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
                   </select>
                 </div>
-                <MarkSelect
-                  v-model="instrumentForm.mark" :family="instrumentForm.family"
-                  :catalog-mark="instrumentFacts?.mark ?? null"
+                <AttributeFields
+                  v-model="instrumentForm.attrs" :family="instrumentForm.family"
+                  :catalog-attrs="instrumentFacts?.attrs || {}"
+                  :suitcase="instrumentFacts ? instrumentFacts.is_suitcase : null"
                 />
               </div>
               <div class="field">

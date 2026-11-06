@@ -24,13 +24,14 @@ import CustomerSearchSelect from '../components/CustomerSearchSelect.vue';
 import InstrumentPhotoSets from '../components/InstrumentPhotoSets.vue';
 import InstrumentPartsUsed from '../components/InstrumentPartsUsed.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
-import MarkSelect from '../components/MarkSelect.vue';
+import AttributeFields from '../components/AttributeFields.vue';
+import { attrsSummary, overridesPatch, keepForFamily } from '../instrumentAttrs';
 import OwnershipHistory from '../components/OwnershipHistory.vue';
 import InstrumentAcquire from '../components/InstrumentAcquire.vue';
 import InstrumentSell from '../components/InstrumentSell.vue';
 import { xeroContactUrl } from '../xeroLinks';
 import {
-  formatPrice, statusPill, gradeClass, ownershipLabel, nextQcDue, markLabel,
+  formatPrice, statusPill, gradeClass, ownershipLabel, nextQcDue,
 } from '../inventory';
 
 const props = defineProps({ id: { type: [String, Number], required: true } });
@@ -51,7 +52,7 @@ const xeroUrl = ref(null);
 // Everything the form edits. Money fields are strings in the form so a
 // half-typed "7,7" doesn't fight the input.
 const EDITABLE = [
-  'nickname', 'family', 'model_id', 'mark', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes', 'photo_album_url',
+  'nickname', 'family', 'model_id', 'model', 'year', 'serial_no', 'model_group', 'identifying_notes', 'photo_album_url',
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'on_website',
   'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
   'qc_notes', 'last_qc_at', 'qc_interval_months',
@@ -59,30 +60,27 @@ const EDITABLE = [
 ];
 // A customer's instrument edits only its details (PATCH /instruments/:id);
 // everything else on the form is the inventory side.
-const CUSTOMER_EDITABLE = ['nickname', 'family', 'model_id', 'mark', 'model', 'year', 'serial_no', 'identifying_notes'];
+const CUSTOMER_EDITABLE = ['nickname', 'family', 'model_id', 'model', 'year', 'serial_no', 'identifying_notes'];
 const form = ref({});
 // Condition (migration 084): a grade key per field from the dropdown, and a
 // free-text note per field beside it ("OG Cube", "light scratches").
 const conditionForm = ref({});
 const conditionNotesForm = ref({});
-// The picked model's facts (migration 086) -- from the row on load, then
-// from the picker as the model changes, so the Mark dropdown can say what
-// the model implies before anything is saved.
+// Attributes (Mark, suitcase amp...; migration 089): the piece's overrides,
+// '' / missing = as its model says. Saved with the Save bar, for any piece.
+const attrsForm = ref({});
+// The picked model's facts -- from the row on load, then from the picker as
+// the model changes, so the attribute dropdowns can say what the model
+// implies ("Janus (from model)") before anything is saved.
 const pickedFacts = ref(null);
 
 const norm = (v) => (v === null || v === undefined ? '' : String(v));
 const moneyNorm = (v) => (v === null || v === undefined || v === '' ? '' : String(Number(v)));
 
-// `mark` in the form is the piece's override (migration 086): '' = as its
-// model says. Reads return the effective mark as `mark`, the stored
-// override as `mark_override`.
-const rowValue = (row, k) => (k === 'mark' ? row.mark_override : row[k]);
-
 function fillForm(row) {
   const f = {};
   for (const k of EDITABLE) {
     if (k === 'model_id') f[k] = row.model_id ?? null;
-    else if (k === 'mark') f[k] = norm(row.mark_override);
     else if (k === 'on_website') f[k] = !!row[k];
     else if (['asking_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
     else if (k === 'last_qc_at') f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
@@ -91,7 +89,8 @@ function fillForm(row) {
   form.value = f;
   conditionForm.value = { ...(row.condition || {}) };
   conditionNotesForm.value = { ...(row.condition_notes || {}) };
-  pickedFacts.value = row.model_id ? { mark: row.catalog_mark ?? null } : null;
+  attrsForm.value = { ...(row.attr_overrides || {}) };
+  pickedFacts.value = row.model_id ? { attrs: row.catalog_attrs || {}, is_suitcase: !!row.model_is_suitcase } : null;
 }
 
 const original = computed(() => {
@@ -99,8 +98,7 @@ const original = computed(() => {
   const f = {};
   for (const k of EDITABLE) {
     const row = item.value;
-    if (k === 'mark') f[k] = norm(rowValue(row, k));
-    else if (k === 'on_website') f[k] = !!row[k];
+    if (k === 'on_website') f[k] = !!row[k];
     else if (['asking_price', 'cost_paid', 'consignment_rate', 'est_hours'].includes(k)) f[k] = moneyNorm(row[k]);
     else if (k === 'last_qc_at') f[k] = row[k] ? String(row[k]).slice(0, 10) : '';
     else f[k] = norm(row[k]);
@@ -133,6 +131,8 @@ const changes = computed(() => {
   // Both condition maps are sent whole when they change -- the API stores
   // each as one JSONB object. Blanks are dropped so "picked, then cleared"
   // doesn't count as a change.
+  const attrsPatch = overridesPatch(item.value?.attr_overrides, attrsForm.value);
+  if (attrsPatch) out.attrs = attrsPatch;
   if (!isInventory.value) return out;
   const filled = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([, v]) => String(v || '').trim()));
   const same = (a, b) => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort());
@@ -217,9 +217,9 @@ async function setCover(photoId) {
 }
 
 // --- derived display --------------------------------------------------------
-// A family without Marks can't keep one (the API would refuse the save).
+// A family change drops attributes it doesn't have (the API would refuse them).
 watch(() => form.value.family, (fam) => {
-  if (form.value.mark && !refData.marksFor(fam).some((m) => m.key === form.value.mark)) form.value.mark = '';
+  attrsForm.value = keepForFamily(refData.attributes, fam, attrsForm.value);
 });
 const conditionFields = computed(() => {
   const listed = meta.value?.condition_fields[form.value.family] || [];
@@ -398,7 +398,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <div class="muted">
               <template v-if="isInventory"><span class="stock-no">{{ item.stock_number }}</span> · </template>
               {{ refData.familyLabel(item.family) }}
-              <template v-if="item.mark"> {{ markLabel(item, meta?.marks) }}</template>
+              <template v-for="a in attrsSummary(refData.attributes, item)" :key="a"> · {{ a }}</template>
               <template v-if="item.model && item.nickname"> · {{ item.model }}</template>
               <template v-if="item.year"> · {{ item.year }}</template>
               <template v-if="item.serial_no"> · SN {{ item.serial_no }}</template>
@@ -476,7 +476,10 @@ watch(() => props.id, () => { loading.value = true; load(); });
                   <option v-for="f in meta?.families || []" :key="f" :value="f">{{ refData.familyLabel(f) }}</option>
                 </select>
               </div>
-              <MarkSelect v-model="form.mark" :family="form.family" :catalog-mark="pickedFacts?.mark ?? null" />
+              <AttributeFields
+                v-model="attrsForm" :family="form.family" :catalog-attrs="pickedFacts?.attrs || {}"
+                :suitcase="pickedFacts ? pickedFacts.is_suitcase : null"
+              />
             </div>
             <div class="field">
               <label>Model</label>

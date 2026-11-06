@@ -152,7 +152,8 @@ const FIELDS = {
   // Catalog link + Mark (migration 086) -- both resolved by
   // services/instrumentCatalog.js's resolveModel, not validated here.
   model_id: (v) => (v === null || v === '' ? null : v),
-  mark: text(20),
+  attrs: (v) => v, // { mark, suitcase_amp, ... } -- validated per family by resolveModel
+  mark: text(20), // shorthand for attrs.mark
   year: text(40),
   serial_no: text(120),
   nickname: text(120),
@@ -270,7 +271,7 @@ router.get('/meta', (req, res) => {
     consignment_status_labels: inv.CONSIGNMENT_STATUS_LABELS,
     condition_fields: inv.CONDITION_FIELDS,
     condition_grades: inv.CONDITION_GRADES,
-    marks: inv.MARKS,
+    attributes: inv.ATTRIBUTES,
     nfs_reason_presets: inv.NFS_REASON_PRESETS,
     photo_set_presets: inv.PHOTO_SET_PRESETS,
   });
@@ -712,7 +713,8 @@ router.get('/', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const f = pickFields(req.body || {}, req);
   if (!f.family) throw badRequest('family is required');
-  if (!f.model && !f.nickname) throw badRequest('Give it a name or a model');
+  // A picked catalog model counts: its chain becomes the model text.
+  if (!f.model && !f.nickname && !f.model_id) throw badRequest('Give it a name or a model');
   f.ownership = f.ownership || 'shop';
   f.sale_status = f.sale_status || 'available';
   applyConsignmentRules(f, {});
@@ -991,6 +993,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
     await catalog.resolveModel(client, f, old);
 
     const setCols = Object.keys(f);
+    // Nothing left after normalising (e.g. picking the Mark the model
+    // already has): no write, same row back.
+    if (!setCols.length) return old;
     const { rows } = await client.query(
       `UPDATE instruments SET ${setCols.map((c, i) => `${c} = $${i + 2}`).join(', ')}
         WHERE id = $1 RETURNING *`,

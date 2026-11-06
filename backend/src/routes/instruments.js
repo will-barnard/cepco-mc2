@@ -56,9 +56,10 @@ const FAMILY_LABELS = {
 
 router.get('/family-labels', (req, res) => res.json(FAMILY_LABELS));
 
-// Rhodes generations (migration 086) -- the refData store loads this
-// alongside families, for every form that shows a Mark.
-router.get('/marks', (req, res) => res.json(catalog.MARKS));
+// Instrument attributes -- Mark, suitcase amp, ... (migration 089). The
+// refData store loads this alongside families; every form that shows them
+// renders this list.
+router.get('/attributes', (req, res) => res.json(catalog.ATTRIBUTES));
 
 // ---------------------------------------------------------------------------
 // Default technicians per instrument family (migration 014). Registered
@@ -225,19 +226,19 @@ router.post('/', asyncHandler(async (req, res) => {
     // Catalog link + Mark (migration 086): the pickers send model_id with
     // the chain text; free text gets linked if it names one model outright.
     const m = await catalog.resolveModel(client, {
-      family: b.family, model: b.model || null, model_id: b.model_id, mark: b.mark,
+      family: b.family, model: b.model || null, model_id: b.model_id, attrs: b.attrs, mark: b.mark,
     }, {});
     const { rows } = await client.query(
       // Customer instruments only — shop stock and consignments are created
       // through POST /api/inventory, which owns ownership/sale_status.
       `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                                customer_id, nickname, model_id, mark_override)
+                                customer_id, nickname, model_id, attr_overrides)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [b.family, m.model || null, b.year || null, b.serial_no || null,
         b.identifying_notes || null, b.customer_id || null,
         // N1: only the New Ticket page's "add a new instrument instead" form
         // sends this today — see composeTicketTitle in routes/tickets.js.
-        b.nickname || null, m.model_id ?? null, m.mark_override ?? null],
+        b.nickname || null, m.model_id ?? null, m.attr_overrides || {}],
     );
     return catalog.selectWithFacts(client, rows[0].id);
   });
@@ -271,6 +272,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (b.last_qc_at !== undefined) f.last_qc_at = b.last_qc_at || null;
   if (b.qc_interval_months !== undefined) f.qc_interval_months = b.qc_interval_months || null;
   if (b.model_id !== undefined) f.model_id = b.model_id;
+  if (b.attrs !== undefined) f.attrs = b.attrs;
   if (b.mark !== undefined) f.mark = b.mark;
   if (b.cover_photo_id !== undefined) f.cover_photo_id = b.cover_photo_id || null;
 

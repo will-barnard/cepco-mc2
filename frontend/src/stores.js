@@ -283,20 +283,22 @@ const RETIRED_FAMILIES = { organ: 'kombo', other: 'kombo' };
 export const canonicalFamily = (key) => RETIRED_FAMILIES[key] || key;
 
 export const useRefData = defineStore('refdata', {
-  state: () => ({ employees: [], families: [], familyLabels: {}, marks: {}, loaded: false }),
+  state: () => ({ employees: [], families: [], familyLabels: {}, attributes: [], loaded: false }),
   actions: {
     async load(force = false) {
       if (this.loaded && !force) return;
-      const [employees, families, familyLabels, marks] = await Promise.all([
+      const [employees, families, familyLabels, attributes] = await Promise.all([
         api.get('/employees'),
         api.get('/instruments/families'),
         api.get('/instruments/family-labels'),
-        api.get('/instruments/marks'),
+        api.get('/instruments/attributes'),
       ]);
       this.employees = employees;
       this.families = families;
       this.familyLabels = familyLabels;
-      this.marks = marks;
+      // Instrument attributes -- Mark, suitcase amp, ... (migration 089);
+      // see instrumentAttrs.js.
+      this.attributes = attributes;
       this.loaded = true;
     },
     // N7 (boss-list scope, scaffold): falls back to the raw key so callers
@@ -305,14 +307,7 @@ export const useRefData = defineStore('refdata', {
     familyLabel(key) {
       return this.familyLabels[key] || key;
     },
-    // Rhodes generations (migration 086): [] for a family without Marks.
-    marksFor(family) {
-      return this.marks[family] || [];
-    },
-    markLabel(family, key) {
-      if (!key) return '';
-      return this.marksFor(family).find((m) => m.key === key)?.label || key;
-    },
+
   },
 });
 

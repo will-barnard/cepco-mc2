@@ -10,7 +10,8 @@
  * manual-entry-only or inactive).
  *
  * Migration 086: this is now the catalog instruments link to, so each node
- * also carries facts -- Mark (Rhodes) and key count -- that its children
+ * also carries facts -- attributes (Mark, suitcase amp...; migration 089)
+ * and key count -- that its children
  * inherit unless they set their own. Blank = inherit; the greyed
  * placeholder shows what it currently inherits. Key count drives the
  * estimate wizard's parts pricing (32 = Piano Bass, 54/73/88), so a change
@@ -21,6 +22,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
 import { useRefData } from '../stores';
+import { valueLabel } from '../instrumentAttrs';
 
 const refData = useRefData();
 
@@ -72,13 +74,19 @@ const rows = computed(() => {
 // --- create --------------------------------------------------------------
 const showNew = ref(false);
 const blankForm = () => ({
-  name: '', parent_id: '', allow_manual: false, is_suitcase: false, mark: '', key_count: '',
+  name: '', parent_id: '', allow_manual: false, is_suitcase: false, attrs: {}, key_count: '',
 });
-const marks = computed(() => refData.marksFor(family.value));
+// Attributes this family has -- Mark, suitcase amp... (migration 089).
+const attributes = computed(() => (refData.attributes || []).filter((a) => (a.families[family.value] || []).length));
 // What a node would inherit if its own value were blank: its parent's
 // effective value (the API resolves those through instrument_model_facts).
 const byId = computed(() => new Map(nodes.value.map((n) => [n.id, n])));
 const inherited = (n, field) => (n.parent_id ? byId.value.get(n.parent_id)?.[field] ?? null : null);
+// What a node would get for one attribute if its own were blank.
+function inheritedAttrLabel(n, key) {
+  const v = (inherited(n, 'effective_attrs') || {})[key];
+  return v ? `${valueLabel(refData.attributes, key, family.value, v)} (inherited)` : null;
+}
 const form = ref(blankForm());
 
 function openNew() {
@@ -97,7 +105,7 @@ async function createNode() {
       parent_id: form.value.parent_id || null,
       allow_manual: form.value.allow_manual,
       is_suitcase: form.value.is_suitcase,
-      mark: form.value.mark || null,
+      attrs: Object.fromEntries(Object.entries(form.value.attrs).filter(([, v]) => v)),
       key_count: form.value.key_count === '' ? null : Number(form.value.key_count),
     });
     showNew.value = false;
@@ -138,7 +146,7 @@ async function removeNode(n) {
       <div>
         <h1 style="margin-bottom: 4px">Instrument models</h1>
         <p class="muted small" style="margin: 0">
-          The model catalog every instrument links to. Mark and key count set on a node apply to
+          The model catalog every instrument links to. Attributes (Mark, suitcase amp) and key count set on a node apply to
           everything under it unless a child sets its own (blank = inherit, shown greyed). Key count
           sets parts pricing on estimates (32 = Piano Bass). A node with instruments linked under it
           can only be deactivated, not deleted. The pickers always offer "type it in instead" too,
@@ -184,11 +192,11 @@ async function removeNode(n) {
         </div>
       </div>
       <div class="field-row" style="margin-top: 12px">
-        <div v-if="marks.length" class="field" style="margin: 0">
-          <label>Mark (blank = inherit)</label>
-          <select v-model="form.mark">
-            <option value="">—</option>
-            <option v-for="m in marks" :key="m.key" :value="m.key">{{ m.label }}</option>
+        <div v-for="a in attributes" :key="a.key" class="field" style="margin: 0">
+          <label>{{ a.label }} (blank = inherit)</label>
+          <select v-model="form.attrs[a.key]">
+            <option :value="undefined">—</option>
+            <option v-for="o in a.families[family]" :key="o.key" :value="o.key">{{ o.label }}</option>
           </select>
         </div>
         <div class="field" style="margin: 0">
@@ -234,11 +242,12 @@ async function removeNode(n) {
             <span class="small">Suitcase</span>
           </label>
           <select
-            v-if="marks.length" :value="n.mark || ''" class="fact-input" title="Mark (blank = inherit)"
-            @change="updateNode(n, { mark: $event.target.value || null })"
+            v-for="a in attributes" :key="a.key" :value="(n.attrs || {})[a.key] || ''" class="fact-input"
+            :title="`${a.label} (blank = inherit)`"
+            @change="updateNode(n, { attrs: { [a.key]: $event.target.value || null } })"
           >
-            <option value="">{{ inherited(n, 'effective_mark') ? `${refData.markLabel(family, inherited(n, 'effective_mark'))} (inherited)` : 'Mark —' }}</option>
-            <option v-for="m in marks" :key="m.key" :value="m.key">{{ m.label }}</option>
+            <option value="">{{ inheritedAttrLabel(n, a.key) || `${a.label} —` }}</option>
+            <option v-for="o in a.families[family]" :key="o.key" :value="o.key">{{ o.label }}</option>
           </select>
           <input
             :value="n.key_count ?? ''" class="fact-input keys" inputmode="numeric"

@@ -16,17 +16,18 @@ const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/
 const { FAMILIES } = require('./instruments');
 const catalog = require('../services/instrumentCatalog');
 
-// Catalog facts (migration 086). '' / null clears either one, which means
+// Catalog facts (migrations 086 / 089). '' / null clears one, which means
 // "inherit from the parent" -- the facts view resolves it down the tree.
-function markFor(family, v) {
-  if (v === undefined) return undefined;
-  if (v === null || v === '') return null;
-  if (!catalog.markKeys(family).includes(v)) {
-    throw badRequest(catalog.MARKS[family]
-      ? `mark must be one of: ${catalog.MARKS[family].map((m) => m.label).join(', ')}`
-      : 'Only Rhodes models have a Mark');
+// A node's attributes (migration 089): { key: value } merged over what it
+// has; a null / '' value removes that key, i.e. "inherit from the parent".
+function nextAttrs(family, current, input) {
+  if (input === undefined) return undefined;
+  const requested = catalog.validateAttrs(input, family);
+  const out = { ...(current || {}) };
+  for (const [k, v] of Object.entries(requested)) {
+    if (v === null) delete out[k]; else out[k] = v;
   }
-  return v;
+  return out;
 }
 function keyCountOf(v) {
   if (v === undefined) return undefined;
@@ -62,7 +63,7 @@ router.get('/', asyncHandler(async (req, res) => {
     // Each node with what it resolves to after inheritance (migration 086)
     // and how many instruments are linked to it -- Settings shows both, and
     // the pickers ignore the extras.
-    `SELECT n.*, f.chain, f.mark AS effective_mark, f.key_count AS effective_key_count,
+    `SELECT n.*, f.chain, f.attrs AS effective_attrs, f.key_count AS effective_key_count,
             f.is_suitcase AS effective_is_suitcase,
             (SELECT count(*)::int FROM instruments i WHERE i.model_id = n.id) AS instrument_count
        FROM instrument_models n
@@ -89,7 +90,7 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
   );
   const { rows } = await query(
     `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual, is_suitcase,
-                                    mark, key_count)
+                                    attrs, key_count)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [b.family, b.parent_id || null, String(b.name).trim(),
       b.sort_order === undefined ? maxRow[0].next : Number(b.sort_order),
@@ -100,7 +101,7 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
       // instrument (see migration 045's header). Same plain boolean
       // convention as allow_manual just above.
       b.is_suitcase === true,
-      markFor(b.family, b.mark) ?? null,
+      nextAttrs(b.family, {}, b.attrs) || {},
       keyCountOf(b.key_count) ?? null],
   );
   res.status(201).json(rows[0]);
@@ -131,7 +132,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
     );
     if (loop.length) throw badRequest("A node can't move under one of its own children");
   }
-  const mark = markFor(existing.family, b.mark);
+  const attrs = nextAttrs(existing.family, existing.attrs, b.attrs);
   const keyCount = keyCountOf(b.key_count);
 
   const { rows } = await query(
@@ -142,7 +143,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
        allow_manual = COALESCE($6, allow_manual),
        is_suitcase  = COALESCE($7, is_suitcase),
        active       = COALESCE($8, active),
-       mark         = CASE WHEN $9::boolean THEN $10 ELSE mark END,
+       attrs        = CASE WHEN $9::boolean THEN $10::jsonb ELSE attrs END,
        key_count    = CASE WHEN $11::boolean THEN $12 ELSE key_count END,
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
@@ -153,7 +154,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       b.allow_manual === undefined ? null : b.allow_manual,
       b.is_suitcase === undefined ? null : b.is_suitcase,
       b.active === undefined ? null : b.active,
-      mark !== undefined, mark ?? null,
+      attrs !== undefined, attrs === undefined ? null : JSON.stringify(attrs),
       keyCount !== undefined, keyCount ?? null],
   );
   res.json(rows[0]);

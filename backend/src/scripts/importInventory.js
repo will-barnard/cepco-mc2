@@ -471,12 +471,11 @@ function parseInstrumentRow(sheet, section, row, rowNumber, family) {
     family,
     nickname,
     model: model || null,
-    // Rhodes Mark from the sheet's own text, same rule as migration 085's
-    // backfill (services/instrumentCatalog.js). Only fills a blank, and is
-    // dropped again if the linked model already says it -- see upsert.
-    mark: family === 'rhodes'
-      ? inv.markFromText(model) || inv.markFromText(section.group) || inv.markFromText(nickname)
-      : null,
+    // Rhodes Mark and suitcase amp from the sheet's own text, same rules
+    // as migrations 085 / 089 (services/instrumentCatalog.js). Only fills
+    // what nobody has set, and is dropped where the linked model already
+    // says it -- see upsert / relinkModel.
+    attrs: inv.attrsFromText(family, model, section.group, nickname),
     year,
     serial_no: null,
     condition,
@@ -709,9 +708,9 @@ async function upsertInstrument(client, rec, targetId) {
       `UPDATE instruments SET ${INSTRUMENT_COLS.map((c, i) => `${c} = $${i + 2}`).join(', ')},
               customer_id = COALESCE(customer_id, $${INSTRUMENT_COLS.length + 2}),
               sold_to_customer_id = COALESCE(sold_to_customer_id, $${INSTRUMENT_COLS.length + 3}),
-              -- Mark (migrations 085/086) is picked in the app; the sheet
-              -- only fills it when nobody has.
-              mark_override = COALESCE(mark_override, $${INSTRUMENT_COLS.length + 4}),
+              -- Attributes (migration 089) are picked in the app; the sheet
+              -- only fills the ones nobody has (existing keys win).
+              attr_overrides = $${INSTRUMENT_COLS.length + 4}::jsonb || attr_overrides,
               -- A catalog link (086) only stands while the text and family
               -- it was made from do; otherwise relinkModel() redoes it.
               -- (Right-hand sides here see the row *before* this update.)
@@ -720,7 +719,7 @@ async function upsertInstrument(client, rec, targetId) {
                   OR family IS DISTINCT FROM $${INSTRUMENT_COLS.indexOf('family') + 2}
                 THEN NULL ELSE model_id END
         WHERE id = $1`,
-      [targetId, ...values, rec.customer_id || null, rec.sold_to_customer_id || null, rec.mark || null],
+      [targetId, ...values, rec.customer_id || null, rec.sold_to_customer_id || null, JSON.stringify(rec.attrs || {})],
     );
     report.counts.instruments_updated += 1;
     await relinkModel(client, targetId);
@@ -728,11 +727,11 @@ async function upsertInstrument(client, rec, targetId) {
     return targetId;
   }
   const { rows } = await client.query(
-    `INSERT INTO instruments (${INSTRUMENT_COLS.join(', ')}, customer_id, sold_to_customer_id, mark_override)
+    `INSERT INTO instruments (${INSTRUMENT_COLS.join(', ')}, customer_id, sold_to_customer_id, attr_overrides)
      VALUES (${INSTRUMENT_COLS.map((_, i) => `$${i + 1}`).join(', ')},
              $${INSTRUMENT_COLS.length + 1}, $${INSTRUMENT_COLS.length + 2},
              $${INSTRUMENT_COLS.length + 3}) RETURNING id`,
-    [...values, rec.customer_id || null, rec.sold_to_customer_id || null, rec.mark || null],
+    [...values, rec.customer_id || null, rec.sold_to_customer_id || null, JSON.stringify(rec.attrs || {})],
   );
   report.counts.instruments_created += 1;
   await relinkModel(client, rows[0].id);
@@ -754,17 +753,18 @@ async function recordSheetSale(client, id, rec) {
 // Catalog link (migration 086): an unlinked row is linked when its text
 // names exactly one model -- the same instrument_model_match() rule the
 // migration's backfill and the API's free-text saves use -- and a Mark the
-// linked model already implies stops being an override.
+// linked model already implies stops being an override (any attribute).
 async function relinkModel(client, id) {
   await client.query(
-    `UPDATE instruments SET model_id = instrument_model_match(family, model, mark_override)
+    `UPDATE instruments SET model_id = instrument_model_match(family, model, attr_overrides->>'mark')
       WHERE id = $1 AND model_id IS NULL`,
     [id],
   );
   await client.query(
-    `UPDATE instruments i SET mark_override = NULL
+    `UPDATE instruments i SET attr_overrides = instrument_attrs_prune(i.attr_overrides, f.attrs)
        FROM instrument_model_facts f
-      WHERE i.id = $1 AND f.id = i.model_id AND i.mark_override = f.mark`,
+      WHERE i.id = $1 AND f.id = i.model_id
+        AND instrument_attrs_prune(i.attr_overrides, f.attrs) <> i.attr_overrides`,
     [id],
   );
 }

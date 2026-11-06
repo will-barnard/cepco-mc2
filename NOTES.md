@@ -4459,6 +4459,53 @@ byte-for-byte unchanged.
 - A re-run of the inventory importer skips sheet rows whose piece is now a
   customer's (it won't pull a sold piece back into stock).
 
+### 2.108 Instrument attributes: Mark, and Rhodes suitcase amp (migration 089)
+
+Rhodes suitcases need their amp system told apart -- Jordan (50W mono,
+1965-69), Peterson (80W, 4-pin, 1970-77), Janus (100W, 5-pin XLR,
+1977-82). Cables, preamps and speaker parts are specific to each. It works
+exactly like Mark (§2.106): a model can imply it (every Mark II suitcase is
+Janus), a single piece can differ (a swapped amp, a spare Peterson bottom).
+So instead of a second bespoke field, Mark became the first entry in a
+general list and the amp is the second.
+
+- **The list** -- `services/instrumentCatalog.js` `ATTRIBUTES`: key, label,
+  options per family (with a short hint), and `suitcaseOnly` for the amp.
+  Served at `GET /instruments/attributes` (and in `/inventory/meta`),
+  loaded into the refData store. Adding an attribute (Wurlitzer variants,
+  tolex...) is an entry there: the API validates against it and every form
+  renders it (`AttributeFields.vue`, helpers in `instrumentAttrs.js`).
+- **Storage** -- `instrument_models.attrs` (JSONB, set on a node, inherited
+  down the tree: the facts view merges `parent || child`) and
+  `instruments.attr_overrides` (only what differs from the model). Reads
+  return `attrs` (effective), `catalog_attrs`, `attr_overrides`, and `mark`
+  on its own for lists. Writes send `attrs: { key: value }`, '' / null =
+  as the model says, merged over what's stored; `resolveModel()` prunes
+  anything the model already says or the family doesn't have. `mark` is
+  still accepted as shorthand for `attrs.mark`.
+- **Moving Mark** -- 089 copies `instrument_models.mark` into `attrs.mark`
+  and `instruments.mark_override` into `attr_overrides.mark`, checks every
+  model's and every instrument's effective Mark is unchanged, then drops
+  the two old columns (rolls back if anything differs). The text matcher
+  (`instrument_model_match`) reads the Mark from attrs. New SQL helper
+  `instrument_attrs_prune(overrides, model_attrs)` (importer + backfill).
+  The backfill doesn't touch `updated_at`.
+- **Suitcase amp, filled in where unambiguous** -- catalog: Rhodes suitcase
+  models under Mark II = Janus; pieces: a Rhodes whose model, section or
+  name says Peterson / Janus / Jordan (kept only where it differs from the
+  model). Not guessed from the year: amps were swapped often enough that a
+  guess would be wrong exactly where it matters. The rest are set by hand
+  -- on the instrument page, or once per model in Settings -> Instrument
+  models (e.g. set Peterson or Janus on a node if your catalog splits Mark I
+  suitcases by era).
+- **Where the amp shows** -- for a Rhodes whose model is a suitcase, isn't
+  linked to a model (spare cabinets, typed-in text), or already has a
+  value; hidden for a known Stage model. Inventory list tags and the CSV
+  carry every attribute.
+- Also from this pass: `POST /inventory` accepts a picked model with no
+  typed text, and a `PATCH /inventory/:id` that normalises to no change
+  (picking the Mark the model already has) no longer errors.
+
 ## 4. Suggested first moves after deploy
 
 

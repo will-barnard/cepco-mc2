@@ -21,7 +21,7 @@
  * not just the text. `v-model:model-id` carries the deepest picked node's
  * id (null for typed-in text -- the API links typed text itself when it
  * names exactly one model), and a `facts` event hands the parent that
- * node's inherited facts ({ mark, key_count, is_suitcase }, straight from
+ * node's inherited facts ({ attrs, key_count, is_suitcase }, straight from
  * GET /instrument-models, i.e. the instrument_model_facts view) so a form
  * can show "Mark I (from model)" before anything is saved. An existing
  * value opens on its node when it has a model_id, even if the node has
@@ -107,7 +107,7 @@ function emitPicked() {
   const node = id ? nodes.value.find((n) => n.id === id) : null;
   emit('update:modelId', id);
   emit('facts', node
-    ? { mark: node.effective_mark ?? null, key_count: node.effective_key_count ?? null, is_suitcase: !!node.effective_is_suitcase }
+    ? { attrs: node.effective_attrs || {}, key_count: node.effective_key_count ?? null, is_suitcase: !!node.effective_is_suitcase }
     : null);
 }
 

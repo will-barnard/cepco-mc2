@@ -106,7 +106,7 @@ router.post('/', asyncHandler(async (req, res) => {
     // Catalog link + Mark (migration 086), same as every other create path.
     const m = await catalog.resolveModel(client, {
       family: instrument.family, model: instrument.model || null,
-      model_id: instrument.model_id, mark: instrument.mark,
+      model_id: instrument.model_id, attrs: instrument.attrs, mark: instrument.mark,
     }, {});
     const { rows: instRows } = await client.query(
       // Bought stock: shop-owned and for sale. (This used to set the old
@@ -114,7 +114,7 @@ router.post('/', asyncHandler(async (req, res) => {
       // fleet page — see migration 072.) cost_paid mirrors the purchase
       // price so the inventory page's admin-only cost column is filled in.
       `INSERT INTO instruments (family, model, year, serial_no, identifying_notes,
-                                ownership, sale_status, cost_paid, nickname, model_id, mark_override)
+                                ownership, sale_status, cost_paid, nickname, model_id, attr_overrides)
        VALUES ($1,$2,$3,$4,$5,'shop','available',$6,$7,$8,$9) RETURNING *`,
       [
         instrument.family,
@@ -125,7 +125,7 @@ router.post('/', asyncHandler(async (req, res) => {
         price,
         instrument.nickname ? String(instrument.nickname).trim() : null,
         m.model_id ?? null,
-        m.mark_override ?? null,
+        m.attr_overrides || {},
       ],
     );
     const instrumentRow = instRows[0];
