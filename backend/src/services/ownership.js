@@ -69,13 +69,15 @@ async function historyFor(db, instrumentId, user) {
     `SELECT o.*, c.name AS customer_name, b.name AS sold_to_customer_name,
             p.seller_name, p.seller_customer_id, sc.name AS seller_customer_name,
             p.purchase_date, p.price AS purchase_price, p.receipt_sent_at, p.ticket_id AS purchase_ticket_id,
-            e.name AS created_by_name
+            e.name AS created_by_name,
+            pt.status_label_snapshot AS payout_ticket_status, pt.archived AS payout_ticket_archived
        FROM instrument_ownership o
        LEFT JOIN customers c ON c.id = o.customer_id
        LEFT JOIN customers b ON b.id = o.sold_to_customer_id
        LEFT JOIN instrument_purchases p ON p.id = o.purchase_id
        LEFT JOIN customers sc ON sc.id = p.seller_customer_id
        LEFT JOIN employees e ON e.id = o.created_by
+       LEFT JOIN tickets pt ON pt.id = o.payout_ticket_id
       WHERE o.instrument_id = $1
       ORDER BY o.id DESC`,
     [instrumentId],

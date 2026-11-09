@@ -8,7 +8,8 @@
  * hands back the whole instrument page as `changed`):
  *   - a sale's date, price and buyer -- linking the buyer's customer record
  *     also makes the piece theirs if they still own it;
- *   - a sold consignment's payout status;
+ *   - a sold consignment's payout status, kept in step with its payout
+ *     ticket (migration 090), which is linked beside it;
  *   - undo the most recent sale (seniors and admins), while the buyer still
  *     owns it.
  */
@@ -190,6 +191,14 @@ async function undoSale() {
               <option value="">Not recorded</option>
               <option v-for="p in PAYOUT" :key="p.key" :value="p.key">{{ p.label }}</option>
             </select>
+            <!-- Migration 090: the ticket paying this consignor. Finishing it
+                 marks the payout Paid out, and Paid out here finishes it. -->
+            <RouterLink v-if="h.payout_ticket_id" :to="{ name: 'ticket', params: { id: h.payout_ticket_id } }">
+              Payout ticket #{{ h.payout_ticket_id }}
+            </RouterLink>
+            <span v-if="h.payout_ticket_id" class="muted">
+              ({{ h.payout_ticket_archived ? 'archived' : h.payout_ticket_status }})
+            </span>
           </div>
         </template>
 

@@ -8,6 +8,8 @@ const settings = require('../services/settings');
 const { createShipment } = require('./shipments');
 const { FAMILIES, FAMILY_LABELS } = require('./instruments');
 const { insertNote, pushPendingNotes } = require('../services/ticketNotes');
+// Lazy: services/consignmentPayouts.js creates tickets through this file.
+const consignmentPayouts = () => require('../services/consignmentPayouts');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -560,15 +562,24 @@ async function resolveNewTicketFields(b) {
   // Default assignment (Settings -> a category's "Default assignee"): only
   // kicks in when nobody named any technicians explicitly, and only if that
   // employee is still active — a departed shipping manager should never
-  // silently keep collecting new tickets.
+  // silently keep collecting new tickets. Settings offers the picker on
+  // sub-categories too (Orders & Shipping -> Shopify, say), but only the
+  // top-level category's used to be read; a sub-category's own assignee
+  // now wins, falling back to its parent's when it has none (or theirs has
+  // left).
   let defaultAssignedTechIds = [];
   const explicitTechnicianIds = Array.isArray(b.technician_ids) ? b.technician_ids : [];
-  if (!explicitTechnicianIds.length && category.meta && category.meta.default_assignee_id) {
+  const assigneeCandidates = [subcategory, category]
+    .map((row) => row && row.meta && row.meta.default_assignee_id)
+    .filter(Boolean);
+  if (!explicitTechnicianIds.length && assigneeCandidates.length) {
     const { rows } = await query(
-      'SELECT id FROM employees WHERE id = $1 AND active = TRUE',
-      [category.meta.default_assignee_id],
+      'SELECT id FROM employees WHERE id = ANY($1::int[]) AND active = TRUE',
+      [assigneeCandidates],
     );
-    if (rows[0]) defaultAssignedTechIds = [rows[0].id];
+    const activeIds = new Set(rows.map((r) => r.id));
+    const pick = assigneeCandidates.map(Number).find((id) => activeIds.has(id));
+    if (pick) defaultAssignedTechIds = [pick];
   }
 
   return {
@@ -1355,6 +1366,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         ],
       );
     }
+    // A consignment payout ticket finishing (Done / archived) marks the
+    // payout Paid out on its instrument, and reopening it puts it back
+    // (migration 090). Same transaction, so the two can't disagree.
+    await consignmentPayouts().syncFromTicket(client, existing, rows[0], req.user.id);
     return rows[0];
   });
 

@@ -4506,6 +4506,51 @@ general list and the amp is the second.
   typed text, and a `PATCH /inventory/:id` that normalises to no change
   (picking the Mark the model already has) no longer errors.
 
+### 2.109 A consignment sale opens a ticket to pay the consignor (migration 090)
+
+Shop feedback, Nov 2026: when a consignment sells, a ticket to pay the
+consignor should open automatically, assigned to whoever Settings says.
+
+- **Its own category, Consignment Payouts** (`consignment_payout`). Who
+  gets it is that category's existing **Default assignee** (Settings ->
+  Ticket categories) -- the same per-category auto-assign every ticket type
+  already had, so there's no second setting. No assignee (or theirs is
+  inactive) = the ticket is made unassigned. **Retiring the category turns
+  the feature off**; the sale still goes through.
+- **What the ticket is**: starts In Progress with a task from its title
+  (the Daily To-Do's pattern) so it's on the assignee's dashboard at once;
+  named `Consignment payout: <consignor> - "<nickname>" <year> <family>
+  <model>` (standardized; {ticket_name} = consignor); customer = the
+  consignor's record (none if unlinked); instrument linked; no QC, ship
+  button or progress update; Reservation / QC / Invoice Sent / Invoice Paid
+  don't apply. Its first note -- authorless, so it isn't pushed to the
+  consignor's Xero history (it names the buyer) -- has the date, price,
+  buyer, deal terms and, when there's a rate and a price, the split ("At
+  30% commission: consignor $4,025, CEPCo $1,725 -- check the deal for
+  services owed on top").
+- **Only `POST /inventory/:id/sell` opens one** -- not
+  `instrument_record_sale()` itself, which the importer and 087's backfill
+  also call (historic sales must not each open a ticket). Not opened for a
+  shop piece, or a consignment already marked Paid out.
+- **Kept in step** via `instrument_ownership.payout_ticket_id` (unique),
+  all in `services/consignmentPayouts.js`, same transaction as the edit:
+  ticket finished (terminal status such as Done, or archived) -> payout
+  Paid out; reopened -> back to Payout due; Paid out set from the ownership
+  history -> ticket to Done; set back to Payout due -> a Done (unarchived)
+  ticket reopens. Each side only moves the other between Payout due and
+  Paid out, so a deliberate "Contracted" / "Not recorded" is never
+  overwritten. **Undo sale** unlinks the ticket and archives it with a note
+  (a re-sell opens a fresh one).
+- Opening the ticket is best effort inside a savepoint: if it can't be made
+  the sale still commits and the error is logged.
+- Links: ownership history ("Payout ticket #N (status)") and the
+  Consignments tab's buyer column; the Mark sold form says a ticket will be
+  opened and for whom.
+- **Also fixed**: Settings showed a Default assignee picker on
+  sub-categories (Orders & Shipping -> Shopify, say) but only the
+  top-level category's was ever read. A sub-category's own assignee now
+  wins, falling back to its parent's.
+
 ## 4. Suggested first moves after deploy
 
 

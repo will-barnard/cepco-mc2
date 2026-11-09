@@ -580,7 +580,14 @@ onMounted(async () => {
                         {{ i.sale_status === 'not_for_sale' ? 'NFS' : statusPill(i).label }}
                       </span>
                     </td>
-                    <td>{{ i.sold_to_name }}</td>
+                    <td>
+                      {{ i.sold_to_name }}
+                      <!-- Migration 090: the ticket paying this consignor -->
+                      <RouterLink
+                        v-if="i.payout_ticket_id" :to="{ name: 'ticket', params: { id: i.payout_ticket_id } }"
+                        class="tiny-text nowrap" @click.stop
+                      >Payout #{{ i.payout_ticket_id }}</RouterLink>
+                    </td>
                     <td class="nowrap small">{{ i.sold_at }}</td>
                   </template>
                   <template v-else>

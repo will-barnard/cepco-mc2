@@ -7,6 +7,7 @@ const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/
 
 const catalog = require('../services/instrumentCatalog');
 const ownership = require('../services/ownership');
+const payouts = require('../services/consignmentPayouts');
 const storage = require('../storage');
 
 // Required lazily: both reach back into this file for FAMILIES (through
@@ -456,6 +457,8 @@ router.post('/:id/acquire', asyncHandler(async (req, res) => {
 router.post('/:id/undo-sale', requireRole('senior'), asyncHandler(async (req, res) => {
   await withTransaction(async (client) => {
     await ownership.undoSale(client, req.params.id);
+    // No sale, no payout: its ticket is unlinked and archived (migration 090).
+    await payouts.onSaleUndone(client, req.params.id);
     await client.query(
       `INSERT INTO instrument_events (instrument_id, employee_id, field, old_value, new_value)
        VALUES ($1, $2, 'sold', 'sold', 'undone')`,
@@ -534,6 +537,9 @@ router.patch('/ownership/:periodId', asyncHandler(async (req, res) => {
         [per.id, ...cols.map((c) => sets[c])],
       );
     }
+    // Paid out by hand -> its payout ticket moves to Done; back to Payout
+    // due -> a Done one reopens (migration 090).
+    if ('payout_status' in sets) await payouts.syncFromPayout(client, per, sets.payout_status, req.user.id);
     return per.instrument_id;
   });
   res.json(await instrumentDetail().loadDetail(instrumentId, req.user));

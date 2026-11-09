@@ -57,6 +57,20 @@ const SETTINGS = [
   ['ticket_category', 'sidequest_outreach', 'Outreach', 30, { parent_key: 'sidequests' }],
   ['ticket_category', 'sidequest_other', 'Other', 40,
     { parent_key: 'sidequests', allow_free_text: true }],
+  // Migration 090: opened automatically when a consignment sells
+  // (services/consignmentPayouts.js). Same meta as that migration -- on a
+  // fresh database this row comes from whichever of the two runs first.
+  ['ticket_category', 'consignment_payout', 'Consignment Payouts', 60, {
+    naming_template: 'Consignment payout: {ticket_name} - ["{nickname}" ][{year} ][{family} ][{model}]',
+    naming_mode: 'standardize',
+    naming_enforced: true,
+    naming_name_label: 'Consignor',
+    default_status_key: 'in_progress',
+    auto_task_from_title: true,
+    hide_qc: true,
+    hide_ship_button: true,
+    hide_progress_update: true,
+  }],
 
   // Statuses, seeded from the values actually present in the sheets.
   // excluded_for_shipping (migration 029) replaced excluded_categories:
@@ -68,19 +82,24 @@ const SETTINGS = [
   // queue section, ordered together. Repeated here because on a fresh
   // database the migrations run before this seed inserts the rows.
   ['ticket_status', 'reservation', 'Reservation', 10,
-    { color: 'slate', excluded_for_shipping: true, queue_group: 'waiting' }],
+    {
+      color: 'slate', excluded_for_shipping: true, queue_group: 'waiting',
+      excluded_categories: ['consignment_payout'],
+    }],
   ['ticket_status', 'not_started', 'Not Started', 20, { color: 'slate', queue_group: 'waiting' }],
   // unlocks_tasks (migration 022, NOTES.md §2.28): the tech dashboard's
   // "My tasks" section only ever surfaces tasks belonging to a ticket
   // whose current status carries this flag — admin-editable per status
   // from here on (Settings -> Ticket statuses), not hardcoded to this key.
   ['ticket_status', 'in_progress', 'In Progress', 30, { color: 'blue', unlocks_tasks: true }],
+  // excluded_categories: a consignor payout has no QC or invoice
+  // (migration 090 applies the same to an existing database).
   ['ticket_status', 'qc', 'QC', 40,
-    { color: 'violet', excluded_for_shipping: true }],
+    { color: 'violet', excluded_for_shipping: true, excluded_categories: ['consignment_payout'] }],
   ['ticket_status', 'invoice_sent', 'Invoice Sent', 50,
-    { color: 'amber', excluded_for_shipping: true }],
+    { color: 'amber', excluded_for_shipping: true, excluded_categories: ['consignment_payout'] }],
   ['ticket_status', 'invoice_paid', 'Invoice Paid', 60,
-    { color: 'green', excluded_for_shipping: true }],
+    { color: 'green', excluded_for_shipping: true, excluded_categories: ['consignment_payout'] }],
   ['ticket_status', 'done', 'Done', 70, { color: 'green', terminal: true }],
   ['ticket_status', 'on_hold', 'On Hold', 80,
     { color: 'red', excluded_for_shipping: true }],

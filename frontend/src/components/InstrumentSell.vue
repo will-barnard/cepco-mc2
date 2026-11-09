@@ -8,6 +8,7 @@
  */
 import { ref, computed } from 'vue';
 import api from '../api';
+import { useSettings, useRefData } from '../stores';
 import CustomerSearchSelect from './CustomerSearchSelect.vue';
 
 const props = defineProps({ item: { type: Object, required: true } });
@@ -22,6 +23,16 @@ const form = ref({
 const busy = ref(false);
 const error = ref('');
 const isConsignment = computed(() => props.item.ownership === 'consignment');
+// Migration 090: a consignment's sale opens a payout ticket, unless the
+// Consignment Payouts category has been retired (Settings) to turn that off.
+const settings = useSettings();
+const refData = useRefData();
+const opensPayoutTicket = computed(() => isConsignment.value
+  && settings.active('ticket_category').some((c) => c.key === 'consignment_payout'));
+const payoutAssignee = computed(() => {
+  const id = settings.active('ticket_category').find((c) => c.key === 'consignment_payout')?.meta?.default_assignee_id;
+  return id ? refData.employees.find((e) => e.id === id && e.active)?.name : null;
+});
 
 function onBuyer(row) {
   if (row) form.value.sold_to_name = row.name;
@@ -66,7 +77,9 @@ async function submit() {
     </div>
     <p class="muted small" style="margin-top: -4px">
       It becomes the buyer's instrument<template v-if="form.sold_to_customer_id"> and shows on their customer page</template>.
-      <template v-if="isConsignment"> The consignor's payout is marked due.</template>
+      <template v-if="isConsignment"> The consignor's payout is marked due</template>
+      <template v-if="opensPayoutTicket"> and a ticket to pay them is opened<template v-if="payoutAssignee"> for {{ payoutAssignee }}</template></template>
+      <template v-if="isConsignment">.</template>
       A mistake can be undone from the ownership history.
     </p>
     <div v-if="error" class="alert" style="margin-bottom: 10px">{{ error }}</div>

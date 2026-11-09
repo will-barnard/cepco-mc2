@@ -54,6 +54,7 @@ const inv = require('../services/inventory');
 const catalog = require('../services/instrumentCatalog');
 const detail = require('../services/instrumentDetail');
 const ownership = require('../services/ownership');
+const payouts = require('../services/consignmentPayouts');
 const { createZipWriter } = require('../services/zipStream');
 
 const router = express.Router();
@@ -619,7 +620,7 @@ const SALES_SELECT = `
            'customer_id', s.customer_id, 'customer_name', sc.name,
            'consignor_name', s.owner_name,
            'consignment_status', s.payout_status, 'consignment_rate', s.consignment_rate,
-           'consignment_terms', s.consignment_terms,
+           'consignment_terms', s.consignment_terms, 'payout_ticket_id', s.payout_ticket_id,
            'sold_at', s.ended_on, 'sold_price', s.sale_price,
            'sold_to_name', COALESCE(s.sold_to_name, bc.name), 'sold_to_customer_id', s.sold_to_customer_id,
            'sale_id', s.id, 'owner_customer_id', i.customer_id, 'row_key', 's' || s.id) AS row,
@@ -1047,7 +1048,7 @@ router.post('/:id/sell', asyncHandler(async (req, res) => {
     const { rows: [old] } = await client.query('SELECT * FROM instruments WHERE id = $1 FOR UPDATE', [req.params.id]);
     if (!old) throw notFound('Instrument not found');
     if (old.ownership === 'customer') throw badRequest('Only shop stock or a consignment can be sold');
-    await ownership.recordSale(client, old.id, {
+    const salePeriodId = await ownership.recordSale(client, old.id, {
       soldOn, price, buyerId, buyerName, employeeId: req.user.id,
     });
     await client.query(
@@ -1055,6 +1056,11 @@ router.post('/:id/sell', asyncHandler(async (req, res) => {
        VALUES ($1, $2, 'sold', $3, $4)`,
       [old.id, req.user.id, old.sale_status, buyerName],
     );
+    // A consignment's sale opens the ticket to pay its consignor (migration
+    // 090). Only here, not in instrument_record_sale() itself: the
+    // inventory importer and 087's backfill also record sales through that
+    // function, and years-old sales shouldn't each open a ticket.
+    if (old.ownership === 'consignment') await payouts.openForSale(client, salePeriodId, req.user.id);
     return old.id;
   });
   res.json(await detail.loadDetail(id, req.user));
