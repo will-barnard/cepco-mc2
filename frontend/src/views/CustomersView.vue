@@ -274,7 +274,7 @@ function startEditInstrument(i) {
     serial_no: i.serial_no || '',
     family: i.family,
   };
-  instrumentFacts.value = i.model_id ? { attrs: i.catalog_attrs || {}, is_suitcase: !!i.model_is_suitcase } : null;
+  instrumentFacts.value = i.model_id ? { attrs: i.catalog_attrs || {}, is_suitcase: !!i.model_is_suitcase, is_console: !!i.model_is_console } : null;
   instrumentError.value = '';
   editingInstrumentId.value = i.id;
 }
@@ -623,6 +623,7 @@ const when = (ts) => new Date(ts).toLocaleString();
                   v-model="instrumentForm.attrs" :family="instrumentForm.family"
                   :catalog-attrs="instrumentFacts?.attrs || {}"
                   :suitcase="instrumentFacts ? instrumentFacts.is_suitcase : null"
+                  :console="instrumentFacts ? instrumentFacts.is_console : null"
                 />
               </div>
               <div class="field">

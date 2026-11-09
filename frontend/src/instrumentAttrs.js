@@ -11,12 +11,14 @@
 /**
  * The attributes a form shows for a family. A suitcase-only one (the amp)
  * is hidden only when the picked model is known not to be a suitcase
- * (`suitcase === false`) and the piece has no value for it.
+ * (`suitcase === false`) and the piece has no value for it; a console-only
+ * one (Chopped, migration 091) the same way on `console`.
  */
-export function attributesFor(list, family, { suitcase = null, values = {} } = {}) {
+export function attributesFor(list, family, { suitcase = null, console = null, values = {} } = {}) {
   return (list || [])
     .filter((a) => (a.families[family] || []).length)
-    .filter((a) => !a.suitcaseOnly || suitcase !== false || values[a.key]);
+    .filter((a) => !a.suitcaseOnly || suitcase !== false || values[a.key])
+    .filter((a) => !a.consoleOnly || console !== false || values[a.key]);
 }
 
 export function valueLabel(list, key, family, value) {

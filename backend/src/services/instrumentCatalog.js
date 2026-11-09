@@ -31,6 +31,12 @@ const { badRequest } = require('../middleware/errors');
 //                 contained model, or that isn't linked to one (the model
 //                 might be -- a spare cabinet, typed-in text), or that
 //                 already has a value. Hidden for a known Stage model.
+//   consoleOnly   the same rule on the catalog's is_console (migration 091):
+//                 hidden only for a known non-console model.
+//   pieceOnly     about one piece, never a model (Chopped) -- the catalog
+//                 editor doesn't offer it and the API refuses it on a node.
+//   flag          one option, shown as a checkbox: set = that option, unset
+//                 = nothing. Its option's label doubles as the tag in lists.
 // ---------------------------------------------------------------------------
 const ATTRIBUTES = [
   {
@@ -63,12 +69,28 @@ const ATTRIBUTES = [
       ],
     },
   },
+  {
+    // Migration 091: a console Wurlitzer taken off its base (made into a
+    // portable / stage piano).
+    key: 'chopped',
+    label: 'Chopped',
+    consoleOnly: true,
+    pieceOnly: true,
+    flag: true,
+    families: {
+      wurlitzer: [{ key: 'yes', label: 'Chopped', hint: 'removed from its console base' }],
+    },
+  },
 ];
 const ATTRIBUTE_BY_KEY = Object.fromEntries(ATTRIBUTES.map((a) => [a.key, a]));
 const optionKeys = (attrKey, family) => (ATTRIBUTE_BY_KEY[attrKey]?.families[family] || []).map((o) => o.key);
 
-/** { key: value } -> validated copy; '' / null values mean "inherit" and are kept as null. */
-function validateAttrs(input, family, what = 'attribute') {
+/**
+ * { key: value } -> validated copy; '' / null values mean "inherit" and are
+ * kept as null. `forModel`: a catalog node's attrs, which can't carry a
+ * piece-only attribute (clearing one is still allowed).
+ */
+function validateAttrs(input, family, what = 'attribute', { forModel = false } = {}) {
   if (input === null || input === undefined) return {};
   if (typeof input !== 'object' || Array.isArray(input)) throw badRequest(`${what}s must be an object`);
   const out = {};
@@ -76,6 +98,9 @@ function validateAttrs(input, family, what = 'attribute') {
     const attr = ATTRIBUTE_BY_KEY[k];
     if (!attr) throw badRequest(`Unknown ${what} "${k}"`);
     const v = raw === null || raw === undefined || raw === '' ? null : String(raw);
+    if (v !== null && forModel && attr.pieceOnly) {
+      throw badRequest(`${attr.label} is about one instrument, not a model`);
+    }
     if (v !== null) {
       const keys = optionKeys(k, family);
       if (!keys.length) throw badRequest(`${attr.label} doesn't apply to ${family}`);
@@ -105,8 +130,20 @@ function ampFromText(text) {
   const m = AMP_RE.exec(String(text ?? ''));
   return m ? m[1].toLowerCase() : null;
 }
-/** Attributes a Rhodes row's own texts name; the first text that says each one wins. */
+// "206 (chopped)", "214 chop" (migration 091). attrsFromText only reads
+// Inventory Log rows, where a bare "chop" describes the piece -- the same
+// rule migration 091 applies to rows with an inventory_log import_key.
+const CHOP_RE = /\bchop(ped)?\b/i;
+
+/**
+ * Attributes a row's own texts name; the first text that says each one wins.
+ * Rhodes: Mark and amp. Wurlitzer: chopped -- callers pass the model text and
+ * nickname, never notes ("good chop candidate" isn't a chopped piece).
+ */
 function attrsFromText(family, ...texts) {
+  if (family === 'wurlitzer') {
+    return texts.some((t) => CHOP_RE.test(String(t ?? ''))) ? { chopped: 'yes' } : {};
+  }
   if (family !== 'rhodes') return {};
   const out = {};
   for (const t of texts) {
@@ -125,7 +162,8 @@ const FACTS_JOIN = 'LEFT JOIN instrument_model_facts mf ON mf.id = i.model_id';
 const FACTS_COLUMNS = `COALESCE(mf.attrs, '{}'::jsonb) || i.attr_overrides AS attrs,
        COALESCE(mf.attrs, '{}'::jsonb) AS catalog_attrs,
        (COALESCE(mf.attrs, '{}'::jsonb) || i.attr_overrides)->>'mark' AS mark,
-       mf.chain AS model_chain, mf.key_count, mf.is_suitcase AS model_is_suitcase`;
+       mf.chain AS model_chain, mf.key_count, mf.is_suitcase AS model_is_suitcase,
+       mf.is_console AS model_is_console`;
 
 async function factsFor(db, modelId) {
   if (!modelId) return null;

@@ -389,6 +389,7 @@ onMounted(async () => {
         <AttributeFields
           v-model="newPiece.attrs" :family="newPiece.family" :catalog-attrs="newPieceFacts?.attrs || {}"
           :suitcase="newPieceFacts ? newPieceFacts.is_suitcase : null"
+          :console="newPieceFacts ? newPieceFacts.is_console : null"
         />
         <div class="field">
           <label>Model</label>

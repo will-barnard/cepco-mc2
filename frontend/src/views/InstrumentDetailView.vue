@@ -90,7 +90,7 @@ function fillForm(row) {
   conditionForm.value = { ...(row.condition || {}) };
   conditionNotesForm.value = { ...(row.condition_notes || {}) };
   attrsForm.value = { ...(row.attr_overrides || {}) };
-  pickedFacts.value = row.model_id ? { attrs: row.catalog_attrs || {}, is_suitcase: !!row.model_is_suitcase } : null;
+  pickedFacts.value = row.model_id ? { attrs: row.catalog_attrs || {}, is_suitcase: !!row.model_is_suitcase, is_console: !!row.model_is_console } : null;
 }
 
 const original = computed(() => {
@@ -479,6 +479,7 @@ watch(() => props.id, () => { loading.value = true; load(); });
               <AttributeFields
                 v-model="attrsForm" :family="form.family" :catalog-attrs="pickedFacts?.attrs || {}"
                 :suitcase="pickedFacts ? pickedFacts.is_suitcase : null"
+                :console="pickedFacts ? pickedFacts.is_console : null"
               />
             </div>
             <div class="field">

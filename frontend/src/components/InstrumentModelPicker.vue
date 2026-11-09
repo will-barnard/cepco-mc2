@@ -107,7 +107,7 @@ function emitPicked() {
   const node = id ? nodes.value.find((n) => n.id === id) : null;
   emit('update:modelId', id);
   emit('facts', node
-    ? { attrs: node.effective_attrs || {}, key_count: node.effective_key_count ?? null, is_suitcase: !!node.effective_is_suitcase }
+    ? { attrs: node.effective_attrs || {}, key_count: node.effective_key_count ?? null, is_suitcase: !!node.effective_is_suitcase, is_console: !!node.effective_is_console }
     : null);
 }
 

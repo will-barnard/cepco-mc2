@@ -74,10 +74,16 @@ const rows = computed(() => {
 // --- create --------------------------------------------------------------
 const showNew = ref(false);
 const blankForm = () => ({
-  name: '', parent_id: '', allow_manual: false, is_suitcase: false, attrs: {}, key_count: '',
+  name: '', parent_id: '', allow_manual: false, is_suitcase: false, is_console: false, attrs: {}, key_count: '',
 });
 // Attributes this family has -- Mark, suitcase amp... (migration 089).
-const attributes = computed(() => (refData.attributes || []).filter((a) => (a.families[family.value] || []).length));
+// Piece-only ones (Chopped) are never a model's, so they aren't offered.
+const attributes = computed(() => (refData.attributes || [])
+  .filter((a) => !a.pieceOnly && (a.families[family.value] || []).length));
+// Console models (migration 091) are what Chopped applies to -- Wurlitzer
+// is the only family with a console-only attribute today.
+const hasConsoleAttr = computed(() => (refData.attributes || [])
+  .some((a) => a.consoleOnly && (a.families[family.value] || []).length));
 // What a node would inherit if its own value were blank: its parent's
 // effective value (the API resolves those through instrument_model_facts).
 const byId = computed(() => new Map(nodes.value.map((n) => [n.id, n])));
@@ -105,6 +111,7 @@ async function createNode() {
       parent_id: form.value.parent_id || null,
       allow_manual: form.value.allow_manual,
       is_suitcase: form.value.is_suitcase,
+      is_console: form.value.is_console,
       attrs: Object.fromEntries(Object.entries(form.value.attrs).filter(([, v]) => v)),
       key_count: form.value.key_count === '' ? null : Number(form.value.key_count),
     });
@@ -215,6 +222,10 @@ async function removeNode(n) {
           for an instrument picked from a node flagged this way
         </span>
       </label>
+      <label v-if="hasConsoleAttr" class="checkbox" style="margin-top: 8px">
+        <input v-model="form.is_console" type="checkbox" />
+        <span class="small">Console model — instruments under it get the "Chopped" checkbox</span>
+      </label>
     </form>
 
     <div v-if="loading" class="empty">Loading…</div>
@@ -240,6 +251,18 @@ async function removeNode(n) {
               @change="updateNode(n, { is_suitcase: $event.target.checked })"
             />
             <span class="small">Suitcase</span>
+          </label>
+          <label
+            v-if="hasConsoleAttr" class="checkbox"
+            :title="n.is_console || !n.effective_is_console
+              ? 'Console model — its instruments get the Chopped checkbox'
+              : 'Console (inherited from a parent)'"
+          >
+            <input
+              type="checkbox" :checked="n.is_console"
+              @change="updateNode(n, { is_console: $event.target.checked })"
+            />
+            <span class="small">Console<template v-if="!n.is_console && n.effective_is_console"> (inh.)</template></span>
           </label>
           <select
             v-for="a in attributes" :key="a.key" :value="(n.attrs || {})[a.key] || ''" class="fact-input"

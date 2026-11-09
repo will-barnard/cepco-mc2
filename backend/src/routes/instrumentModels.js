@@ -22,7 +22,7 @@ const catalog = require('../services/instrumentCatalog');
 // has; a null / '' value removes that key, i.e. "inherit from the parent".
 function nextAttrs(family, current, input) {
   if (input === undefined) return undefined;
-  const requested = catalog.validateAttrs(input, family);
+  const requested = catalog.validateAttrs(input, family, 'attribute', { forModel: true });
   const out = { ...(current || {}) };
   for (const [k, v] of Object.entries(requested)) {
     if (v === null) delete out[k]; else out[k] = v;
@@ -64,7 +64,7 @@ router.get('/', asyncHandler(async (req, res) => {
     // and how many instruments are linked to it -- Settings shows both, and
     // the pickers ignore the extras.
     `SELECT n.*, f.chain, f.attrs AS effective_attrs, f.key_count AS effective_key_count,
-            f.is_suitcase AS effective_is_suitcase,
+            f.is_suitcase AS effective_is_suitcase, f.is_console AS effective_is_console,
             (SELECT count(*)::int FROM instruments i WHERE i.model_id = n.id) AS instrument_count
        FROM instrument_models n
        LEFT JOIN instrument_model_facts f ON f.id = n.id
@@ -90,8 +90,8 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
   );
   const { rows } = await query(
     `INSERT INTO instrument_models (family, parent_id, name, sort_order, allow_manual, is_suitcase,
-                                    attrs, key_count)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+                                    attrs, key_count, is_console)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
     [b.family, b.parent_id || null, String(b.name).trim(),
       b.sort_order === undefined ? maxRow[0].next : Number(b.sort_order),
       b.allow_manual === true,
@@ -102,7 +102,10 @@ router.post('/', requireAdmin, asyncHandler(async (req, res) => {
       // convention as allow_manual just above.
       b.is_suitcase === true,
       nextAttrs(b.family, {}, b.attrs) || {},
-      keyCountOf(b.key_count) ?? null],
+      keyCountOf(b.key_count) ?? null,
+      // Migration 091: a console model (and everything under it) -- where
+      // the Chopped checkbox shows.
+      b.is_console === true],
   );
   res.status(201).json(rows[0]);
 }));
@@ -145,6 +148,7 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
        active       = COALESCE($8, active),
        attrs        = CASE WHEN $9::boolean THEN $10::jsonb ELSE attrs END,
        key_count    = CASE WHEN $11::boolean THEN $12 ELSE key_count END,
+       is_console   = COALESCE($13, is_console),
        updated_at   = now()
      WHERE id = $1 RETURNING *`,
     [req.params.id,
@@ -155,7 +159,8 @@ router.patch('/:id', requireAdmin, asyncHandler(async (req, res) => {
       b.is_suitcase === undefined ? null : b.is_suitcase,
       b.active === undefined ? null : b.active,
       attrs !== undefined, attrs === undefined ? null : JSON.stringify(attrs),
-      keyCount !== undefined, keyCount ?? null],
+      keyCount !== undefined, keyCount ?? null,
+      typeof b.is_console === 'boolean' ? b.is_console : null],
   );
   res.json(rows[0]);
 }));

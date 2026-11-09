@@ -4551,6 +4551,46 @@ consignor should open automatically, assigned to whoever Settings says.
   top-level category's was ever read. A sub-category's own assignee now
   wins, falling back to its parent's.
 
+### 2.110 Wurlitzer "Chopped" (migration 091)
+
+Shop feedback, Nov 2026: flag a console Wurlitzer that's been "chopped" --
+taken off its console base and made into a portable / stage piano.
+
+- **An instrument attribute** (§2.108), not a new column:
+  `attr_overrides.chopped = 'yes'`, entry `chopped` in
+  `services/instrumentCatalog.js` `ATTRIBUTES`. So it validates, saves,
+  shows as a "Chopped" tag in the inventory list and goes in the CSV with
+  no new plumbing. Three new attribute options, all generic:
+  `flag` (one option, rendered as a checkbox by `AttributeFields.vue`),
+  `pieceOnly` (never a model's -- not offered in Settings -> Instrument
+  models, refused by `PATCH /instrument-models/:id`), `consoleOnly`.
+- **Where it shows** -- new catalog fact `instrument_models.is_console`,
+  resolved down the tree like `is_suitcase` (the facts view gains
+  `is_console`; reads return `model_is_console`, the picker
+  `effective_is_console`). Shown for a piece on a console model, an
+  unlinked piece, or one already marked; hidden for a known non-console
+  model (a 200A). Toggle per node in Settings -> Instrument models
+  ("Console").
+- **Console models flagged by 091**: 203, 203W, 206, 206A, 207, 207V,
+  207A, 207VA, 214V, 214VA, 215V, 270 -- from the Inventory Log's
+  "Wurlitzer Console 200 Pianos" section (203 / 206 / 206A / 214), their
+  direct siblings, the shop's 215V console, and the 270. **Not flagged, to
+  check**: 205V, 210/210A, 106, 700, 145/145A/145B, 720A/720B, 726B.
+- **Backfill**: a Wurlitzer whose model text or nickname says "chopped",
+  or a bare "chop" on an Inventory Log row (`import_key` `inventory_log:`)
+  -- "206 (chopped)" Donner, "214 chop" Silver Bells. Not a bare "chop"
+  elsewhere (the ticket importer stored job cells like `"Elementary" 206a
+  chop` as model text -- a chop still to do), and not notes ("good chop
+  candidate", "chop & sell"). Booker ("206A Chop" in notes), Glacier
+  ("chop (base water damage)") and Bama 1 ("includes black lid and chop")
+  are ambiguous in the sheet -- set by hand if they are.
+- **Matcher**: `instrument_model_match()` ignores a chop word, so
+  "206 (chopped)" links to the 206; 091 re-links the backfilled pieces.
+  "214 chop" stays unlinked (the catalog has 214V / 214VA, not 214) --
+  its checkbox still shows because it's unlinked.
+- The inventory importer (`attrsFromText`) sets it from the same texts on
+  a re-run; it only fills what isn't set.
+
 ## 4. Suggested first moves after deploy
 
 

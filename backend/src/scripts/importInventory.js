@@ -471,8 +471,9 @@ function parseInstrumentRow(sheet, section, row, rowNumber, family) {
     family,
     nickname,
     model: model || null,
-    // Rhodes Mark and suitcase amp from the sheet's own text, same rules
-    // as migrations 085 / 089 (services/instrumentCatalog.js). Only fills
+    // Rhodes Mark and suitcase amp, and a Wurlitzer's "chopped" (migration
+    // 091), from the sheet's own text, same rules as migrations 085 / 089 /
+    // 091 (services/instrumentCatalog.js). Only fills
     // what nobody has set, and is dropped where the linked model already
     // says it -- see upsert / relinkModel.
     attrs: inv.attrsFromText(family, model, section.group, nickname),
