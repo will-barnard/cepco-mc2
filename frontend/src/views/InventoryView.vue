@@ -65,6 +65,14 @@ const search = ref(String(route.query.q || ''));
 // only exist while the audit is running (Settings -> Inventory audit).
 const auditOn = computed(() => settings.inventoryAuditActive);
 const auditTodoOnly = computed(() => auditOn.value && route.query.audit === 'todo');
+// "Not on website" (Nov 2026): pieces that are for sale -- available or on
+// hold -- but not listed on the website, i.e. what still needs listing.
+// Not-for-sale and sold pieces are never meant to be on the site, so the
+// toggle leaves them out (and isn't offered on those two tabs at all).
+// Combines with family and search; lives in the URL like the rest (?web=missing).
+const webFilterOffered = computed(() => !['sold', 'not_for_sale'].includes(status.value));
+const webMissingOnly = computed(() => webFilterOffered.value && route.query.web === 'missing');
+const missingFromWebsite = (i) => !i.on_website && ['available', 'on_hold'].includes(i.sale_status);
 
 function setQuery(patch) {
   const query = { ...route.query, ...patch };
@@ -107,7 +115,8 @@ const matchesSearch = (i) => {
     .some((v) => v && String(v).toLowerCase().includes(needle.value));
 };
 const searched = computed(() => items.value.filter(
-  (i) => matchesSearch(i) && (!auditTodoOnly.value || !i.audited_at),
+  (i) => matchesSearch(i) && (!auditTodoOnly.value || !i.audited_at)
+    && (!webMissingOnly.value || missingFromWebsite(i)),
 ));
 // Progress for the current status/family/search, ignoring the
 // "not audited only" toggle itself (or it would always read 0 of N).
@@ -442,6 +451,11 @@ onMounted(async () => {
             >{{ s.label }}</button>
           </div>
           <input v-model="search" type="search" placeholder="Search name, model, serial, notes…" class="inv-search" />
+          <button
+            v-if="webFilterOffered" type="button" class="small" :class="{ primary: webMissingOnly }"
+            :aria-pressed="webMissingOnly" title="For sale or on hold, but not listed on the website"
+            @click="setQuery({ web: webMissingOnly ? '' : 'missing' })"
+          >Not on website</button>
           <template v-if="auditOn">
             <span class="small audit-progress" :class="{ done: auditProgress.done === auditProgress.total }">
               Audit: {{ auditProgress.done }} / {{ auditProgress.total }}
