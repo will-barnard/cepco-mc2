@@ -42,6 +42,9 @@ const manual = ref(false);
 const manualText = ref('');
 // One entry per depth reached so far: the id chosen at that level.
 const path = ref([]);
+// True once `nodes` holds the current family's tree. Matching an existing
+// value against the tree has to wait for this -- see the watch at the end.
+const ready = ref(false);
 
 function childrenOf(parentId) {
   return nodes.value
@@ -85,12 +88,14 @@ async function loadFamily(family, oldFamily) {
   const initial = oldFamily === undefined;
   nodes.value = [];
   path.value = [];
+  ready.value = false;
   if (!initial) { manual.value = false; manualText.value = ''; emitPicked(); } // a brand change drops the old link
   if (!family) return;
   const loaded = await api.get(`/instrument-models?family=${encodeURIComponent(family)}&include_inactive=true`);
   if (props.family !== family) return; // brand changed again while loading
   nodes.value = loaded;
   if (!loaded.filter((n) => n.active).length) defaultToManual(initial);
+  ready.value = true;
 }
 
 function nameChain() {
@@ -141,7 +146,15 @@ watch(() => props.family, loadFamily, { immediate: true });
 // If a value already exists (editing, or a family with no tree yet) and it
 // doesn't match anything walkable in the tree, treat it as manual text
 // rather than silently discarding it or forcing a re-pick.
-watch([() => props.modelValue, nodes], () => {
+//
+// Bug fix (Nov 2026): this used to run straight away on mount, while the
+// tree was still loading -- every saved model then "didn't match" an empty
+// tree and the page opened on "Type it in instead", even for a model picked
+// from the dropdowns moments before (new forms start empty, so they never
+// showed it). Now it waits for `ready`, and also re-runs when model_id
+// arrives after the form fills in.
+watch([() => props.modelValue, () => props.modelId, ready], () => {
+  if (!ready.value) return;
   if (manual.value || path.value.length) return;
   // A linked instrument opens on its node (and its ancestors) -- by id, so
   // a renamed node or text that no longer matches the chain still works.
