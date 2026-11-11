@@ -19,6 +19,13 @@ const route = useRoute();
 
 const customers = ref([]);
 const selected = ref(null);
+// Detail pane's ticket list: active tickets first, archived ones after
+// (each group keeps the API's most-recently-updated-first order), and
+// archived rows styled as history -- see .customer-tickets below.
+const customerTickets = computed(() => {
+  const all = selected.value?.tickets || [];
+  return [...all.filter((t) => !t.archived), ...all.filter((t) => t.archived)];
+});
 const search = ref('');
 const sourceFilter = ref('');
 const showNew = ref(false);
@@ -700,12 +707,13 @@ const when = (ts) => new Date(ts).toLocaleString();
 
         <h3 style="margin-top: 20px">Tickets</h3>
         <div v-if="!selected.tickets.length" class="muted small">No tickets.</div>
-        <ul v-else class="timeline">
-          <li v-for="t in selected.tickets" :key="t.id">
+        <ul v-else class="timeline customer-tickets">
+          <li v-for="t in customerTickets" :key="t.id" :class="{ archived: t.archived }">
             <RouterLink :to="`/tickets/${t.id}`">{{ t.title }}</RouterLink>
             <span :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 8px">
               {{ t.status_label }}
             </span>
+            <span v-if="t.archived" class="tag archived-tag">Archived</span>
           </li>
         </ul>
       </div>
@@ -714,3 +722,13 @@ const when = (ts) => new Date(ts).toLocaleString();
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Archived tickets read as history next to the active ones: dimmed, a
+   hollow grey dot on the timeline instead of the accent one, and a tag. */
+.customer-tickets li.archived { opacity: 0.55; }
+.customer-tickets li.archived a { color: var(--text-dim); }
+.customer-tickets li.archived::before { background: var(--surface); border: 2px solid var(--text-dim); width: 6px; height: 6px; left: -6px; top: 13px; }
+.customer-tickets li.archived:hover { opacity: 0.85; }
+.archived-tag { margin-left: 6px; vertical-align: middle; }
+</style>
