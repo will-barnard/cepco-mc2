@@ -6,6 +6,7 @@ import { titleWithoutCustomer } from '../ticketNaming';
 import { progressOf, progressStyle } from '../progress';
 import { formatYmd } from '../dates';
 import PriorityBolts from './PriorityBolts.vue';
+import ShopifyBadge from './ShopifyBadge.vue';
 
 const props = defineProps({
   tickets: { type: Array, required: true },
@@ -178,6 +179,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
             <strong>{{ customerLabel(t) }}</strong>
           </td>
           <td>
+            <ShopifyBadge v-if="t.shopify_order_id" :order-name="t.ticket_name" />
             <strong v-if="queueLayout">{{ titleWithoutCustomer(t.title, t.customer_name) || t.title }}</strong>
             <strong v-else>{{ t.title }}</strong>
             <span

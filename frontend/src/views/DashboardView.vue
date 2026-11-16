@@ -6,6 +6,7 @@ import { useAuth, useSettings } from '../stores';
 import TicketTable from '../components/TicketTable.vue';
 import { progressOf, progressStyle } from '../progress';
 import PartsOrdersPanel from '../components/PartsOrdersPanel.vue';
+import ShopifyBadge from '../components/ShopifyBadge.vue';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -299,6 +300,7 @@ onMounted(async () => {
               :class="{ 'progress-fill': progressOf(t) !== null }" :style="progressStyle(t)"
             >
               <div style="flex: 1; min-width: 0">
+                <ShopifyBadge v-if="t.shopify_order_id" :order-name="t.ticket_name" />
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
                 <span v-if="progressOf(t) !== null" class="small progress-pct" style="margin-left: 6px">
                   {{ progressOf(t) }}%
@@ -332,6 +334,7 @@ onMounted(async () => {
               :class="{ 'progress-fill': progressOf(t) !== null }" :style="progressStyle(t)"
             >
               <div style="flex: 1; min-width: 0">
+                <ShopifyBadge v-if="t.shopify_order_id" :order-name="t.ticket_name" />
                 <RouterLink :to="{ name: 'ticket', params: { id: t.id } }">{{ t.title }}</RouterLink>
                 <span v-if="progressOf(t) !== null" class="small progress-pct" style="margin-left: 6px">
                   {{ progressOf(t) }}%

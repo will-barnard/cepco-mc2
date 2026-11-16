@@ -28,6 +28,7 @@ import { useSettings } from '../stores';
 import { progressOf, progressStyle } from '../progress';
 import { formatYmd } from '../dates';
 import PriorityBolts from './PriorityBolts.vue';
+import ShopifyBadge from './ShopifyBadge.vue';
 
 const props = defineProps({
   ticket: { type: Object, required: true },
@@ -97,6 +98,7 @@ const boltW = computed(() => `${Math.max(settings.priorityBoltMax, 1) * 10}px`);
       <span v-else class="muted">—</span>
     </RouterLink>
     <div class="rest">
+      <ShopifyBadge v-if="ticket.shopify_order_id" :order-name="ticket.ticket_name" />
       <RouterLink :to="{ name: 'ticket', params: { id: ticket.id } }" class="rest-title">
         {{ rest || ticket.title }}
       </RouterLink>

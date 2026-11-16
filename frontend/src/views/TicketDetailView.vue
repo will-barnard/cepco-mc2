@@ -18,6 +18,7 @@ import TicketTasks from '../components/TicketTasks.vue';
 import TicketLinks from '../components/TicketLinks.vue';
 import TicketNotes from '../components/TicketNotes.vue';
 import DraftNotice from '../components/DraftNotice.vue';
+import ShopifyBadge from '../components/ShopifyBadge.vue';
 import { useDraft } from '../drafts';
 import TechnicianPicker from '../components/TechnicianPicker.vue';
 
@@ -489,12 +490,22 @@ const showProgressUpdate = computed(() => (
   <div v-else-if="ticket" class="page">
     <div class="page-head">
       <div>
-        <h1 style="margin-bottom: 4px">{{ ticket.title }}</h1>
+        <h1 style="margin-bottom: 4px">
+          <ShopifyBadge
+            v-if="ticket.shopify_order_id" :order-name="ticket.ticket_name"
+            :href="ticket.shopify_order_url || ''" :size="22"
+          />{{ ticket.title }}
+        </h1>
         <div class="row muted small">
           <span>#{{ ticket.id }}</span>
           <span>· opened {{ new Date(ticket.created_at).toLocaleDateString() }}</span>
           <span v-if="ticket.legacy_ref">· sheet ref {{ ticket.legacy_ref }}</span>
           <span v-if="ticket.source_sheet">· imported from {{ ticket.source_sheet }}</span>
+          <span v-if="ticket.shopify_order_id">
+            · from Shopify order
+            <a v-if="ticket.shopify_order_url" :href="ticket.shopify_order_url" target="_blank" rel="noopener">{{ ticket.ticket_name || ticket.shopify_order_id }}</a>
+            <template v-else>{{ ticket.ticket_name || ticket.shopify_order_id }}</template>
+          </span>
           <span v-if="ticket.source_ticket_id">
             · created from
             <RouterLink :to="{ name: 'ticket', params: { id: ticket.source_ticket_id } }">

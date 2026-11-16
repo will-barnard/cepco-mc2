@@ -7,6 +7,7 @@ import AddressFields from '../components/AddressFields.vue';
 import XeroHistory from '../components/XeroHistory.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
 import AttributeFields from '../components/AttributeFields.vue';
+import ShopifyBadge from '../components/ShopifyBadge.vue';
 import { overridesPatch, keepForFamily } from '../instrumentAttrs';
 import {
   CUSTOMER_SOURCES, XERO_SOURCE, sourceLabel, blankAddress, addressFrom,
@@ -709,6 +710,7 @@ const when = (ts) => new Date(ts).toLocaleString();
         <div v-if="!selected.tickets.length" class="muted small">No tickets.</div>
         <ul v-else class="timeline customer-tickets">
           <li v-for="t in customerTickets" :key="t.id" :class="{ archived: t.archived }">
+            <ShopifyBadge v-if="t.shopify_order_id" :order-name="t.ticket_name" />
             <RouterLink :to="`/tickets/${t.id}`">{{ t.title }}</RouterLink>
             <span :class="['pill', settings.colorFor(t.status_key)]" style="margin-left: 8px">
               {{ t.status_label }}

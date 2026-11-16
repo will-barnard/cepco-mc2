@@ -5,6 +5,7 @@ const { query, withTransaction } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound, conflict } = require('../middleware/errors');
 const settings = require('../services/settings');
+const config = require('../config');
 const { createShipment } = require('./shipments');
 const { FAMILIES, FAMILY_LABELS } = require('./instruments');
 const { insertNote, pushPendingNotes } = require('../services/ticketNotes');
@@ -483,6 +484,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   res.json({
     ...ticket,
+    // The ticket page's Shopify badge links here. myshopify.com/admin/...
+    // redirects to the order in the current admin.
+    shopify_order_url: ticket.shopify_order_id && config.shopify.shopDomain
+      ? `https://${config.shopify.shopDomain}/admin/orders/${ticket.shopify_order_id}`
+      : null,
     estimates: estimates.rows,
     hours_log: hours.rows,
     qc_checks: qc.rows,
