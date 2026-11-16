@@ -12,6 +12,7 @@ const { seed } = require('./scripts/seed');
 const ceppyScheduler = require('./services/ceppyScheduler');
 const recurringTickets = require('./services/recurringTickets');
 const xeroScheduler = require('./services/xeroScheduler');
+const shopifyOrders = require('./services/shopifyOrders');
 
 const app = express();
 
@@ -48,6 +49,9 @@ app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/purchases', require('./routes/purchases'));
 app.use('/api/shopify', require('./routes/shopifyWebhooks'));
+// Settings -> Shopify orders. Its own prefix, not /api/shopify/*: that
+// router HMAC-checks every request as a webhook.
+app.use('/api/shopify-orders', require('./routes/shopifyOrders'));
 // Before /api/tickets: see routes/ticketNotes.js's header.
 app.use('/api/tickets/:ticketId/notes', require('./routes/ticketNotes'));
 app.use('/api/tickets', require('./routes/tickets'));
@@ -87,6 +91,9 @@ async function start() {
   ceppyScheduler.start();
   recurringTickets.start();
   xeroScheduler.start();
+  // Retries for Shopify order steps that failed, runs a restart cut off,
+  // and Xero notes waiting on a customer link (services/shopifyOrders.js).
+  shopifyOrders.start();
 }
 
 const shutdown = async (signal) => {

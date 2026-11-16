@@ -60,12 +60,18 @@ const config = {
   // broken link.
   appBaseUrl: (process.env.APP_BASE_URL || '').replace(/\/$/, ''),
 
-  // Shopify order intake (PLAN §11). webhookSecret verifies inbound webhook
-  // requests (backend/src/shopify.js); shopDomain + adminApiToken are only
-  // needed to *register* those webhooks (scripts/registerShopifyWebhooks.js)
-  // — the receiving endpoint itself never calls back out to Shopify.
+  // Shopify order intake (PLAN §11, NOTES §2.111). The app is a Dev Dashboard
+  // app, so its client secret is what signs webhooks declared in the app's
+  // own config -- webhookSecret falls back to it, and SHOPIFY_WEBHOOK_SECRET
+  // is only needed if the two ever differ. Order processing now *does* call
+  // back out to Shopify (product tags, services/shopifyOrders.js): with
+  // shopDomain + clientId + clientSecret set, an Admin API token is fetched
+  // with the client credentials grant and refreshed as needed; a static
+  // SHOPIFY_ADMIN_API_TOKEN, if set, is used instead.
   shopify: {
-    webhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || '',
+    clientId: process.env.SHOPIFY_CLIENT_ID || '',
+    clientSecret: process.env.SHOPIFY_CLIENT_SECRET || '',
+    webhookSecret: process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_CLIENT_SECRET || '',
     adminApiToken: process.env.SHOPIFY_ADMIN_API_TOKEN || '',
     shopDomain: process.env.SHOPIFY_SHOP_DOMAIN || '',
     apiVersion: process.env.SHOPIFY_API_VERSION || '2026-07',

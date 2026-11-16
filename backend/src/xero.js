@@ -186,6 +186,28 @@ async function addContactNote(contactId, details) {
   return records[0];
 }
 
+/**
+ * Active contacts whose email is exactly `email` (case-insensitive). Used
+ * by Shopify order intake (services/shopifyOrders.js) to find an existing
+ * contact before creating one, so a returning customer who just isn't
+ * linked in MC2 yet doesn't get a duplicate contact in Xero.
+ *
+ * searchTerm is Xero's case-insensitive search across name, email and
+ * contact number fields — it can match more than the email (a name that
+ * contains the address, say), so the exact-email filter here is what
+ * actually decides. One page (100) is plenty for one email address.
+ */
+async function findContactsByEmail(email) {
+  const target = String(email || '').trim().toLowerCase();
+  if (!target) return [];
+  const { Contacts: contacts = [] } = await apiRequest(
+    `/Contacts?searchTerm=${encodeURIComponent(target)}`,
+  );
+  return contacts.filter((c) => String(c.EmailAddress || '').trim().toLowerCase() === target
+    && c.ContactStatus === 'ACTIVE');
+}
+
 module.exports = {
   listContacts, getContact, createContact, updateContact, getContactHistory, addContactNote,
+  findContactsByEmail,
 };

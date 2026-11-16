@@ -48,7 +48,13 @@ services:
       GCS_BUCKET_NAME: ${GCS_BUCKET_NAME:-}
       GCS_SERVICE_ACCOUNT_KEY: ${GCS_SERVICE_ACCOUNT_KEY:-}
       GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
-      # Phase 2 integrations - read from env, unused in Phase 1
+      # Shopify order intake (NOTES §2.111). SHOPIFY_SHOP_DOMAIN was never
+      # passed through before, so nothing could call the Admin API from the
+      # container; order processing now needs it for product tags.
+      SHOPIFY_SHOP_DOMAIN: ${SHOPIFY_SHOP_DOMAIN:-}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
+      SHOPIFY_API_VERSION: ${SHOPIFY_API_VERSION:-}
       SHOPIFY_WEBHOOK_SECRET: ${SHOPIFY_WEBHOOK_SECRET:-}
       SHOPIFY_ADMIN_API_TOKEN: ${SHOPIFY_ADMIN_API_TOKEN:-}
       SHOPIFY_API_SCOPES: ${SHOPIFY_API_SCOPES:-}

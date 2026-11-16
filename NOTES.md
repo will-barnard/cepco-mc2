@@ -4591,6 +4591,103 @@ taken off its console base and made into a portable / stage piano.
 - The inventory importer (`attrsFromText`) sets it from the same texts on
   a re-run; it only fills what isn't set.
 
+### 2.111 Shopify order intake v2: tag rules, customers, Xero contact + note (migration 093)
+
+Supersedes most of §2.15. An order placed in Shopify now does four things,
+each tracked on its own row in `shopify_orders` and visible in
+**Settings → Shopify orders**:
+
+1. **Customer.** Matched by Shopify customer id (new
+   `customers.shopify_customer_id`), then by email; created if neither
+   matches. On a match, only blank fields are filled in (email, phone,
+   address). New customers get source `reverb`/`ebay` when the order came
+   through those channels, otherwise `shopify`. A POS sale with no customer
+   attached creates nobody.
+2. **Xero contact.** If the customer isn't linked yet, Xero is searched by
+   email first (`xero.findContactsByEmail`). One active, unlinked match gets
+   linked, without stamping `xero_synced_at`, same as the backfill tool, so the
+   nightly sync reconciles fields. No match means a new contact. Two or more
+   matches, or a match already linked to a different MC2 customer, is
+   **Needs attention**: guessing would merge the wrong people. Pairs
+   dismissed on the backfill screen are respected.
+3. **Tickets.** Items are grouped by **tag rules** (`shopify_tag_rules`):
+   a Shopify product tag maps to either "no ticket" or "own ticket in
+   category X / sub-category Y", and the first matching rule wins. Items without a
+   rule go on the default shipping ticket (same category/sub-category/
+   priority as before), except items with `requires_shipping: false`
+   and, by setting, POS sales. An order where nothing gets a ticket gets no
+   ticket. By setting, an unpaid order waits for `orders/paid`;
+   `partially_paid` (a deposit) and `authorized` count as paid. Each ticket's
+   notes list its items plus what's on the order but not on this ticket,
+   and why.
+4. **Xero note** on the customer's contact: "Shopify order #1234 placed
+   Nov 16, 2026: 1× Rhodes MK8 (Black) $4,999.00; 2× Tine $45.00. Order
+   total $5,049.00." Deliberately *not* prefixed `[MC2`, so it shows in the
+   customer's Xero history panel in MC2 (there's no copy of it elsewhere in
+   MC2 to duplicate).
+
+**Why a log table and background steps instead of doing it in the
+webhook:** Shopify wants a 200 within five seconds and retries anything
+slower. The tag lookup and the two Xero calls don't fit safely in that
+window, and neither Xero call is idempotent. The route now records the order
+(`recordOrder`), replies, and `processOrder` runs right after. A lease
+(`lease_until`) keeps runs from overlapping, and `needs_rerun` makes a run
+go round again if a newer delivery (paid, cancelled) landed mid-run. Steps that
+are `done`/`skipped` never re-run, so a redelivery or Re-run can't make a
+second ticket, contact or note.
+
+**Retries:** `failed` (outage, rate limit) is retried by a sweep every
+5 minutes for up to 24 runs. `attention` is for 4xx and config errors that a
+retry won't fix; those wait for a person and **Re-run**. A note `waiting` on
+a Xero link is sent automatically once the customer gets linked (e.g. via
+the backfill screen).
+
+**Multiple tickets per order:** migration 006's unique index on
+`tickets.shopify_order_id` is replaced by one on
+`(shopify_order_id, shopify_group_key)`. Group is `default` or `rule:<id>`,
+stored on the ticket so a hand re-categorised ticket isn't recreated.
+Existing order tickets are backfilled to `default`.
+
+**Orders from before this deploy:** only `orders/create` starts tracking
+an order. A paid/updated/cancelled delivery for an untracked order is
+only accepted if the order is under two days old. Anything older still
+gets the old cancel behaviour (archive its ticket) and nothing else. A
+tracked order that the old intake already ticketed is marked skipped,
+so no late customer/Xero note is made for it.
+
+**Shopify credentials, Dev Dashboard style:** tags aren't in the order
+payload, so the backend now calls the Admin API (GraphQL `nodes`). The app is
+a Dev Dashboard app, so the token comes from the **client credentials grant**
+(`SHOPIFY_CLIENT_ID` + `SHOPIFY_CLIENT_SECRET`, cached, refreshed on 401); a
+static `SHOPIFY_ADMIN_API_TOKEN` still overrides. Webhooks declared in the
+app's config are signed with the client secret, so `SHOPIFY_WEBHOOK_SECRET`
+falls back to it. `docker-compose.yml` never passed `SHOPIFY_SHOP_DOMAIN`
+through to the backend; it does now, along with the client id/secret. With no
+tag rules defined, the Admin API isn't called at all.
+
+**Webhook topics:** `orders/create`, `orders/paid`, `orders/cancelled`.
+Declare them in the Dev Dashboard app version's webhook subscriptions
+(app-level; Shopify drops shop-level subscriptions after repeated failures),
+pointed at `PUBLIC_BASE_URL/api/shopify/webhooks`. `orders/updated` was
+dropped from the register script (it fires on every edit); the route still
+accepts it. All order topics are protected customer data: the app needs
+that access granted or the subscription is refused or the payload's
+customer fields come through redacted.
+
+**Settings → Shopify orders** (`ShopifyOrdersView.vue`, `routes/shopifyOrders.js`
+at `/api/shopify-orders`, deliberately not under `/api/shopify` whose router
+HMAC-checks everything): connection status + "Test Shopify connection",
+the six switches (stored in `shop_config.shopify_orders`), the tag rules
+table, and the order log with per-step status and Re-run.
+
+**Not done (deliberately):**
+- No Xero note or MC2 change on refunds or order edits.
+- Inventory instruments sold through Shopify aren't marked sold or moved to
+  the buyer's ownership.
+- Tracking numbers aren't pushed back to Shopify (`write_fulfillments` is
+  granted; nothing uses it yet).
+- No `customers/create` subscription; customers are only made from orders.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -650,6 +650,7 @@ onMounted(() => {
         <RouterLink class="btn small" :to="{ name: 'recurring-tickets' }">Recurring tickets →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'instrument-models' }">Instrument models →</RouterLink>
         <RouterLink class="btn small" :to="{ name: 'ticket-naming' }">Ticket naming →</RouterLink>
+        <RouterLink class="btn small" :to="{ name: 'shopify-orders' }">Shopify orders →</RouterLink>
         <span class="row" style="border-left: 1px solid var(--border); padding-left: 10px; margin-left: 2px">
           <RefreshAppButton compact />
         </span>

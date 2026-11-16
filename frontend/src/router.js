@@ -72,6 +72,10 @@ const routes = [
     path: '/settings/instrument-models', name: 'instrument-models',
     component: () => import('./views/InstrumentModelsView.vue'), meta: { admin: true },
   },
+  {
+    path: '/settings/shopify-orders', name: 'shopify-orders',
+    component: () => import('./views/ShopifyOrdersView.vue'), meta: { admin: true },
+  },
   // Public: opened from the confirm/decline link in a customer-quote
   // email (backend/src/templates/quoteEmail.js). `alwaysPublic` keeps the
   // guard below from bouncing a *signed-in* employee previewing their own
