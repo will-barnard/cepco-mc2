@@ -15,6 +15,7 @@ const storage = require('../storage');
 // while this file is still loading.
 const instrumentDetail = () => require('../services/instrumentDetail');
 const purchases = () => require('./purchases');
+const instrumentSearch = () => require('../services/instrumentSearch');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -210,6 +211,14 @@ router.get('/', asyncHandler(async (req, res) => {
     params,
   );
   res.json(rows);
+}));
+
+// Instrument finder (NOTES.md §2.112): every instrument -- shop stock,
+// consignments, customers' pieces, sold ones -- by what a tag might say:
+// the instrument, its owner (now or before), or its nickname. Registered
+// before '/:id'. Ranking and "Matched on" live in the service.
+router.get('/search', asyncHandler(async (req, res) => {
+  res.json(await instrumentSearch().search(req.query.q, { familyLabels: FAMILY_LABELS }));
 }));
 
 // Everything about one instrument, for the instrument page -- customer

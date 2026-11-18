@@ -55,7 +55,7 @@ function closeMoreMenu() {
 // always-visible row showing they're active. Parts/Supplies lives at
 // /new?tab=parts (shared with New Ticket/New Task), so it only counts when
 // that tab is the one actually selected.
-const MORE_PATHS = ['/fleet/calendar', '/hours', '/ceppys'];
+const MORE_PATHS = ['/find', '/fleet/calendar', '/hours', '/ceppys'];
 const moreActive = computed(() => {
   if (MORE_PATHS.includes(route.path)) return true;
   return route.path === '/new' && route.query.tab === 'parts';
@@ -250,6 +250,8 @@ async function signOut() {
             More <span class="nav-more-caret">{{ moreMenuOpen ? '▴' : '▾' }}</span>
           </button>
           <div v-if="moreMenuOpen" class="nav-more-menu" :style="moreMenuStyle">
+            <!-- Every instrument, customers' included (NOTES.md §2.112). -->
+            <RouterLink to="/find">Find an instrument</RouterLink>
             <RouterLink to="/fleet/calendar">Rental calendar</RouterLink>
             <RouterLink to="/new?tab=parts">Parts / Supplies</RouterLink>
             <RouterLink to="/hours">Hours</RouterLink>

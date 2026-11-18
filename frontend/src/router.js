@@ -49,6 +49,9 @@ const routes = [
     path: '/inventory/:id(\\d+)', name: 'inventory-item',
     redirect: (to) => ({ name: 'instrument', params: { id: to.params.id } }),
   },
+  // Find an instrument (NOTES.md §2.112): every instrument by what its tag
+  // says -- the model, the customer, or the customer's name for it.
+  { path: '/find', name: 'find', component: () => import('./views/FindView.vue') },
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/ceppys', name: 'ceppys', component: () => import('./views/CeppysView.vue') },

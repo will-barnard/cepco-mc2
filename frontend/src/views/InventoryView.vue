@@ -107,12 +107,20 @@ const stockSearchId = computed(() => {
   const m = /^[a-z]-?0*(\d+)$/.exec(needle.value);
   return m ? Number(m[1]) : null;
 });
+// Every word has to match somewhere (any field), so "henderson wurli" or
+// "stage 73 1974" narrow instead of finding nothing (Nov 2026, §2.112).
+// A possessive is dropped first -- a tag says "Dave's", the record "Dave".
+// One word matches what it always did, plus the family and catalog model.
+const needleWords = computed(() => needle.value.replace(/['’]s\b/g, '').split(/\s+/).filter(Boolean));
 const matchesSearch = (i) => {
   if (!needle.value) return true;
   if (stockSearchId.value !== null && i.id === stockSearchId.value) return true;
-  return [i.nickname, i.model, i.serial_no, i.identifying_notes, i.stock_number, i.consignor_name,
-    i.customer_name, i.sold_to_name, i.model_group, i.year, ...attrsSummary(refData.attributes, i)]
-    .some((v) => v && String(v).toLowerCase().includes(needle.value));
+  const hay = [i.nickname, i.model, i.model_chain, refData.familyLabel(i.family), i.serial_no,
+    i.identifying_notes, i.stock_number,
+    i.consignor_name, i.customer_name, i.sold_to_name, i.model_group, i.year,
+    ...attrsSummary(refData.attributes, i)]
+    .filter(Boolean).join(' \n ').toLowerCase();
+  return needleWords.value.every((w) => hay.includes(w));
 };
 const searched = computed(() => items.value.filter(
   (i) => matchesSearch(i) && (!auditTodoOnly.value || !i.audited_at)
@@ -451,6 +459,13 @@ onMounted(async () => {
             >{{ s.label }}</button>
           </div>
           <input v-model="search" type="search" placeholder="Search name, model, serial, notes…" class="inv-search" />
+          <!-- Inventory is shop-held pieces only; a tag with a customer's
+               name is often on their piece in for service, or one the shop
+               bought from them. Find searches all of it. -->
+          <RouterLink
+            :to="{ path: '/find', query: search.trim() ? { q: search.trim() } : {} }" class="small"
+            title="Search every instrument — customers' pieces, sold ones, previous owners"
+          >Search all instruments →</RouterLink>
           <button
             v-if="webFilterOffered" type="button" class="small" :class="{ primary: webMissingOnly }"
             :aria-pressed="webMissingOnly" title="For sale or on hold, but not listed on the website"
@@ -481,7 +496,13 @@ onMounted(async () => {
 
         <div v-if="error" class="alert" style="margin-bottom: 12px">{{ error }}</div>
         <div v-if="loading" class="empty">Loading…</div>
-        <div v-else-if="!filtered.length" class="empty">Nothing matches.</div>
+        <div v-else-if="!filtered.length" class="empty">
+          Nothing matches.
+          <div v-if="search.trim()" class="small" style="margin-top: 8px">
+            Could be a customer's piece or one that's been sold —
+            <RouterLink :to="{ path: '/find', query: { q: search.trim() } }">search all instruments</RouterLink>.
+          </div>
+        </div>
 
         <template v-else>
           <p class="muted small" style="margin: 0 0 8px">

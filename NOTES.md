@@ -4688,6 +4688,59 @@ table, and the order log with per-step status and Re-run.
   granted; nothing uses it yet).
 - No `customers/create` subscription; customers are only made from orders.
 
+### 2.112 Find an instrument: search by instrument, customer, or nickname (no migration)
+
+Shop feedback during the inventory audit (§2.104): the tag on a piece says
+one of three things -- what it is ("Mk I 73"), whose it is ("Henderson"),
+or the customer's name for it ("Dave's Wurli"). Inventory's search only
+covers shop-held stock, matches one phrase, and doesn't know who a piece
+was bought from, so a customer's name on a tag usually found nothing.
+
+**`/find`** (`FindView.vue`, nav More -> "Find an instrument"; Inventory's search bar links to it
+with the query carried over) over **`GET /api/instruments/search?q=`**
+(`services/instrumentSearch.js`, registered before `/:id`).
+- **Every instrument**: shop stock, consignments, customers' pieces, sold.
+- **Every name tied to it**: nickname, model text and catalog chain, family
+  label, serial, year, notes, section, attribute values (`mk1`, `janus`),
+  current owner, consignor, previous owners and buyers (the ownership
+  ledger, §2.107), who the shop bought it from (`instrument_purchases`
+  seller), and ticket titles (which carry "Client "Nickname" Model").
+- **Every word must match somewhere**, substring, against a normalised
+  haystack: lower case, accents folded (`translate()`, no extension),
+  apostrophes dropped (O'Brien = obrien), possessives/plurals folded
+  (Dave's, Hendersons). "Mk1" / "Mark I" / "mk 1" are one Mark, matched as
+  whole words (Mark I doesn't hit Mark II). "Wurli"/"Wurly" -> Wurlitzer.
+  "R-0042"/"w42" -> that stock number.
+- **Ranked in JS** so order and "Matched on" use the same rules: probably
+  in the building first (stock, live consignments, anything with an open
+  ticket), then field strength (stock # > nickname > owner/consignor >
+  model/serial > bought from/previous owner > ... > notes/ticket titles),
+  +5 when every word lands in one strong field. Each result shows up to
+  three "Matched on" hints, its open tickets, and who it belongs to.
+- **Customers with no instrument on file** are listed separately when the
+  words name them -- the "tag says Pickett, mc2 has Pickett but no piece"
+  case, otherwise just an empty result.
+- **Audit**: while it's running, pieces that count toward it (same rule as
+  `GET /inventory/audit`: shop-held or sold by the shop) get a big
+  checkbox; ticking selects the search text so the next tag types straight
+  over it. Customers' pieces say "not part of the audit". Header shows the
+  audit counter and links to what's left.
+
+Inventory's own search: now every word has to match (it was one phrase),
+with possessives dropped, and it also searches family and catalog model.
+A one-word search finds what it did before, plus those.
+
+**Worth knowing.**
+- Timing: ~200 ms at 6,000 instruments with a ticket each (real Postgres,
+  sequential scan with per-row aggregates). Fine at the shop's size; past
+  that, the fix is a stored + trigram-indexed haystack, same API.
+- Bought-from names are shown to everyone, not just admins -- the seller's
+  name isn't cost information (the price stays admin-only).
+- No fuzzy/typo matching ("Hendersen" won't find Henderson); needs
+  `pg_trgm`. Easy to add if tags turn out to be badly spelled.
+- Find lives in the nav's More menu rather than the main row, which was
+  already full at iPad-landscape widths; Inventory's search links to it.
+
 ## 4. Suggested first moves after deploy
 
 
