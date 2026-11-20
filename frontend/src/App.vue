@@ -25,7 +25,7 @@ function closeMobileMenu() {
 }
 
 // "More" nav dropdown: the less-frequently-used links (Rental calendar,
-// Parts/Supplies, Hours, Ceppys — Inventory moved up to the main row when
+// Parts/Supplies, Hours, Ceppys, Friday Lunch — Inventory moved up to the main row when
 // fleet and inventory merged, migration 072) tucked behind a single nav item so the
 // main row stays short. Same open/close + click-outside/Escape convention
 // as the mobile menu just above and QueueView's hide-statuses dropdown.
@@ -55,7 +55,7 @@ function closeMoreMenu() {
 // always-visible row showing they're active. Parts/Supplies lives at
 // /new?tab=parts (shared with New Ticket/New Task), so it only counts when
 // that tab is the one actually selected.
-const MORE_PATHS = ['/find', '/fleet/calendar', '/hours', '/ceppys'];
+const MORE_PATHS = ['/find', '/fleet/calendar', '/hours', '/ceppys', '/lunch'];
 const moreActive = computed(() => {
   if (MORE_PATHS.includes(route.path)) return true;
   return route.path === '/new' && route.query.tab === 'parts';
@@ -256,6 +256,7 @@ async function signOut() {
             <RouterLink to="/new?tab=parts">Parts / Supplies</RouterLink>
             <RouterLink to="/hours">Hours</RouterLink>
             <RouterLink to="/ceppys">Ceppys</RouterLink>
+            <RouterLink to="/lunch">Friday Lunch</RouterLink>
           </div>
         </div>
 

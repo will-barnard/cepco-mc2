@@ -4741,6 +4741,50 @@ A one-word search finds what it did before, plus those.
 - Find lives in the nav's More menu rather than the main row, which was
   already full at iPad-landscape widths; Inventory's search links to it.
 
+### 2.113 Friday Lunch: anonymous suggestions + ranked-choice vote (migration 094)
+
+**What.** More -> Friday Lunch (`/lunch`). One round per Friday, moved
+along by an admin with buttons:
+suggesting -> reviewing -> voting -> closed (or cancelled at any point).
+
+- **Suggestions**: up to two per person; withdraw while still open. Names
+  dedupe on case/spacing/punctuation/accents ("Portillo's" = "portillos"),
+  so typing an existing place backs it instead of adding a copy. Everyone
+  sees the running list (names only).
+- **Admin list edits** (suggesting + reviewing): rename, merge, remove, add.
+  Merge repoints suggestions; anyone who suggested both just ends up with
+  one. A rename that would collide says "merge instead". The list locks
+  when voting opens.
+- **Voting**: tap to rank 1-3. Ballots can be changed or withdrawn until
+  close. "X of Y have voted" counts active employees.
+- **Tally** (`services/lunchTally.js`, pure, `test/lunchTally.mjs`):
+  instant-runoff, where a majority means more than half of the ballots
+  still counting. Ties for last: fewer total mentions on any ballot goes
+  out first, then random, and the result says which was used. Zero-vote
+  places drop together. The round-by-round result is frozen on
+  `lunch_rounds.result` at close, so it's never recomputed.
+- **Shortcuts**: one place on the list -> it wins when voting "opens", no
+  vote. An empty list can't open voting.
+- **Emails** to all active staff: suggestions open, voting open, winner.
+  Sent after the phase commits and not awaited. If Resend isn't configured
+  it's a logged skip, not an error. Logged to `emails` as
+  `friday_lunch_<phase>`.
+
+**Anonymity.** Enforced in the API, not the schema (shop decision: changing
+your vote mattered more). `suggester_id` / `voter_id` are stored but no
+endpoint returns anyone else's, admins included. Admins see per-place
+suggestion counts, never names. Anyone with database access can still join
+them.
+
+**Worth knowing.**
+- Only one round can be open at a time (partial unique index).
+- No way back from voting to editing: it would throw away ballots. Cancel
+  and start a new round instead.
+- No auto-open or auto-close schedule (all manual by choice). The Ceppys
+  scheduler is the pattern if that's wanted later.
+- Not included: menu links per place, collecting individual orders, who's
+  paying, dietary notes.
+
 ## 4. Suggested first moves after deploy
 
 

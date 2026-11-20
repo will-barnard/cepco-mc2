@@ -55,6 +55,7 @@ const routes = [
   { path: '/fleet/calendar', name: 'fleet-calendar', component: () => import('./views/RentalCalendarView.vue') },
   { path: '/hours', name: 'hours', component: () => import('./views/HoursView.vue') },
   { path: '/ceppys', name: 'ceppys', component: () => import('./views/CeppysView.vue') },
+  { path: '/lunch', name: 'friday-lunch', component: () => import('./views/FridayLunchView.vue') },
   { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { admin: true } },
   { path: '/settings/qc-templates', name: 'qc-templates', component: () => import('./views/QcTemplatesView.vue'), meta: { admin: true } },

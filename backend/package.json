@@ -12,7 +12,7 @@
     "import:csv": "node src/scripts/importCsv.js",
     "import:inventory": "node src/scripts/importInventory.js",
     "shopify:register-webhooks": "node src/scripts/registerShopifyWebhooks.js",
-    "test": "node test/smoke.mjs && node test/photos.mjs"
+    "test": "node test/lunchTally.mjs && node test/smoke.mjs && node test/photos.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.14.0",

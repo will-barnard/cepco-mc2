@@ -72,6 +72,7 @@ app.use('/api/shipments', require('./routes/shipments'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/ceppys', require('./routes/ceppys'));
+app.use('/api/lunch', require('./routes/fridayLunch'));
 app.use('/api/xero', require('./routes/xero'));
 app.use('/api/recurring-ticket-templates', require('./routes/recurringTicketTemplates'));
 app.use('/api/instrument-models', require('./routes/instrumentModels'));
