@@ -4741,11 +4741,21 @@ A one-word search finds what it did before, plus those.
 - Find lives in the nav's More menu rather than the main row, which was
   already full at iPad-landscape widths; Inventory's search links to it.
 
-### 2.113 Friday Lunch: anonymous suggestions, points vote, runoffs, orders (migrations 094-096)
+### 2.113 Friday Lunch: anonymous suggestions, requests, points vote, runoffs, orders (migrations 094-097)
 
 **What.** More -> Friday Lunch (`/lunch`). One round per Friday, moved
 along by an admin with buttons:
-suggesting -> reviewing -> voting -> closed (or cancelled at any point).
+requesting -> suggesting -> reviewing -> voting -> closed (or cancelled at
+any point).
+
+- **Requests** (migration 097, first phase): each person posts one short,
+  anonymous request ("no Mexican", "veggie options") and can edit or remove
+  it. Requests lock when suggestions open, and stay on show through
+  suggestions, review and voting, including a runoff, which shows its
+  parent round's requests. They're listed in the suggestions-open,
+  voting-open and runoff emails. Admins can remove any request at any
+  time. "Back to requests" from suggestions is allowed, and the
+  suggestions email only goes out the first time suggestions open.
 
 - **Suggestions**: up to two per person; withdraw while still open. Names
   dedupe on case/spacing/punctuation/accents ("Portillo's" = "portillos"),

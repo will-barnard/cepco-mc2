@@ -33,11 +33,19 @@ async function send(roundId, kind) {
   const { rows: places } = await query(
     'SELECT name FROM lunch_places WHERE round_id = $1 ORDER BY lower(name)', [roundId],
   );
+  // Shown in the suggestions, voting and runoff emails (migration 097); a
+  // runoff's requests are its parent round's.
+  const { rows: requests } = await query(
+    'SELECT request_text FROM lunch_requests WHERE round_id = $1 ORDER BY created_at',
+    [round.parent_round_id || round.id],
+  );
   const { rows: recipients } = await query(
     "SELECT email FROM employees WHERE active = TRUE AND email IS NOT NULL AND email <> ''",
   );
 
-  const { subject, html, attachments } = buildFridayLunchEmail({ kind, round, places });
+  const { subject, html, attachments } = buildFridayLunchEmail({
+    kind, round, places, requests,
+  });
   const template = `friday_lunch_${kind}`;
 
   for (const r of recipients) {
@@ -59,7 +67,7 @@ async function send(roundId, kind) {
   }
 }
 
-/** kind: 'suggesting' | 'voting' | 'runoff' | 'closed' | 'orders'. Never throws, never awaited. */
+/** kind: 'requesting' | 'suggesting' | 'voting' | 'runoff' | 'closed' | 'orders'. Never throws, never awaited. */
 function notifyAll(roundId, kind) {
   setImmediate(() => {
     send(roundId, kind).catch((err) => console.error('[friday-lunch] email send failed', err));

@@ -43,15 +43,38 @@ function button(label) {
   </p>`;
 }
 
-function body({ kind, round, places }) {
+function requestsBlock(requests) {
+  if (!requests || !requests.length) return '';
+  return `<p style="margin:18px 0 6px;font-size:12px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:#6b7280;">
+      Requests
+    </p>
+    <ul style="margin:0;padding-left:20px;font-size:14px;color:#16181d;line-height:1.6;">
+      ${requests.map((r) => `<li>${escapeHtml(r.request_text)}</li>`).join('')}
+    </ul>`;
+}
+
+function body({
+  kind, round, places, requests,
+}) {
   const date = friendlyDate(round.lunch_date);
+  if (kind === 'requesting') {
+    return {
+      subject: `Friday Lunch: any requests for ${date}?`,
+      heading: 'Friday Lunch: requests are open',
+      content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
+          Before anyone suggests a place for ${escapeHtml(date)}: anything people should keep in mind?
+          "No Mexican this week", "somewhere with vegetarian options"… One request each, anonymous.
+          Suggestions open next.
+        </p>${button('Add a request')}`,
+    };
+  }
   if (kind === 'suggesting') {
     return {
       subject: `Friday Lunch: where should we go ${date}?`,
       heading: 'Friday Lunch suggestions are open',
       content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
           Suggest up to two places for lunch on ${escapeHtml(date)}. Suggestions are anonymous.
-        </p>${button('Suggest a place')}`,
+        </p>${requestsBlock(requests)}${button('Suggest a place')}`,
     };
   }
   if (kind === 'voting') {
@@ -63,7 +86,7 @@ function body({ kind, round, places }) {
         </p>
         <ul style="margin:0;padding-left:20px;font-size:14px;color:#16181d;line-height:1.7;">
           ${places.map((p) => `<li>${escapeHtml(p.name)}</li>`).join('')}
-        </ul>${button('Cast your vote')}`,
+        </ul>${requestsBlock(requests)}${button('Cast your vote')}`,
     };
   }
   if (kind === 'orders') {
@@ -88,7 +111,7 @@ function body({ kind, round, places }) {
         </p>
         <ul style="margin:0;padding-left:20px;font-size:14px;color:#16181d;line-height:1.7;">
           ${places.map((p) => `<li>${escapeHtml(p.name)}</li>`).join('')}
-        </ul>${button('Vote in the runoff')}`,
+        </ul>${requestsBlock(requests)}${button('Vote in the runoff')}`,
     };
   }
 
@@ -127,8 +150,12 @@ function body({ kind, round, places }) {
   };
 }
 
-function buildFridayLunchEmail({ kind, round, places }) {
-  const { subject, heading, content } = body({ kind, round, places });
+function buildFridayLunchEmail({
+  kind, round, places, requests = [],
+}) {
+  const { subject, heading, content } = body({
+    kind, round, places, requests,
+  });
   const html = `
 <div style="background:#f4f4f5;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e5e5;">

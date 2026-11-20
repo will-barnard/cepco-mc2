@@ -14,6 +14,7 @@ import api from '../api';
 import { useAuth } from '../stores';
 import LunchResults from '../components/LunchResults.vue';
 import LunchOrders from '../components/LunchOrders.vue';
+import LunchRequests from '../components/LunchRequests.vue';
 
 const auth = useAuth();
 
@@ -27,9 +28,10 @@ const phase = computed(() => round.value?.phase || null);
 const places = computed(() => state.value?.places || []);
 const limits = computed(() => state.value?.limits || { suggestions: 2, ranks: 3 });
 const turnout = computed(() => state.value?.turnout || { suggesters: 0, voters: 0, eligible: 0 });
-const isOpen = computed(() => ['suggesting', 'reviewing', 'voting'].includes(phase.value));
+const isOpen = computed(() => ['requesting', 'suggesting', 'reviewing', 'voting'].includes(phase.value));
 
 const PHASE_LABEL = {
+  requesting: 'Taking requests',
   suggesting: 'Taking suggestions',
   reviewing: 'Finalizing the list',
   voting: 'Voting open',
@@ -121,14 +123,17 @@ watch(() => state.value?.upcoming_friday, (d) => { if (d && !startDate.value) st
 
 const startRound = () => act(
   () => api.post('/lunch/rounds', { lunch_date: startDate.value || undefined }),
-  { confirmText: `Open Friday Lunch suggestions for ${friendlyDate(startDate.value)}? Everyone gets an email.` },
+  { confirmText: `Start Friday Lunch for ${friendlyDate(startDate.value)} with requests? Everyone gets an email.` },
 );
 
 function setPhase(to) {
   const t = turnout.value;
   const prompts = {
     reviewing: 'Close suggestions so you can tidy the list? You can reopen them.',
-    suggesting: 'Reopen suggestions?',
+    suggesting: phase.value === 'requesting'
+      ? `Close requests and open suggestions? ${t.requesters} request${t.requesters === 1 ? '' : 's'} so far. Everyone gets an email.`
+      : 'Reopen suggestions?',
+    requesting: 'Go back to requests? Suggestions made so far stay, but nobody can add more until you reopen them.',
     voting: places.value.length === 1
       ? `Only ${places.value[0].name} is on the list, so it wins without a vote. Continue? Everyone gets an email.`
       : `Open voting on these ${places.value.length} places? The list locks, and everyone gets an email.`,
@@ -299,7 +304,10 @@ onMounted(() => { load(); loadHistory(); });
             <span v-if="isRunoff" class="tag lunch-runoff-tag">Runoff</span>
             <span class="tag">{{ PHASE_LABEL[phase] }}</span>
             <span class="spacer" />
-            <span v-if="phase === 'suggesting' || phase === 'reviewing'" class="muted small">
+            <span v-if="phase === 'requesting'" class="muted small">
+              {{ turnout.requesters }} of {{ turnout.eligible }} have made a request
+            </span>
+            <span v-else-if="phase === 'suggesting' || phase === 'reviewing'" class="muted small">
               {{ turnout.suggesters }} of {{ turnout.eligible }} have suggested
             </span>
             <span v-else-if="phase === 'voting'" class="muted small">
@@ -307,8 +315,15 @@ onMounted(() => { load(); loadHistory(); });
             </span>
           </div>
 
+          <!-- requesting -->
+          <template v-if="phase === 'requesting'">
+            <LunchRequests :state="state" editable @update="state = $event" />
+            <p class="muted small" style="margin: 0">Suggestions open next.</p>
+          </template>
+
           <!-- suggesting -->
-          <template v-if="phase === 'suggesting'">
+          <template v-else-if="phase === 'suggesting'">
+            <LunchRequests :state="state" @update="state = $event" />
             <div class="lunch-section">
               <h3>Your suggestions</h3>
               <div v-if="!state.my_suggestions.length" class="muted small" style="margin-bottom: 10px">
@@ -349,9 +364,10 @@ onMounted(() => { load(); loadHistory(); });
             <p class="muted" style="margin-top: 0">
               Suggestions are closed. Voting opens once the list is finalized.
             </p>
-            <div class="row">
+            <div class="row" style="margin-bottom: 16px">
               <span v-for="p in places" :key="p.id" class="tag lunch-chip">{{ p.name }}</span>
             </div>
+            <LunchRequests :state="state" @update="state = $event" />
           </template>
 
           <!-- voting -->
@@ -364,6 +380,7 @@ onMounted(() => { load(); loadHistory(); });
               and the most points wins. Tap a ranked place again to take it off.
               You can change your vote until voting closes.
             </p>
+            <LunchRequests :state="state" @update="state = $event" />
             <div class="lunch-ballot">
               <button
                 v-for="p in places" :key="p.id" type="button"
@@ -465,7 +482,7 @@ onMounted(() => { load(); loadHistory(); });
           </div>
           <div class="field" style="margin: 0; flex: none">
             <label>&nbsp;</label>
-            <button class="primary" :disabled="busy || !startDate" @click="startRound">Open suggestions</button>
+            <button class="primary" :disabled="busy || !startDate" @click="startRound">Start with requests</button>
           </div>
         </div>
 
@@ -506,8 +523,12 @@ onMounted(() => { load(); loadHistory(); });
           </div>
 
           <div class="row">
-            <template v-if="phase === 'suggesting'">
+            <template v-if="phase === 'requesting'">
+              <button class="primary" :disabled="busy" @click="setPhase('suggesting')">Close requests, open suggestions</button>
+            </template>
+            <template v-else-if="phase === 'suggesting'">
               <button class="primary" :disabled="busy" @click="setPhase('reviewing')">Close suggestions</button>
+              <button class="small" :disabled="busy" @click="setPhase('requesting')">Back to requests</button>
               <button :disabled="busy || !places.length" @click="setPhase('voting')">Skip review, open voting</button>
             </template>
             <template v-else-if="phase === 'reviewing'">

@@ -62,6 +62,19 @@ router.delete('/rounds/:id/ballot', asyncHandler(async (req, res) => {
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
+// Requests (migration 097) -- one anonymous request each, in the first phase.
+router.put('/rounds/:id/request', asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.saveRequest({ roundId, text: req.body?.text, user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
+router.delete('/rounds/:id/request', asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.removeRequest({ roundId, user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
 // Orders (migration 096) -- only once an admin has opened them on a result.
 router.put('/rounds/:id/order', asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
@@ -89,6 +102,13 @@ router.post('/rounds/:id/orders/close', requireAdmin, asyncHandler(async (req, r
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
+// Admin moderation: remove anyone's request (round id = the round it was made in).
+router.delete('/rounds/:id/requests/:requestId', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.removeRequest({ roundId, requestId: id(req.params.requestId, 'request id'), user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
 router.delete('/rounds/:id/orders/:orderId', requireAdmin, asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
   await lunch.removeOrder({ roundId, orderId: id(req.params.orderId, 'order id'), user: req.user });
@@ -100,7 +120,7 @@ router.post('/rounds', requireAdmin, asyncHandler(async (req, res) => {
   res.status(201).json(await lunch.roundState(round.id, req.user));
 }));
 
-// body: { to: 'reviewing' | 'suggesting' | 'voting' | 'closed' | 'cancelled' }
+// body: { to: 'suggesting' | 'requesting' | 'reviewing' | 'voting' | 'closed' | 'cancelled' }
 router.post('/rounds/:id/phase', requireAdmin, asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
   const to = String(req.body?.to || '');

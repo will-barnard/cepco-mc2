@@ -23,12 +23,16 @@ const MAX_SUGGESTIONS = 2;
 const MAX_RANKS = POINTS_BY_RANK.length;
 const MAX_NAME_LENGTH = 80;
 const MAX_ORDER_LENGTH = 500;
+const MAX_REQUEST_LENGTH = 200;
 
 // Which admin moves are allowed from where. voting -> reviewing is left out
 // on purpose: going back would mean throwing away ballots already cast, and
 // a vote with a wrong list is better cancelled and restarted in the open.
 const TRANSITIONS = {
-  suggesting: ['reviewing', 'voting', 'cancelled'],
+  // Requests come first (migration 097); going back from suggestions to
+  // requests is allowed so a too-early click can be undone.
+  requesting: ['suggesting', 'cancelled'],
+  suggesting: ['requesting', 'reviewing', 'voting', 'cancelled'],
   reviewing: ['suggesting', 'voting', 'cancelled'],
   voting: ['closed', 'cancelled'],
   closed: [],
@@ -99,7 +103,9 @@ async function roundState(roundId, user) {
   const round = roundRows[0];
   if (!round) throw notFound('Lunch round not found');
 
-  const [places, mine, ballot, turnout, runoff, orders] = await Promise.all([
+  // A runoff shows the requests made during its parent round's suggestions.
+  const requestsRoundId = round.parent_round_id || round.id;
+  const [places, mine, ballot, turnout, runoff, orders, requests] = await Promise.all([
     query(
       `SELECT p.id, p.name, p.added_by_admin, COUNT(s.id)::int AS suggestion_count
          FROM lunch_places p
@@ -122,6 +128,7 @@ async function roundState(roundId, user) {
     ),
     query(
       `SELECT
+         (SELECT COUNT(*)::int FROM lunch_requests WHERE round_id = $1) AS requesters,
          (SELECT COUNT(DISTINCT suggester_id)::int FROM lunch_suggestions WHERE round_id = $1) AS suggesters,
          (SELECT COUNT(*)::int FROM lunch_ballots WHERE round_id = $1) AS voters,
          (SELECT COUNT(*)::int FROM employees WHERE active = TRUE) AS eligible`,
@@ -139,6 +146,13 @@ async function roundState(roundId, user) {
         WHERE o.round_id = $1
         ORDER BY lower(e.name)`,
       [roundId, user.id],
+    ),
+    // Anonymous: text plus "is this mine", never whose (migration 097).
+    query(
+      `SELECT id, request_text, (employee_id = $2) AS mine
+         FROM lunch_requests WHERE round_id = $1
+        ORDER BY created_at`,
+      [requestsRoundId, user.id],
     ),
   ]);
 
@@ -159,6 +173,7 @@ async function roundState(roundId, user) {
       orders_status: round.orders_status,
     },
     orders: round.orders_status ? orders.rows : [],
+    requests: requests.rows,
     places: places.rows.map((p) => (isAdmin ? p : { id: p.id, name: p.name })),
     my_suggestions: mine.rows,
     my_ballot: ballot.rows[0] || null,
@@ -214,7 +229,7 @@ async function openRound({ lunchDate, user }) {
   let round;
   try {
     const { rows } = await query(
-      'INSERT INTO lunch_rounds (lunch_date, opened_by) VALUES ($1, $2) RETURNING *',
+      "INSERT INTO lunch_rounds (lunch_date, opened_by, phase) VALUES ($1, $2, 'requesting') RETURNING *",
       [date, user.id],
     );
     [round] = rows;
@@ -223,7 +238,7 @@ async function openRound({ lunchDate, user }) {
     if (err.code === '23505') throw conflict('A lunch round is already in progress — close or cancel it first');
     throw err;
   }
-  notifyAll(round.id, 'suggesting');
+  notifyAll(round.id, 'requesting');
   return round;
 }
 
@@ -288,12 +303,53 @@ async function setPhase({ roundId, to }) {
       return result.winner_place_id ? 'closed' : null;
     }
 
-    const stamp = to === 'reviewing' ? ', reviewing_at = now()' : '';
+    const stamp = { reviewing: ', reviewing_at = now()', suggesting: ', suggesting_at = COALESCE(suggesting_at, now())' }[to] || '';
     await client.query(`UPDATE lunch_rounds SET phase = $2${stamp} WHERE id = $1`, [round.id, to]);
-    return null; // reviewing / back to suggesting / cancelled: no email
+    // Suggestions opening for the first time gets an email (with the
+    // requests in it); reopening them from review, stepping back to
+    // requests, and cancelling don't.
+    return to === 'suggesting' && !round.suggesting_at ? 'suggesting' : null;
   });
 
   if (emailKind) notifyAll(roundId, emailKind);
+}
+
+// ---------------------------------------------------------------------------
+// Requests (migration 097): one anonymous request per person, first phase only
+// ---------------------------------------------------------------------------
+
+async function saveRequest({ roundId, text, user }) {
+  const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!clean) throw badRequest('Type your request');
+  if (clean.length > MAX_REQUEST_LENGTH) throw badRequest(`Keep requests under ${MAX_REQUEST_LENGTH} characters`);
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    requirePhase(round, ['requesting'], 'Requests are closed. Suggestions are open now');
+    await client.query(
+      `INSERT INTO lunch_requests (round_id, employee_id, request_text)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (round_id, employee_id) DO UPDATE SET request_text = EXCLUDED.request_text, updated_at = now()`,
+      [round.id, user.id, clean],
+    );
+  });
+}
+
+/** Removes the caller's own request (requests phase), or -- admin, by id --
+ * anyone's at any point (e.g. something rude), runoff voting included. */
+async function removeRequest({ roundId, requestId = null, user }) {
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    if (requestId === null) {
+      requirePhase(round, ['requesting'], 'Requests are closed. Suggestions are open now');
+      await client.query('DELETE FROM lunch_requests WHERE round_id = $1 AND employee_id = $2', [round.id, user.id]);
+      return;
+    }
+    if (user.role !== 'admin') throw conflict('Only an admin can remove someone else’s request');
+    const { rows } = await client.query(
+      'DELETE FROM lunch_requests WHERE id = $1 AND round_id = $2 RETURNING id', [requestId, round.id],
+    );
+    if (!rows.length) throw notFound('Request not found');
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +714,8 @@ module.exports = {
   history,
   openRound,
   setPhase,
+  saveRequest,
+  removeRequest,
   openOrders,
   closeOrders,
   saveOrder,
