@@ -57,24 +57,14 @@ function body({
   kind, round, places, requests,
 }) {
   const date = friendlyDate(round.lunch_date);
-  if (kind === 'requesting') {
-    return {
-      subject: `Friday Lunch: any requests for ${date}?`,
-      heading: 'Friday Lunch: requests are open',
-      content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
-          Before anyone suggests a place for ${escapeHtml(date)}: anything people should keep in mind?
-          "No Mexican this week", "somewhere with vegetarian options"… One request each, anonymous.
-          Suggestions open next.
-        </p>${button('Add a request')}`,
-    };
-  }
   if (kind === 'suggesting') {
     return {
       subject: `Friday Lunch: where should we go ${date}?`,
       heading: 'Friday Lunch suggestions are open',
       content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
-          Suggest up to two places for lunch on ${escapeHtml(date)}. Suggestions are anonymous.
-        </p>${requestsBlock(requests)}${button('Suggest a place')}`,
+          Any requests for ${escapeHtml(date)} ("no Mexican this week")? Add yours, then suggest
+          up to two places. It's all anonymous.
+        </p>${button('Add requests and suggestions')}`,
     };
   }
   if (kind === 'voting') {

@@ -9,7 +9,7 @@
  * ballot, so this page can only ever show counts and your own entries.
  * Every write returns the refreshed round, so actions just replace `state`.
  */
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import api from '../api';
 import { useAuth } from '../stores';
 import LunchResults from '../components/LunchResults.vue';
@@ -28,10 +28,9 @@ const phase = computed(() => round.value?.phase || null);
 const places = computed(() => state.value?.places || []);
 const limits = computed(() => state.value?.limits || { suggestions: 2, ranks: 3 });
 const turnout = computed(() => state.value?.turnout || { suggesters: 0, voters: 0, eligible: 0 });
-const isOpen = computed(() => ['requesting', 'suggesting', 'reviewing', 'voting'].includes(phase.value));
+const isOpen = computed(() => ['suggesting', 'reviewing', 'voting'].includes(phase.value));
 
 const PHASE_LABEL = {
-  requesting: 'Taking requests',
   suggesting: 'Taking suggestions',
   reviewing: 'Finalizing the list',
   voting: 'Voting open',
@@ -78,6 +77,31 @@ async function act(fn, { confirmText } = {}) {
   }
 }
 
+// --- request step (first thing in suggestions; migration 098) -----------
+// Shown until the person has answered (a request or "no requests"), or
+// when they choose to change it.
+const editingRequest = ref(false);
+const inRequestStep = computed(() => !state.value?.my_request || editingRequest.value);
+
+// Live refresh while suggestions/review are on, so new requests and places
+// show up without reloading. Every 10s, skipped while the tab is hidden or
+// a write is in flight (that write's response refreshes anyway). Typed
+// drafts live in their own refs, so a refresh never clobbers them.
+const POLL_MS = 10_000;
+let pollTimer = null;
+async function poll() {
+  if (document.hidden || busy.value) return;
+  try {
+    const next = await api.get('/lunch/current');
+    if (!busy.value) state.value = next;
+  } catch { /* transient; next tick retries */ }
+}
+watch(phase, (p) => {
+  clearInterval(pollTimer);
+  pollTimer = ['suggesting', 'reviewing'].includes(p) ? setInterval(poll, POLL_MS) : null;
+}, { immediate: true });
+onUnmounted(() => clearInterval(pollTimer));
+
 // --- suggestions -------------------------------------------------------
 const newSuggestion = ref('');
 const canSuggest = computed(() => phase.value === 'suggesting'
@@ -96,7 +120,9 @@ const withdrawSuggestion = (s) => act(() => api.del(`/lunch/suggestions/${s.id}`
 // ones below it move up). Easier than three dropdowns on the shop iPad.
 const ranking = ref([]);
 const savedRanking = computed(() => state.value?.my_ballot?.choices || []);
-watch(savedRanking, (saved) => { ranking.value = [...saved]; }, { immediate: true });
+// Keyed on the ids, not the array: every refresh builds a new array, and
+// that mustn't wipe a ranking someone is in the middle of.
+watch(() => savedRanking.value.join(','), () => { ranking.value = [...savedRanking.value]; }, { immediate: true });
 
 const rankOf = (id) => ranking.value.indexOf(id) + 1; // 0 = not ranked
 const isRunoff = computed(() => !!round.value?.is_runoff);
@@ -123,17 +149,14 @@ watch(() => state.value?.upcoming_friday, (d) => { if (d && !startDate.value) st
 
 const startRound = () => act(
   () => api.post('/lunch/rounds', { lunch_date: startDate.value || undefined }),
-  { confirmText: `Start Friday Lunch for ${friendlyDate(startDate.value)} with requests? Everyone gets an email.` },
+  { confirmText: `Open Friday Lunch requests and suggestions for ${friendlyDate(startDate.value)}? Everyone gets an email.` },
 );
 
 function setPhase(to) {
   const t = turnout.value;
   const prompts = {
     reviewing: 'Close suggestions so you can tidy the list? You can reopen them.',
-    suggesting: phase.value === 'requesting'
-      ? `Close requests and open suggestions? ${t.requesters} request${t.requesters === 1 ? '' : 's'} so far. Everyone gets an email.`
-      : 'Reopen suggestions?',
-    requesting: 'Go back to requests? Suggestions made so far stay, but nobody can add more until you reopen them.',
+    suggesting: 'Reopen requests and suggestions?',
     voting: places.value.length === 1
       ? `Only ${places.value[0].name} is on the list, so it wins without a vote. Continue? Everyone gets an email.`
       : `Open voting on these ${places.value.length} places? The list locks, and everyone gets an email.`,
@@ -304,10 +327,7 @@ onMounted(() => { load(); loadHistory(); });
             <span v-if="isRunoff" class="tag lunch-runoff-tag">Runoff</span>
             <span class="tag">{{ PHASE_LABEL[phase] }}</span>
             <span class="spacer" />
-            <span v-if="phase === 'requesting'" class="muted small">
-              {{ turnout.requesters }} of {{ turnout.eligible }} have made a request
-            </span>
-            <span v-else-if="phase === 'suggesting' || phase === 'reviewing'" class="muted small">
+            <span v-if="phase === 'suggesting' || phase === 'reviewing'" class="muted small">
               {{ turnout.suggesters }} of {{ turnout.eligible }} have suggested
             </span>
             <span v-else-if="phase === 'voting'" class="muted small">
@@ -315,14 +335,18 @@ onMounted(() => { load(); loadHistory(); });
             </span>
           </div>
 
-          <!-- requesting -->
-          <template v-if="phase === 'requesting'">
-            <LunchRequests :state="state" editable @update="state = $event" />
-            <p class="muted small" style="margin: 0">Suggestions open next.</p>
-          </template>
-
-          <!-- suggesting -->
+          <!-- suggesting: request step first, then suggestions (migration 098) -->
+          <LunchRequests
+            v-if="phase === 'suggesting' && inRequestStep" :state="state" step
+            @update="state = $event" @done="editingRequest = false"
+          />
           <template v-else-if="phase === 'suggesting'">
+            <div class="row" style="margin-bottom: 4px">
+              <span class="muted small">
+                Your request: {{ state.my_request?.request_text ? `“${state.my_request.request_text}”` : 'none' }}
+              </span>
+              <button class="link small" type="button" @click="editingRequest = true">Change</button>
+            </div>
             <LunchRequests :state="state" @update="state = $event" />
             <div class="lunch-section">
               <h3>Your suggestions</h3>
@@ -482,7 +506,7 @@ onMounted(() => { load(); loadHistory(); });
           </div>
           <div class="field" style="margin: 0; flex: none">
             <label>&nbsp;</label>
-            <button class="primary" :disabled="busy || !startDate" @click="startRound">Start with requests</button>
+            <button class="primary" :disabled="busy || !startDate" @click="startRound">Open suggestions</button>
           </div>
         </div>
 
@@ -523,12 +547,8 @@ onMounted(() => { load(); loadHistory(); });
           </div>
 
           <div class="row">
-            <template v-if="phase === 'requesting'">
-              <button class="primary" :disabled="busy" @click="setPhase('suggesting')">Close requests, open suggestions</button>
-            </template>
-            <template v-else-if="phase === 'suggesting'">
+            <template v-if="phase === 'suggesting'">
               <button class="primary" :disabled="busy" @click="setPhase('reviewing')">Close suggestions</button>
-              <button class="small" :disabled="busy" @click="setPhase('requesting')">Back to requests</button>
               <button :disabled="busy || !places.length" @click="setPhase('voting')">Skip review, open voting</button>
             </template>
             <template v-else-if="phase === 'reviewing'">

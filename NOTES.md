@@ -4745,18 +4745,23 @@ A one-word search finds what it did before, plus those.
 
 **What.** More -> Friday Lunch (`/lunch`). One round per Friday, moved
 along by an admin with buttons:
-requesting -> suggesting -> reviewing -> voting -> closed (or cancelled at
-any point).
+suggesting -> reviewing -> voting -> closed (or cancelled at any point).
 
-- **Requests** (migration 097, first phase): each person posts one short,
-  anonymous request ("no Mexican", "veggie options") and can edit or remove
-  it. Requests lock when suggestions open, and stay on show through
-  suggestions, review and voting, including a runoff, which shows its
-  parent round's requests. They're listed in the suggestions-open,
-  voting-open and runoff emails. Admins can remove any request at any
-  time. "Back to requests" from suggestions is allowed, and the
-  suggestions email only goes out the first time suggestions open.
-
+- **Requests** (migrations 097-098) are the first step *inside*
+  suggestions. When someone opens the page they're asked for one short,
+  anonymous request ("no Mexican", "veggie options"), or they press "No
+  requests, continue" (stored as NULL text). Either way they move straight
+  on to suggesting, and can change it until suggestions close. While
+  suggestions and review are open the page refreshes every 10s, so new
+  requests and places show up live. Requests stay on show through voting,
+  including a runoff, which shows its parent round's requests, and they're
+  listed in the voting-open and runoff emails. Admins can remove any
+  request; that person gets asked again. The admin sorts out conflicts
+  ("no Mexican" vs. a Chipotle suggestion) in review.
+  *History:* 097 briefly made requests their own phase (`requesting`), with
+  its own email. 098 folded it back to save a round and an email.
+  `requesting` is still allowed by the CHECK constraint so old rows can't
+  break the migration, but nothing sets it any more.
 - **Suggestions**: up to two per person; withdraw while still open. Names
   dedupe on case/spacing/punctuation/accents ("Portillo's" = "portillos"),
   so typing an existing place backs it instead of adding a copy. Everyone

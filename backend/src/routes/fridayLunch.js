@@ -62,10 +62,13 @@ router.delete('/rounds/:id/ballot', asyncHandler(async (req, res) => {
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
-// Requests (migration 097) -- one anonymous request each, in the first phase.
+// Requests (migrations 097-098) -- one anonymous request each, the first
+// step of suggesting. body: { text } or { none: true } for "no requests".
 router.put('/rounds/:id/request', asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
-  await lunch.saveRequest({ roundId, text: req.body?.text, user: req.user });
+  await lunch.saveRequest({
+    roundId, text: req.body?.text, none: req.body?.none === true, user: req.user,
+  });
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
@@ -120,7 +123,7 @@ router.post('/rounds', requireAdmin, asyncHandler(async (req, res) => {
   res.status(201).json(await lunch.roundState(round.id, req.user));
 }));
 
-// body: { to: 'suggesting' | 'requesting' | 'reviewing' | 'voting' | 'closed' | 'cancelled' }
+// body: { to: 'reviewing' | 'suggesting' | 'voting' | 'closed' | 'cancelled' }
 router.post('/rounds/:id/phase', requireAdmin, asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
   const to = String(req.body?.to || '');
