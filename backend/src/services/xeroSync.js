@@ -772,6 +772,84 @@ async function createCustomerInXero(customer) {
 }
 
 /**
+ * One-time catch-up for Xero edits the sync missed before the date fix
+ * (NOTES.md 2.114 / 2.115). Before that fix, every sync read every linked
+ * pair as "unchanged" and stamped xero_synced_at = now() on it. So an edit
+ * made in Xero before the fix now looks *older* than the last sync and the
+ * timestamp check will never pick it up -- that's why a corrected name
+ * still didn't come across after the fix deployed.
+ *
+ * Timestamps can't recover these, so this compares values instead: every
+ * linked customer whose name / email / phone / address differs from its
+ * Xero contact is listed. In that bug's era MC2 -> Xero pushes worked and
+ * Xero -> MC2 pulls never did, so a difference is almost always a Xero
+ * edit -- but not certainly (a push that failed leaves the newer value in
+ * MC2), which is why an admin ticks what to pull rather than this pulling
+ * everything.
+ *
+ * Differences that aren't real are left out: phone formatting (same
+ * digits), email case, and a field Xero simply has blank (that's MC2 data
+ * Xero lacks, not a Xero edit).
+ *
+ * `apply`: [{ customer_id, field }] to pull, field one of FIELD_GROUPS'
+ * keys. Returns the (remaining) differences either way.
+ */
+async function missedXeroChanges({ apply = [] } = {}) {
+  const [xeroContacts, { rows: customers }] = await Promise.all([
+    xero.listContacts(),
+    query('SELECT * FROM customers WHERE xero_contact_id IS NOT NULL ORDER BY lower(name)'),
+  ]);
+  const byId = new Map(xeroContacts.map((xc) => [xc.ContactID, xc]));
+  const digits = (v) => String(v || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  const lc = (v) => norm(v).toLowerCase().replace(/\s+/g, ' ');
+  const show = (row, g) => (g === 'address'
+    ? ADDRESS_FIELDS.map((k) => row[k]).filter(Boolean).join(', ')
+    : row[FIELD_GROUPS[g].columns[0]]) || '';
+
+  function differences(mc, fx) {
+    const out = [];
+    if (fx.name && norm(mc.name) !== norm(fx.name)) out.push('name');
+    if (fx.email && lc(mc.email) !== lc(fx.email)) out.push('email');
+    if (fx.phone && digits(mc.phone) !== digits(fx.phone)) out.push('phone');
+    if (hasAddress(fx) && ADDRESS_FIELDS.some((k) => lc(mc[k]) !== lc(fx[k]))) out.push('address');
+    return out;
+  }
+
+  const wanted = new Set(apply.map((a) => `${Number(a.customer_id)}:${a.field}`));
+  const results = [];
+  let pulled = 0;
+  for (const mc of customers) {
+    const xc = byId.get(mc.xero_contact_id);
+    if (!xc || xc.ContactStatus === 'ARCHIVE') continue; // eslint-disable-line no-continue
+    const fx = mcFieldsFromXero(xc);
+    let diffs = differences(mc, fx);
+    const take = diffs.filter((g) => wanted.has(`${mc.id}:${g}`));
+    if (take.length) {
+      const columns = take.flatMap((g) => FIELD_GROUPS[g].columns);
+      // xero_synced_at = now() only if the row was already in sync, same
+      // rule as pushCustomerNotes -- an unsynced MC2 edit stays pending.
+      await query( // eslint-disable-line no-await-in-loop
+        `UPDATE customers SET ${columns.map((c, i) => `${c} = $${i + 2}`).join(', ')},
+                xero_synced_at = CASE WHEN xero_synced_at IS NOT NULL AND xero_synced_at >= updated_at
+                                      THEN now() ELSE xero_synced_at END
+          WHERE id = $1`,
+        [mc.id, ...columns.map((c) => fx[c])],
+      );
+      pulled += take.length;
+      diffs = diffs.filter((g) => !take.includes(g));
+    }
+    if (diffs.length) {
+      results.push({
+        customer_id: mc.id,
+        name: mc.name,
+        changes: diffs.map((g) => ({ field: g, mc2: show(mc, g), xero: show(fx, g) })),
+      });
+    }
+  }
+  return { checked: customers.length, pulled, differences: results };
+}
+
+/**
  * One-off tidy-up for contacts already in Xero (shop feedback, Oct 2026):
  *   - Primary person blank and the MC2 name reads as a person -> fill it.
  *   - Xero's DEFAULT phone is a US number typed into one box -> split it
@@ -842,6 +920,7 @@ module.exports = {
   fillMissingFieldsFromXero,
   pushCustomerToXero,
   pushCustomerNotes,
+  missedXeroChanges,
   createCustomerInXero,
   xeroDate,
 };

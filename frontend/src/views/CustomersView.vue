@@ -205,6 +205,42 @@ async function tidyXeroContacts(apply) {
   }
 }
 
+// Missed Xero changes (POST /xero/missed-changes): edits made in Xero
+// before the sync's date fix were stamped as synced without being pulled,
+// so only a value-by-value compare finds them (NOTES.md 2.115). Lists the
+// differences, everything ticked by default; Pull writes the ticked ones
+// into MC2 and the list refreshes with whatever's left.
+const checkingMissed = ref(false);
+const missedPreview = ref(null);
+const missedPicked = ref(new Set());
+const missedPulled = ref(null);
+const missedKey = (c, ch) => `${c.customer_id}:${ch.field}`;
+
+async function checkMissedChanges(apply = false) {
+  error.value = '';
+  checkingMissed.value = true;
+  try {
+    const body = apply
+      ? { apply: [...missedPicked.value].map((k) => { const [id, field] = k.split(':'); return { customer_id: Number(id), field }; }) }
+      : {};
+    const result = await api.post('/xero/missed-changes', body);
+    missedPreview.value = result;
+    missedPulled.value = apply ? result.pulled : null;
+    missedPicked.value = new Set(result.differences.flatMap((c) => c.changes.map((ch) => missedKey(c, ch))));
+    if (apply && selected.value) await select(selected.value.id);
+    if (apply) await load();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    checkingMissed.value = false;
+  }
+}
+function toggleMissed(key) {
+  const next = new Set(missedPicked.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  missedPicked.value = next;
+}
+
 // --- customer edit, pushes to Xero when linked ------------------------------
 // Inline toggle rather than a separate route/page — same "toggle-shown
 // form" convention this page already uses for "New customer" (showNew),
@@ -489,6 +525,38 @@ const when = (ts) => new Date(ts).toLocaleString();
           <button class="small" :disabled="tidyingXero" @click="xeroTidyPreview = null">Cancel</button>
         </div>
       </div>
+      <div class="row" style="margin-top: 12px; align-items: center">
+        <button class="small" :disabled="checkingMissed" @click="checkMissedChanges(false)">
+          {{ checkingMissed && !missedPreview ? 'Checking…' : 'Check for missed Xero changes…' }}
+        </button>
+        <span class="muted small">
+          Finds edits made in Xero that never came back to MC2 (before the Nov 2026 sync fix). Shows you the list first.
+        </span>
+      </div>
+      <div v-if="missedPreview" class="card tight" style="margin-top: 8px">
+        <p class="small" style="margin: 0 0 6px">
+          <span v-if="missedPulled !== null" style="color: #4ade80">Pulled {{ missedPulled }} change(s) into MC2. </span>
+          {{ missedPreview.differences.length }} customer(s) differ from Xero
+          (of {{ missedPreview.checked }} linked). Ticked items are replaced with Xero's value.
+        </p>
+        <ul v-if="missedPreview.differences.length" class="small" style="max-height: 280px; overflow: auto; margin: 0 0 8px; padding-left: 0; list-style: none">
+          <li v-for="c in missedPreview.differences" :key="c.customer_id" style="margin-bottom: 6px">
+            <strong>{{ c.name }}</strong>
+            <label v-for="ch in c.changes" :key="ch.field" class="checkbox" style="margin: 2px 0 0 4px">
+              <input type="checkbox" :checked="missedPicked.has(missedKey(c, ch))" @change="toggleMissed(missedKey(c, ch))" />
+              <span>{{ ch.field }}: <span class="muted">{{ ch.mc2 || '(blank)' }}</span> → {{ ch.xero }}</span>
+            </label>
+          </li>
+        </ul>
+        <div class="row">
+          <button
+            class="small primary" :disabled="checkingMissed || !missedPicked.size"
+            @click="checkMissedChanges(true)"
+          >{{ checkingMissed ? 'Pulling…' : `Pull ${missedPicked.size} into MC2` }}</button>
+          <button class="small" :disabled="checkingMissed" @click="missedPreview = null">Close</button>
+        </div>
+      </div>
+
       <p v-if="xeroTidyResult" class="small" style="color: #4ade80; margin: 8px 0 0">
         Updated Xero — filled {{ xeroTidyResult.primary_people_filled }} primary person(s), formatted
         {{ xeroTidyResult.phones_formatted }} phone(s).

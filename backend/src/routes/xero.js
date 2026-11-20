@@ -15,7 +15,9 @@ const express = require('express');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { asyncHandler, badRequest } = require('../middleware/errors');
 const config = require('../config');
-const { runXeroSync, fillMissingFieldsFromXero, tidyXeroContacts } = require('../services/xeroSync');
+const {
+  runXeroSync, fillMissingFieldsFromXero, tidyXeroContacts, missedXeroChanges,
+} = require('../services/xeroSync');
 const {
   computeBackfillCandidates, linkCustomerToXero, dismissMatch,
 } = require('../services/xeroBackfill');
@@ -67,6 +69,19 @@ router.post('/fill-missing-fields', requireAdmin, asyncHandler(async (req, res) 
 router.post('/tidy-contacts', requireAdmin, asyncHandler(async (req, res) => {
   try {
     res.json(await tidyXeroContacts({ dryRun: req.body?.dry_run === true }));
+  } catch (err) {
+    throw badRequest(err.message);
+  }
+}));
+
+// One-time catch-up for Xero edits the sync missed before its date fix
+// (NOTES.md 2.115): lists linked customers whose fields differ from Xero.
+// body { apply: [{ customer_id, field }] } pulls those from Xero first.
+// See missedXeroChanges().
+router.post('/missed-changes', requireAdmin, asyncHandler(async (req, res) => {
+  const apply = Array.isArray(req.body?.apply) ? req.body.apply : [];
+  try {
+    res.json(await missedXeroChanges({ apply }));
   } catch (err) {
     throw badRequest(err.message);
   }

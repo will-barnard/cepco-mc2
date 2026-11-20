@@ -4879,6 +4879,31 @@ waiting counts.
 MC2 notes field. They already show on the ticket page from Xero's history,
 and Xero's history mixes in its own audit entries.
 
+### 2.115 Fix: Xero edits made before 2.114 still didn't come back (no migration)
+
+**Shop report.** After 2.114 deployed, the corrected name still didn't come
+across to MC2.
+
+**Cause.** A leftover from the date bug. Before the fix, every sync read
+every linked pair as "unchanged" and stamped `xero_synced_at = now()` on
+it. So a Xero edit made before the fix now looks *older* than the last
+sync, and the corrected timestamp check rightly calls it already
+reconciled. Edits made in Xero after 2.114 sync normally; anything from
+before is invisible to timestamps.
+
+**Fix: Customers -> Xero panel -> "Check for missed Xero changes…"**
+(`POST /xero/missed-changes`, `missedXeroChanges()`). It compares values
+rather than timestamps and lists every linked customer whose name, email,
+phone or address differs from Xero, showing the MC2 value next to Xero's.
+Everything is ticked by default, and pressing Pull writes the ticked ones
+into MC2. Differences that aren't real are skipped: same phone digits in a
+different format, email case, and fields Xero has blank. Why ticked and
+not automatic: in the bug's era MC2 -> Xero pushes worked and pulls never
+did, so a difference is almost always a Xero edit. But a push that failed
+would leave the newer value in MC2, and an admin can see which is right.
+Pulling only re-stamps `xero_synced_at` if the row was otherwise in sync.
+Run it once after deploy; after that it should come back empty.
+
 ## 4. Suggested first moves after deploy
 
 
