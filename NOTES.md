@@ -4741,7 +4741,7 @@ A one-word search finds what it did before, plus those.
 - Find lives in the nav's More menu rather than the main row, which was
   already full at iPad-landscape widths; Inventory's search links to it.
 
-### 2.113 Friday Lunch: anonymous suggestions + ranked-choice vote (migration 094)
+### 2.113 Friday Lunch: anonymous suggestions, points vote, runoffs, orders (migrations 094-096)
 
 **What.** More -> Friday Lunch (`/lunch`). One round per Friday, moved
 along by an admin with buttons:
@@ -4775,6 +4775,31 @@ suggesting -> reviewing -> voting -> closed (or cancelled at any point).
   winner changed, and refuses rounds that are already points-counted, so a
   random tie can't be re-rolled. Migration 094's comments
   still say "ranked choice"; it was already applied, so it wasn't edited.
+- **Runoff** (migration 095): after a points round closes, an admin picks
+  how many of the top places go through (2 up to all of them) and starts a
+  runoff. It's a new round for the same Friday (`parent_round_id`) with
+  copies of just those places, and it opens straight into voting.
+  "Top" means the stored standings order. The page warns when the cut-off
+  splits a points tie, so the admin can raise the number. Runoff ballots
+  are **pick one**, most votes wins (`pointsByRank [1]`). A runoff tie sets
+  no winner (`tie_break.method 'pending'`) and sends no email until an
+  admin presses **Pick at random** (`POST /rounds/:id/pick-random`). That
+  draw is recorded with `drawn_at`, and only then does the winner email
+  go out.
+  Limits: one live runoff per round, and no runoff of a runoff.
+  Cancelling a runoff leaves the first vote's result standing and allows a
+  new runoff. A round counted with ranked choice has to be recounted with
+  points first. History shows one row per Friday, with the runoff's
+  winner as the final result.
+- **Orders** (migration 096): opt-in per result. On a closed round with a
+  winner, an admin presses **Collect orders**, which emails everyone the
+  first time only. Each person adds one order and can edit or remove it,
+  and everyone can see the full list **with names**. That's the one
+  deliberate break from anonymity, because whoever orders needs to know
+  whose is whose. Admins can close orders, reopen them, and remove anyone's.
+  **Copy all** puts a plain-text list on the clipboard. If the result went
+  to a runoff, orders go on the runoff, and a round already collecting
+  orders can't start a runoff. Past Fridays shows the orders read-only.
 - **Shortcuts**: one place on the list -> it wins when voting "opens", no
   vote. An empty list can't open voting.
 - **Emails** to all active staff: suggestions open, voting open, winner.

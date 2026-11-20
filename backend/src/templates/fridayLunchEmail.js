@@ -66,8 +66,46 @@ function body({ kind, round, places }) {
         </ul>${button('Cast your vote')}`,
     };
   }
+  if (kind === 'orders') {
+    const winner = round.winner_name || 'lunch';
+    return {
+      subject: `Friday Lunch: add your ${winner} order`,
+      heading: `Add your order for ${escapeHtml(winner)}`,
+      content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
+          We're collecting orders for ${escapeHtml(date)}. Type yours on the Friday Lunch page.
+          Orders show your name so whoever places it knows whose is whose.
+        </p>${button('Add my order')}`,
+    };
+  }
+
+  if (kind === 'runoff') {
+    return {
+      subject: `Friday Lunch runoff: ${places.map((p) => p.name).join(' vs ')}`,
+      heading: 'Friday Lunch runoff',
+      content: `<p style="margin:0 0 12px;font-size:14px;color:#16181d;line-height:1.5;">
+          It's down to these for ${escapeHtml(date)}. Pick one; most votes wins.
+          Votes are anonymous, and you can change yours until voting closes.
+        </p>
+        <ul style="margin:0;padding-left:20px;font-size:14px;color:#16181d;line-height:1.7;">
+          ${places.map((p) => `<li>${escapeHtml(p.name)}</li>`).join('')}
+        </ul>${button('Vote in the runoff')}`,
+    };
+  }
+
   // closed (or a recount that changed the winner -- see services/fridayLunch.js)
   const winner = round.winner_name;
+  if (round.parent_round_id) {
+    const drawn = round.result?.tie_break?.method === 'random';
+    return {
+      subject: winner ? `Friday Lunch runoff: it's ${winner}` : 'Friday Lunch runoff closed',
+      heading: winner ? `Friday Lunch is ${escapeHtml(winner)}` : 'Friday Lunch runoff closed',
+      content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
+          ${drawn
+            ? `The runoff for ${escapeHtml(date)} ended in a tie, so the winner was picked at random.`
+            : `The runoff for ${escapeHtml(date)} is in.`}
+        </p>${button('See the results')}`,
+    };
+  }
   if (round.result?.recounted_at) {
     return {
       subject: winner ? `Friday Lunch recount: it's ${winner}` : 'Friday Lunch recount',

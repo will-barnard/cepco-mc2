@@ -13,6 +13,7 @@ import { ref, computed, watch, onMounted } from 'vue';
 import api from '../api';
 import { useAuth } from '../stores';
 import LunchResults from '../components/LunchResults.vue';
+import LunchOrders from '../components/LunchOrders.vue';
 
 const auth = useAuth();
 
@@ -96,9 +97,13 @@ const savedRanking = computed(() => state.value?.my_ballot?.choices || []);
 watch(savedRanking, (saved) => { ranking.value = [...saved]; }, { immediate: true });
 
 const rankOf = (id) => ranking.value.indexOf(id) + 1; // 0 = not ranked
+const isRunoff = computed(() => !!round.value?.is_runoff);
 function toggleRank(id) {
   const i = ranking.value.indexOf(id);
   if (i >= 0) ranking.value.splice(i, 1);
+  // Pick-one (runoff): tapping another place moves the pick rather than
+  // making you untap the first.
+  else if (limits.value.ranks === 1) ranking.value = [id];
   else if (ranking.value.length < limits.value.ranks) ranking.value.push(id);
 }
 const ballotDirty = computed(() => ranking.value.join(',') !== savedRanking.value.join(','));
@@ -128,7 +133,9 @@ function setPhase(to) {
       ? `Only ${places.value[0].name} is on the list, so it wins without a vote. Continue? Everyone gets an email.`
       : `Open voting on these ${places.value.length} places? The list locks, and everyone gets an email.`,
     closed: `Close voting and count? ${t.voters} of ${t.eligible} have voted. Everyone gets the result by email.`,
-    cancelled: 'Cancel this week’s lunch vote? It can’t be reopened. You can start a new one afterwards.',
+    cancelled: isRunoff.value
+      ? 'Cancel the runoff? The first vote’s result stands, and you can start another runoff from it.'
+      : 'Cancel this week’s lunch vote? It can’t be reopened. You can start a new one afterwards.',
   };
   return act(() => api.post(`/lunch/rounds/${round.value.id}/phase`, { to }), { confirmText: prompts[to] });
 }
@@ -168,14 +175,70 @@ const removePlace = (p) => act(
 // --- history -------------------------------------------------------------
 const historyRows = ref([]);
 const pastState = ref(null);
+const pastRunoffState = ref(null);
 async function loadHistory() {
   try { historyRows.value = await api.get('/lunch/history'); } catch { /* non-essential */ }
 }
 async function openPast(row) {
-  if (pastState.value?.round.id === row.id) { pastState.value = null; return; }
+  if (pastState.value?.round.id === row.id) { pastState.value = null; pastRunoffState.value = null; return; }
   error.value = '';
-  try { pastState.value = await api.get(`/lunch/rounds/${row.id}`); } catch (err) { error.value = err.message; }
+  try {
+    const [main, runoff] = await Promise.all([
+      api.get(`/lunch/rounds/${row.id}`),
+      row.runoff_id ? api.get(`/lunch/rounds/${row.runoff_id}`) : null,
+    ]);
+    pastState.value = main;
+    pastRunoffState.value = runoff;
+  } catch (err) { error.value = err.message; }
 }
+// --- admin: runoff and tie draw ---------------------------------------------
+const runoffTop = ref(2);
+const runoffStandings = computed(() => (round.value?.result?.standings || []));
+const canStartRunoff = computed(() => auth.isAdmin && phase.value === 'closed'
+  && !isRunoff.value && !round.value?.runoff_round_id && !round.value?.orders_status
+  && round.value?.result?.method === 'points' && round.value.result.total_ballots > 0
+  && runoffStandings.value.length >= 2);
+const placeName = (id) => places.value.find((p) => p.id === id)?.name || '?';
+const runoffPreview = computed(() => runoffStandings.value.slice(0, runoffTop.value));
+// The cut-off lands inside a points tie: the place just outside has as many
+// points as the last one in, and only the 1st/2nd-choice ordering separates them.
+const runoffCutWarning = computed(() => {
+  const inside = runoffStandings.value[runoffTop.value - 1];
+  const outside = runoffStandings.value[runoffTop.value];
+  if (!inside || !outside || inside.points !== outside.points) return '';
+  return `${placeName(outside.place_id)} has the same points as ${placeName(inside.place_id)} `
+    + 'but is left out on the 1st/2nd-choice tie-break. Raise the number to include it.';
+});
+const startRunoff = () => act(
+  () => api.post(`/lunch/rounds/${round.value.id}/runoff`, { top: Number(runoffTop.value) }),
+  { confirmText: `Start a runoff between ${runoffPreview.value.map((x) => placeName(x.place_id)).join(', ')}? `
+    + 'Voting opens right away, and everyone gets an email.' },
+);
+
+const pendingTie = computed(() => round.value?.result?.tie_break?.method === 'pending');
+
+// Orders: opt-in per result (migration 096).
+const canOpenOrders = computed(() => auth.isAdmin && phase.value === 'closed'
+  && round.value?.winner_place_id && !round.value.orders_status && !round.value.runoff_round_id);
+const openOrders = () => act(
+  () => api.post(`/lunch/rounds/${round.value.id}/orders/open`),
+  { confirmText: 'Collect orders for this result? Everyone gets an email, and orders show names.' },
+);
+const pickRandom = () => act(
+  () => api.post(`/lunch/rounds/${round.value.id}/pick-random`),
+  { confirmText: 'Pick the winner at random from the tied places? Everyone gets an email with the result.' },
+);
+
+// While a runoff is on, the first vote's results sit below it, collapsed.
+const parentState = ref(null);
+const showParent = ref(false);
+async function toggleParent() {
+  showParent.value = !showParent.value;
+  if (showParent.value && parentState.value?.round.id !== round.value.parent_round_id) {
+    try { parentState.value = await api.get(`/lunch/rounds/${round.value.parent_round_id}`); } catch (err) { error.value = err.message; }
+  }
+}
+
 // --- admin: recount rounds closed under the old ranked-choice count -------
 const canRecount = (st) => auth.isAdmin && st?.round.phase === 'closed'
   && st.round.result?.method !== 'points' && st.round.result?.reason !== 'single_place';
@@ -233,6 +296,7 @@ onMounted(() => { load(); loadHistory(); });
         <template v-if="round">
           <div class="row" style="margin-bottom: 12px">
             <h2 style="margin: 0">{{ friendlyDate(round.lunch_date) }}</h2>
+            <span v-if="isRunoff" class="tag lunch-runoff-tag">Runoff</span>
             <span class="tag">{{ PHASE_LABEL[phase] }}</span>
             <span class="spacer" />
             <span v-if="phase === 'suggesting' || phase === 'reviewing'" class="muted small">
@@ -292,7 +356,10 @@ onMounted(() => { load(); loadHistory(); });
 
           <!-- voting -->
           <template v-else-if="phase === 'voting'">
-            <p class="muted small" style="margin-top: 0">
+            <p v-if="isRunoff" class="muted small" style="margin-top: 0">
+              It's down to these. Pick one; most votes wins. You can change your vote until voting closes.
+            </p>
+            <p v-else class="muted small" style="margin-top: 0">
               Tap places in order: your favourite first. 1st gets 3 points, 2nd gets 2, 3rd gets 1,
               and the most points wins. Tap a ranked place again to take it off.
               You can change your vote until voting closes.
@@ -301,10 +368,10 @@ onMounted(() => { load(); loadHistory(); });
               <button
                 v-for="p in places" :key="p.id" type="button"
                 :class="['lunch-option', { ranked: rankOf(p.id) }]"
-                :disabled="busy || (!rankOf(p.id) && ranking.length >= limits.ranks)"
+                :disabled="busy || (!isRunoff && !rankOf(p.id) && ranking.length >= limits.ranks)"
                 @click="toggleRank(p.id)"
               >
-                <span class="lunch-rank">{{ rankOf(p.id) ? ORDINAL[rankOf(p.id) - 1] : '' }}</span>
+                <span class="lunch-rank">{{ rankOf(p.id) ? (isRunoff ? '✓' : ORDINAL[rankOf(p.id) - 1]) : '' }}</span>
                 <span>{{ p.name }}</span>
               </button>
             </div>
@@ -324,6 +391,41 @@ onMounted(() => { load(); loadHistory(); });
           <!-- closed -->
           <template v-else-if="phase === 'closed'">
             <LunchResults :state="state" />
+
+            <div v-if="canOpenOrders" class="row" style="margin-top: 14px">
+              <button class="small" :disabled="busy" @click="openOrders">Collect orders</button>
+              <span class="muted small">Let everyone type their order here. Off unless you turn it on.</span>
+            </div>
+            <LunchOrders v-if="round.orders_status" :state="state" @update="state = $event" />
+
+            <div v-if="pendingTie" class="row" style="margin-top: 14px">
+              <button v-if="auth.isAdmin" class="primary" :disabled="busy" @click="pickRandom">Pick at random</button>
+              <span class="muted small">
+                {{ auth.isAdmin ? 'The runoff tied. Draw one of the tied places to settle it.' : 'The runoff tied. An admin will pick at random.' }}
+              </span>
+            </div>
+
+            <div v-if="canStartRunoff" class="lunch-runoff-panel">
+              <h3>Runoff</h3>
+              <div class="row nowrap">
+                <label class="row nowrap" style="margin: 0; gap: 8px">
+                  Top
+                  <input v-model.number="runoffTop" type="number" min="2" :max="runoffStandings.length" style="width: 72px" />
+                  places
+                </label>
+                <button class="small" :disabled="busy || runoffTop < 2 || runoffTop > runoffStandings.length" @click="startRunoff">
+                  Start runoff
+                </button>
+              </div>
+              <p class="small" style="margin: 8px 0 0">
+                {{ runoffPreview.map((x) => `${placeName(x.place_id)} (${x.points})`).join(' · ') }}
+              </p>
+              <p v-if="runoffCutWarning" class="small" style="margin: 6px 0 0; color: var(--amber)">{{ runoffCutWarning }}</p>
+              <p class="muted small" style="margin: 6px 0 0">
+                Opens a pick-one vote between just these, right away. Everyone gets an email.
+              </p>
+            </div>
+
             <div v-if="canRecount(state)" class="row" style="margin-top: 14px">
               <button class="small" :disabled="busy" @click="recount(state)">Recount with points</button>
               <span class="muted small">This round was counted with ranked choice.</span>
@@ -334,6 +436,15 @@ onMounted(() => { load(); loadHistory(); });
           <p v-else-if="phase === 'cancelled'" class="muted" style="margin: 0">
             No lunch vote this week.
           </p>
+
+          <div v-if="isRunoff" style="margin-top: 16px">
+            <button class="link small" type="button" @click="toggleParent">
+              {{ showParent ? 'Hide' : 'Show' }} the first vote's results
+            </button>
+            <div v-if="showParent && parentState" style="margin-top: 10px">
+              <LunchResults :state="parentState" />
+            </div>
+          </div>
         </template>
 
         <div v-else class="muted">No Friday Lunch vote has been run yet.</div>
@@ -407,7 +518,9 @@ onMounted(() => { load(); loadHistory(); });
               <button class="primary" :disabled="busy" @click="setPhase('closed')">Close voting and count</button>
             </template>
             <span class="spacer" />
-            <button class="small danger" :disabled="busy" @click="setPhase('cancelled')">Cancel this week</button>
+            <button class="small danger" :disabled="busy" @click="setPhase('cancelled')">
+              {{ isRunoff ? 'Cancel runoff' : 'Cancel this week' }}
+            </button>
           </div>
         </template>
       </div>
@@ -419,7 +532,10 @@ onMounted(() => { load(); loadHistory(); });
         <div v-for="h in historyRows" :key="h.id" class="lunch-history-row">
           <button type="button" class="lunch-history-toggle" @click="openPast(h)">
             <span class="muted small lunch-history-date">{{ friendlyDate(h.lunch_date) }}</span>
-            <strong v-if="h.phase === 'closed'">{{ h.winner_name || 'No winner' }}</strong>
+            <strong v-if="h.phase === 'closed'">
+              {{ h.runoff_id ? (h.final_winner_name || (h.runoff_phase === 'voting' ? 'Runoff in progress' : 'Runoff tied')) : (h.winner_name || 'No winner') }}
+            </strong>
+            <span v-if="h.runoff_id" class="tag lunch-runoff-tag">after runoff</span>
             <span v-else class="muted">Cancelled</span>
             <span class="spacer" />
             <span v-if="h.phase === 'closed'" class="muted small">
@@ -427,7 +543,14 @@ onMounted(() => { load(); loadHistory(); });
             </span>
           </button>
           <div v-if="pastState?.round.id === h.id && h.phase === 'closed'" style="padding: 8px 0 14px">
+            <template v-if="pastRunoffState">
+              <h3 class="lunch-past-heading">Runoff</h3>
+              <LunchResults :state="pastRunoffState" />
+              <h3 class="lunch-past-heading">First vote</h3>
+            </template>
             <LunchResults :state="pastState" />
+            <LunchOrders v-if="pastRunoffState?.round.orders_status" :state="pastRunoffState" readonly />
+            <LunchOrders v-else-if="pastState.round.orders_status" :state="pastState" readonly />
             <button v-if="canRecount(pastState)" class="small" style="margin-top: 12px" :disabled="busy" @click="recount(pastState)">
               Recount with points
             </button>
@@ -468,4 +591,9 @@ onMounted(() => { load(); loadHistory(); });
 }
 .lunch-history-toggle:hover:not(:disabled) { background: none; }
 .lunch-history-date { min-width: 190px; }
+.lunch-runoff-tag { color: var(--accent); }
+.lunch-runoff-panel { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.lunch-runoff-panel h3 { font-size: 14px; margin: 0 0 8px; }
+.lunch-past-heading { font-size: 13px; color: var(--text-dim); margin: 14px 0 8px; }
+.lunch-past-heading:first-child { margin-top: 0; }
 </style>

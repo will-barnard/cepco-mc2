@@ -98,4 +98,20 @@ test('ignores unknown ids, repeats, and anything past 3rd', () => {
   assert.equal(r.winner_place_id, B);
 });
 
+test('runoff: pick-one scoring counts votes', () => {
+  const r = tally({ placeIds: [A, B], ballots: [[A], [A], [B]], pointsByRank: [1], tieMode: 'defer' });
+  assert.equal(pts(r, A), 2);
+  assert.equal(r.winner_place_id, A);
+  // a stray 2nd choice is ignored, not scored
+  const r2 = tally({ placeIds: [A, B], ballots: [[A, B], [B]], pointsByRank: [1], tieMode: 'defer' });
+  assert.equal(pts(r2, B), 1);
+});
+
+test('runoff tie is left pending for the admin, no winner', () => {
+  const r = tally({ placeIds: [A, B, C], ballots: [[A], [B], [C], [A], [B]], pointsByRank: [1], tieMode: 'defer' });
+  assert.equal(r.winner_place_id, null);
+  assert.equal(r.tie_break.method, 'pending');
+  assert.deepEqual(r.tie_break.among, [A, B]);
+});
+
 console.log(`\n${passed} passed`);

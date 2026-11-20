@@ -8,8 +8,10 @@
  * Anonymity rule, enforced here: no function returns another person's
  * suggester_id or voter_id -- not to admins either. Callers get counts
  * ("5 of 11 have voted") and their *own* suggestions and ballot only.
+ * Orders (migration 096) are the deliberate exception: they carry names.
  */
 
+const crypto = require('crypto');
 const config = require('../config');
 const { query, withTransaction } = require('../db');
 const { badRequest, notFound, conflict } = require('../middleware/errors');
@@ -20,6 +22,7 @@ const MAX_SUGGESTIONS = 2;
 // One rank per points value (3/2/1) -- see services/lunchTally.js.
 const MAX_RANKS = POINTS_BY_RANK.length;
 const MAX_NAME_LENGTH = 80;
+const MAX_ORDER_LENGTH = 500;
 
 // Which admin moves are allowed from where. voting -> reviewing is left out
 // on purpose: going back would mean throwing away ballots already cast, and
@@ -52,6 +55,11 @@ function cleanName(raw) {
   if (!nameKey(name)) throw badRequest('Place names need at least one letter or number');
   return name;
 }
+
+// Runoffs are pick-one, most votes wins (migration 095); ranking 3/2/1
+// between two or three finalists would mostly just add noise.
+const RUNOFF_POINTS = [1];
+const ranksFor = (round) => (round.parent_round_id ? RUNOFF_POINTS.length : MAX_RANKS);
 
 /** Locks and returns a round; every write goes through this so concurrent
  * suggestions/phase changes on one round serialize (the two-per-person
@@ -91,7 +99,7 @@ async function roundState(roundId, user) {
   const round = roundRows[0];
   if (!round) throw notFound('Lunch round not found');
 
-  const [places, mine, ballot, turnout] = await Promise.all([
+  const [places, mine, ballot, turnout, runoff, orders] = await Promise.all([
     query(
       `SELECT p.id, p.name, p.added_by_admin, COUNT(s.id)::int AS suggestion_count
          FROM lunch_places p
@@ -119,6 +127,19 @@ async function roundState(roundId, user) {
          (SELECT COUNT(*)::int FROM employees WHERE active = TRUE) AS eligible`,
       [roundId],
     ),
+    // This round's live runoff, if one was started from it.
+    query(
+      "SELECT id, phase FROM lunch_rounds WHERE parent_round_id = $1 AND phase <> 'cancelled'",
+      [roundId],
+    ),
+    // Named on purpose -- see migration 096.
+    query(
+      `SELECT o.id, o.order_text, o.updated_at, e.name, (o.employee_id = $2) AS mine
+         FROM lunch_orders o JOIN employees e ON e.id = o.employee_id
+        WHERE o.round_id = $1
+        ORDER BY lower(e.name)`,
+      [roundId, user.id],
+    ),
   ]);
 
   const isAdmin = user.role === 'admin';
@@ -132,12 +153,17 @@ async function roundState(roundId, user) {
       closed_at: round.closed_at,
       winner_place_id: round.winner_place_id,
       result: round.result,
+      parent_round_id: round.parent_round_id,
+      is_runoff: round.parent_round_id !== null,
+      runoff_round_id: runoff.rows[0]?.id || null,
+      orders_status: round.orders_status,
     },
+    orders: round.orders_status ? orders.rows : [],
     places: places.rows.map((p) => (isAdmin ? p : { id: p.id, name: p.name })),
     my_suggestions: mine.rows,
     my_ballot: ballot.rows[0] || null,
     turnout: turnout.rows[0],
-    limits: { suggestions: MAX_SUGGESTIONS, ranks: MAX_RANKS },
+    limits: { suggestions: MAX_SUGGESTIONS, ranks: ranksFor(round) },
   };
 }
 
@@ -145,18 +171,32 @@ async function roundState(roundId, user) {
  * say "no lunch vote this week" instead of resurfacing last week's winner),
  * or null before the first one is ever opened. */
 async function currentState(user) {
-  const { rows } = await query('SELECT id FROM lunch_rounds ORDER BY id DESC LIMIT 1');
-  const state = rows[0] ? await roundState(rows[0].id, user) : { round: null };
+  const { rows } = await query('SELECT id, phase, parent_round_id FROM lunch_rounds ORDER BY id DESC LIMIT 1');
+  // A cancelled runoff means the original result stands, so show that
+  // round, not "no lunch vote this week".
+  const latest = rows[0];
+  const showId = latest && latest.phase === 'cancelled' && latest.parent_round_id
+    ? latest.parent_round_id
+    : latest?.id;
+  const state = showId ? await roundState(showId, user) : { round: null };
   return { ...state, upcoming_friday: await upcomingFriday() };
 }
 
+/** One row per Friday: the original round, with its runoff (if any)
+ * folded in so the week's final winner is the runoff's. A runoff still in
+ * voting, or tied and waiting on the random draw, leaves final_winner_name
+ * null. */
 async function history(limit = 52) {
   const { rows } = await query(
     `SELECT r.id, r.lunch_date, r.phase, r.closed_at, w.name AS winner_name,
-            (SELECT COUNT(*)::int FROM lunch_ballots b WHERE b.round_id = r.id) AS ballots
+            (SELECT COUNT(*)::int FROM lunch_ballots b WHERE b.round_id = r.id) AS ballots,
+            ro.id AS runoff_id, ro.phase AS runoff_phase, rw.name AS runoff_winner_name,
+            CASE WHEN ro.id IS NULL THEN w.name ELSE rw.name END AS final_winner_name
        FROM lunch_rounds r
        LEFT JOIN lunch_places w ON w.id = r.winner_place_id
-      WHERE r.phase IN ('closed', 'cancelled')
+       LEFT JOIN lunch_rounds ro ON ro.parent_round_id = r.id AND ro.phase <> 'cancelled'
+       LEFT JOIN lunch_places rw ON rw.id = ro.winner_place_id
+      WHERE r.parent_round_id IS NULL AND r.phase IN ('closed', 'cancelled')
       ORDER BY r.lunch_date DESC, r.id DESC
       LIMIT $1`,
     [Math.min(Math.max(Number(limit) || 52, 1), 200)],
@@ -191,13 +231,19 @@ async function openRound({ lunchDate, user }) {
 async function closeRound(client, round) {
   const { rows: places } = await client.query('SELECT id FROM lunch_places WHERE round_id = $1', [round.id]);
   const { rows: ballots } = await client.query('SELECT choices FROM lunch_ballots WHERE round_id = $1', [round.id]);
-  const result = tally({ placeIds: places.map((p) => p.id), ballots: ballots.map((b) => b.choices) });
+  const result = tally({
+    placeIds: places.map((p) => p.id),
+    ballots: ballots.map((b) => b.choices),
+    // Runoff ties wait for an admin's "Pick at random" (pickRandomWinner).
+    ...(round.parent_round_id ? { pointsByRank: RUNOFF_POINTS, tieMode: 'defer' } : {}),
+  });
   await client.query(
     `UPDATE lunch_rounds
         SET phase = 'closed', closed_at = now(), winner_place_id = $2, result = $3
       WHERE id = $1`,
     [round.id, result.winner_place_id, result],
   );
+  return result;
 }
 
 async function setPhase({ roundId, to }) {
@@ -236,8 +282,10 @@ async function setPhase({ roundId, to }) {
     }
 
     if (to === 'closed') {
-      await closeRound(client, round);
-      return 'closed';
+      const result = await closeRound(client, round);
+      // A pending runoff tie has no winner to announce yet; the email goes
+      // out after the random draw instead.
+      return result.winner_place_id ? 'closed' : null;
     }
 
     const stamp = to === 'reviewing' ? ', reviewing_at = now()' : '';
@@ -246,6 +294,147 @@ async function setPhase({ roundId, to }) {
   });
 
   if (emailKind) notifyAll(roundId, emailKind);
+}
+
+// ---------------------------------------------------------------------------
+// Orders (migration 096): opt-in per result, named, one per person
+// ---------------------------------------------------------------------------
+
+/** Admin: start (or reopen) collecting orders for a decided result. */
+async function openOrders({ roundId }) {
+  const notify = await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    requirePhase(round, ['closed'], 'Orders can only be collected once there is a result');
+    if (!round.winner_place_id) throw conflict('There is no winner yet. Settle the result first');
+    const { rows: live } = await client.query(
+      "SELECT 1 FROM lunch_rounds WHERE parent_round_id = $1 AND phase <> 'cancelled'", [round.id],
+    );
+    if (live.length) throw conflict('This result went to a runoff. Collect orders on the runoff instead');
+    if (round.orders_status === 'open') return false;
+    await client.query(
+      `UPDATE lunch_rounds SET orders_status = 'open', orders_opened_at = COALESCE(orders_opened_at, now())
+        WHERE id = $1`,
+      [round.id],
+    );
+    // Email the first time only; reopening after a close is a quiet fix-up.
+    return round.orders_status === null;
+  });
+  if (notify) notifyAll(roundId, 'orders');
+}
+
+/** Admin: lock the list (someone's placing the order). Reopen with openOrders. */
+async function closeOrders({ roundId }) {
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    if (round.orders_status !== 'open') throw conflict('Orders are not open');
+    await client.query("UPDATE lunch_rounds SET orders_status = 'closed' WHERE id = $1", [round.id]);
+  });
+}
+
+async function saveOrder({ roundId, text, user }) {
+  const clean = String(text ?? '').trim();
+  if (!clean) throw badRequest('Type your order');
+  if (clean.length > MAX_ORDER_LENGTH) throw badRequest(`Keep orders under ${MAX_ORDER_LENGTH} characters`);
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    if (round.orders_status !== 'open') throw conflict('Orders are not open');
+    await client.query(
+      `INSERT INTO lunch_orders (round_id, employee_id, order_text)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (round_id, employee_id) DO UPDATE SET order_text = EXCLUDED.order_text, updated_at = now()`,
+      [round.id, user.id, clean],
+    );
+  });
+}
+
+/** Removes the caller's own order, or (admin) anyone's by order id. */
+async function removeOrder({ roundId, orderId = null, user }) {
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    if (orderId === null) {
+      if (round.orders_status !== 'open') throw conflict('Orders are not open');
+      await client.query('DELETE FROM lunch_orders WHERE round_id = $1 AND employee_id = $2', [round.id, user.id]);
+      return;
+    }
+    // Admin clean-up works while closed too (a duplicate, someone who left).
+    if (user.role !== 'admin') throw conflict('Only an admin can remove someone else’s order');
+    const { rows } = await client.query(
+      'DELETE FROM lunch_orders WHERE id = $1 AND round_id = $2 RETURNING id', [orderId, round.id],
+    );
+    if (!rows.length) throw notFound('Order not found');
+  });
+}
+
+/**
+ * Sends a closed round's top `top` places to a runoff: a new round for the
+ * same Friday that opens straight into voting with copies of just those
+ * places. "Top" is the stored standings order (points, then 1st-choice
+ * count, then 2nd, ...); the page warns the admin when the cut-off splits a
+ * points tie so they can widen it.
+ */
+async function startRunoff({ roundId, top, user }) {
+  const n = Number(top);
+  const runoffId = await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    requirePhase(round, ['closed'], 'A runoff can only follow a closed round');
+    if (round.parent_round_id) throw conflict("A runoff can't have its own runoff. Use Pick at random if it tied");
+    if (round.orders_status) throw conflict('Orders are already being collected for this result');
+    const { result } = round;
+    if (result?.method !== 'points') throw conflict('Recount this round with points before starting a runoff');
+    if (!result.total_ballots) throw conflict('Nobody voted in this round, so there is nothing to run off');
+    const standings = result.standings || [];
+    if (!Number.isInteger(n) || n < 2 || n > standings.length) {
+      throw badRequest(`Pick between 2 and ${standings.length} places for the runoff`);
+    }
+
+    let inserted;
+    try {
+      const { rows } = await client.query(
+        `INSERT INTO lunch_rounds (lunch_date, phase, opened_by, voting_opened_at, parent_round_id)
+         VALUES ($1, 'voting', $2, now(), $3) RETURNING id`,
+        [round.lunch_date, user.id, round.id],
+      );
+      [inserted] = rows;
+    } catch (err) {
+      // lunch_rounds_one_open_idx / lunch_rounds_one_runoff_idx
+      if (err.code === '23505') throw conflict('A runoff (or another round) is already in progress');
+      throw err;
+    }
+    await client.query(
+      `INSERT INTO lunch_places (round_id, name, name_key, added_by_admin)
+       SELECT $1, p.name, p.name_key, FALSE
+         FROM lunch_places p
+        WHERE p.id = ANY($2::int[])`,
+      [inserted.id, standings.slice(0, n).map((s) => s.place_id)],
+    );
+    return inserted.id;
+  });
+  notifyAll(runoffId, 'runoff');
+  return runoffId;
+}
+
+/** Settles a runoff left tied (tie_break.method 'pending') by drawing one
+ * of the tied places at random. Recorded on the result as a random
+ * tie-break with when it was drawn. */
+async function pickRandomWinner({ roundId }) {
+  await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    requirePhase(round, ['closed'], 'Voting has to close before a tie can be drawn');
+    const tb = round.result?.tie_break;
+    if (tb?.method !== 'pending') throw conflict('This round has no tie waiting to be drawn');
+    const among = [...tb.among].sort((a, b) => a - b);
+    const winner = among[crypto.randomInt(among.length)];
+    const result = {
+      ...round.result,
+      winner_place_id: winner,
+      tie_break: { method: 'random', among, drawn_at: new Date().toISOString() },
+    };
+    await client.query(
+      'UPDATE lunch_rounds SET winner_place_id = $2, result = $3 WHERE id = $1',
+      [round.id, winner, result],
+    );
+  });
+  notifyAll(roundId, 'closed');
 }
 
 /**
@@ -428,13 +617,16 @@ async function castBallot({ roundId, choices, user }) {
   if (!Array.isArray(choices)) throw badRequest('choices must be a list of place ids');
   const ids = choices.map(Number);
   if (!ids.length) throw badRequest('Rank at least one place');
-  if (ids.length > MAX_RANKS) throw badRequest(`Rank at most ${MAX_RANKS} places`);
   if (ids.some((id) => !Number.isInteger(id))) throw badRequest('choices must be place ids');
   if (new Set(ids).size !== ids.length) throw badRequest('Each place can only be ranked once');
 
   return withTransaction(async (client) => {
     const round = await lockRound(client, roundId);
     requirePhase(round, ['voting'], 'Voting is not open');
+    const maxRanks = ranksFor(round);
+    if (ids.length > maxRanks) {
+      throw badRequest(maxRanks === 1 ? 'Pick one place in a runoff' : `Rank at most ${maxRanks} places`);
+    }
     const { rows: valid } = await client.query(
       'SELECT id FROM lunch_places WHERE round_id = $1 AND id = ANY($2::int[])', [round.id, ids],
     );
@@ -466,6 +658,12 @@ module.exports = {
   history,
   openRound,
   setPhase,
+  openOrders,
+  closeOrders,
+  saveOrder,
+  removeOrder,
+  startRunoff,
+  pickRandomWinner,
   recountRound,
   addPlace,
   renamePlace,

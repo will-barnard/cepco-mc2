@@ -59,7 +59,7 @@ async function send(roundId, kind) {
   }
 }
 
-/** kind: 'suggesting' | 'voting' | 'closed'. Never throws, never awaited. */
+/** kind: 'suggesting' | 'voting' | 'runoff' | 'closed' | 'orders'. Never throws, never awaited. */
 function notifyAll(roundId, kind) {
   setImmediate(() => {
     send(roundId, kind).catch((err) => console.error('[friday-lunch] email send failed', err));

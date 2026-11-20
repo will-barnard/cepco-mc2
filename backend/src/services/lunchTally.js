@@ -14,6 +14,11 @@
  * Ties on points: more 1st-choice votes wins, then more 2nd-choice votes,
  * then random -- and the result says which settled it.
  *
+ * Runoffs (migration 095) call this with pointsByRank [1] -- pick one, one
+ * point a ballot, i.e. plain most-votes -- and tieMode 'defer': a tie for
+ * first is reported as tie_break.method 'pending' with no winner, and an
+ * admin draws at random afterwards (fridayLunch.pickRandomWinner).
+ *
  * Results stored before the switch have no `method` and a `rounds` array;
  * components/LunchResults.vue still renders those as they were counted.
  */
@@ -27,23 +32,27 @@ const defaultRandomIndex = (n) => crypto.randomInt(n);
  * @param {object} input
  * @param {number[]} input.placeIds   every place on the frozen list
  * @param {number[][]} input.ballots  ranked place ids, best first
+ * @param {number[]} [input.pointsByRank] points for 1st, 2nd, ... (default 3/2/1)
+ * @param {'random'|'defer'} [input.tieMode] full tie for first: draw now, or leave pending
  * @param {(n:number)=>number} [input.randomIndex] 0 <= result < n; injectable for tests
  */
-function tally({ placeIds, ballots, randomIndex = defaultRandomIndex }) {
+function tally({
+  placeIds, ballots, pointsByRank = POINTS_BY_RANK, tieMode = 'random', randomIndex = defaultRandomIndex,
+}) {
   const known = new Set(placeIds);
   // Defensive: drop unknown ids and repeats, and anything past the scored
   // ranks. The ballot endpoint already rejects all three.
   const clean = ballots
-    .map((b) => [...new Set((b || []).filter((id) => known.has(id)))].slice(0, POINTS_BY_RANK.length))
+    .map((b) => [...new Set((b || []).filter((id) => known.has(id)))].slice(0, pointsByRank.length))
     .filter((b) => b.length);
 
   const byId = new Map(placeIds.map((id) => [id, {
-    place_id: id, points: 0, ranks: POINTS_BY_RANK.map(() => 0),
+    place_id: id, points: 0, ranks: pointsByRank.map(() => 0),
   }]));
   for (const b of clean) {
     b.forEach((id, i) => {
       const s = byId.get(id);
-      s.points += POINTS_BY_RANK[i];
+      s.points += pointsByRank[i];
       s.ranks[i] += 1;
     });
   }
@@ -53,7 +62,7 @@ function tally({ placeIds, ballots, randomIndex = defaultRandomIndex }) {
   // breaking, and that happens below.
   const cmp = (a, b) => {
     if (b.points !== a.points) return b.points - a.points;
-    for (let i = 0; i < POINTS_BY_RANK.length; i += 1) {
+    for (let i = 0; i < pointsByRank.length; i += 1) {
       if (b.ranks[i] !== a.ranks[i]) return b.ranks[i] - a.ranks[i];
     }
     return 0;
@@ -61,7 +70,7 @@ function tally({ placeIds, ballots, randomIndex = defaultRandomIndex }) {
   const standings = [...byId.values()].sort((a, b) => cmp(a, b) || a.place_id - b.place_id);
 
   const base = {
-    method: 'points', points_by_rank: POINTS_BY_RANK, total_ballots: clean.length, standings, tie_break: null,
+    method: 'points', points_by_rank: pointsByRank, total_ballots: clean.length, standings, tie_break: null,
   };
   if (!placeIds.length) return { ...base, winner_place_id: null, reason: 'no_places' };
   if (!clean.length) return { ...base, winner_place_id: null, reason: 'no_ballots' };
@@ -80,6 +89,12 @@ function tally({ placeIds, ballots, randomIndex = defaultRandomIndex }) {
       ...base,
       winner_place_id: top.place_id,
       tie_break: { method: 'rank_count', rank: decidedAt + 1, among: tiedOnPoints.map((s) => s.place_id) },
+    };
+  }
+
+  if (tieMode === 'defer') {
+    return {
+      ...base, winner_place_id: null, tie_break: { method: 'pending', among: fullyTied.map((s) => s.place_id) },
     };
   }
 

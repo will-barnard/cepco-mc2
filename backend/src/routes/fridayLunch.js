@@ -62,7 +62,38 @@ router.delete('/rounds/:id/ballot', asyncHandler(async (req, res) => {
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
+// Orders (migration 096) -- only once an admin has opened them on a result.
+router.put('/rounds/:id/order', asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.saveOrder({ roundId, text: req.body?.text, user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
+router.delete('/rounds/:id/order', asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.removeOrder({ roundId, user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
 // --- admin ----------------------------------------------------------------
+
+router.post('/rounds/:id/orders/open', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.openOrders({ roundId });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
+router.post('/rounds/:id/orders/close', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.closeOrders({ roundId });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
+
+router.delete('/rounds/:id/orders/:orderId', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.removeOrder({ roundId, orderId: id(req.params.orderId, 'order id'), user: req.user });
+  res.json(await lunch.roundState(roundId, req.user));
+}));
 
 router.post('/rounds', requireAdmin, asyncHandler(async (req, res) => {
   const round = await lunch.openRound({ lunchDate: req.body?.lunch_date, user: req.user });
@@ -83,6 +114,20 @@ router.post('/rounds/:id/recount', requireAdmin, asyncHandler(async (req, res) =
   const roundId = id(req.params.id);
   const { changed } = await lunch.recountRound({ roundId });
   res.json({ ...(await lunch.roundState(roundId, req.user)), winner_changed: changed });
+}));
+
+// body: { top: N } -- send the closed round's top N places to a pick-one
+// runoff. Answers with the new runoff round's state.
+router.post('/rounds/:id/runoff', requireAdmin, asyncHandler(async (req, res) => {
+  const runoffId = await lunch.startRunoff({ roundId: id(req.params.id), top: req.body?.top, user: req.user });
+  res.status(201).json(await lunch.roundState(runoffId, req.user));
+}));
+
+// Settle a tied runoff by drawing one of the tied places at random.
+router.post('/rounds/:id/pick-random', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  await lunch.pickRandomWinner({ roundId });
+  res.json(await lunch.roundState(roundId, req.user));
 }));
 
 router.post('/rounds/:id/places', requireAdmin, asyncHandler(async (req, res) => {

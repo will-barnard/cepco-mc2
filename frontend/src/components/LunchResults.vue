@@ -66,14 +66,18 @@ const standings = computed(() => {
     .map((p) => ({ place_id: p.id, points: 0, ranks: pointsByRank.value.map(() => 0) }));
   return [...list, ...missing];
 });
+// Runoffs score [1]: pick one, one vote each (migration 095).
+const isRunoff = computed(() => isPoints.value && pointsByRank.value.length === 1);
+const pendingTie = computed(() => result.value.tie_break?.method === 'pending');
 const pointsNote = computed(() => {
   const tb = result.value.tie_break;
-  if (!tb) return null;
+  if (!tb || tb.method === 'pending') return null;
   const among = listNames(tb.among);
   const winner = nameOf.value[winnerId.value] || '?';
   if (tb.method === 'rank_count') {
     return `${among} tied on points. ${winner} had more ${RANK_LABEL[tb.rank - 1]}-choice votes, so it won.`;
   }
+  if (isRunoff.value) return `${among} tied on votes. ${winner} was picked at random.`;
   return `${among} tied on points and on every choice count. ${winner} was picked at random.`;
 });
 
@@ -84,12 +88,21 @@ const totalExhausted = computed(() => rounds.value[rounds.value.length - 1]?.exh
 <template>
   <div>
     <div class="lunch-winner">
-      <div class="muted small">Winner</div>
-      <div class="lunch-winner-name">{{ nameOf[winnerId] || 'No winner' }}</div>
+      <div class="muted small">{{ pendingTie ? 'Result' : 'Winner' }}</div>
+      <div v-if="pendingTie" class="lunch-winner-name">Tie: {{ listNames(result.tie_break.among) }}</div>
+      <div v-else class="lunch-winner-name">{{ nameOf[winnerId] || 'No winner' }}</div>
       <div class="muted small">
         <template v-if="result.reason === 'single_place'">Only one place was on the list, so there was no vote.</template>
         <template v-else-if="result.reason === 'no_ballots'">Nobody voted this week.</template>
         <template v-else-if="result.reason === 'no_places'">Nothing was on the list.</template>
+        <template v-else-if="pendingTie">
+          {{ result.total_ballots }} vote{{ result.total_ballots === 1 ? '' : 's' }}
+          · waiting on an admin to pick at random
+        </template>
+        <template v-else-if="isRunoff">
+          {{ result.total_ballots }} vote{{ result.total_ballots === 1 ? '' : 's' }}
+          · {{ standings[0]?.points || 0 }} for the winner
+        </template>
         <template v-else-if="isPoints">
           {{ result.total_ballots }} ballot{{ result.total_ballots === 1 ? '' : 's' }}
           · {{ standings[0]?.points || 0 }} points
@@ -101,7 +114,21 @@ const totalExhausted = computed(() => rounds.value[rounds.value.length - 1]?.exh
       </div>
     </div>
 
-    <div v-if="isPoints && result.total_ballots" class="lunch-results-table-wrap">
+    <div v-if="isRunoff && result.total_ballots" class="lunch-results-table-wrap">
+      <table class="lunch-results-table">
+        <thead><tr><th>Place</th><th class="right">Votes</th></tr></thead>
+        <tbody>
+          <tr v-for="s in standings" :key="s.place_id" :class="{ winner: s.place_id === winnerId }">
+            <td>{{ nameOf[s.place_id] || '?' }}</td>
+            <td class="right"><strong>{{ s.points }}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted small" style="margin: 8px 0 0">Runoff: everyone picks one, and most votes wins.</p>
+      <p v-if="pointsNote" class="small" style="margin: 6px 0 0">{{ pointsNote }}</p>
+    </div>
+
+    <div v-else-if="isPoints && result.total_ballots" class="lunch-results-table-wrap">
       <table class="lunch-results-table">
         <thead>
           <tr>
