@@ -248,7 +248,12 @@ async function saveCustomerEdit() {
       customerNotice.value = `Saved here, but couldn't push to Xero: ${updated.xero_push_error}`;
     } else {
       customerNoticeWarning.value = false;
-      customerNotice.value = updated.xero_contact_id ? 'Saved and pushed to Xero.' : 'Saved.';
+      // Fields changed in Xero since the last sync that came back with
+      // this save (services/xeroSync.js's pushCustomerToXero).
+      const pulled = (updated.xero_pulled || []).join(', ');
+      customerNotice.value = !updated.xero_contact_id ? 'Saved.'
+        : pulled ? `Saved and pushed to Xero. Also picked up the ${pulled} changed in Xero.`
+          : 'Saved and pushed to Xero.';
     }
   } catch (err) {
     error.value = err.message;
@@ -422,6 +427,13 @@ const when = (ts) => new Date(ts).toLocaleString();
           Xero: +{{ xeroSyncResult.xero_created }} created, {{ xeroSyncResult.xero_updated }} updated
           <span v-if="xeroSyncResult.conflicts.length"> · {{ xeroSyncResult.conflicts.length }} conflict(s)</span>
           <span v-if="xeroSyncResult.notes?.pushed"> · {{ xeroSyncResult.notes.pushed }} ticket note(s) posted</span>
+          <span v-if="xeroSyncResult.customer_notes?.posted"> · {{ xeroSyncResult.customer_notes.posted }} customer note(s) posted</span>
+          <span v-if="xeroSyncResult.customer_notes?.failed" style="color: var(--amber)">
+            · {{ xeroSyncResult.customer_notes.failed }} customer note(s) failed
+          </span>
+          <span v-if="xeroSyncResult.customer_notes?.waiting">
+            · {{ xeroSyncResult.customer_notes.waiting }} customer note(s) waiting for the next sync
+          </span>
           <span v-if="xeroSyncResult.notes?.failed" style="color: var(--amber)">
             · {{ xeroSyncResult.notes.failed }} note(s) failed
           </span>

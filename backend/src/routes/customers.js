@@ -6,7 +6,7 @@ const catalog = require('../services/instrumentCatalog');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler, badRequest, notFound } = require('../middleware/errors');
 const {
-  pushCustomerToXero, createCustomerInXero, ADDRESS_FIELDS,
+  pushCustomerToXero, pushCustomerNotes, createCustomerInXero, ADDRESS_FIELDS,
 } = require('../services/xeroSync');
 const { contactHistory } = require('../services/ticketNotes');
 const config = require('../config');
@@ -163,6 +163,10 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   // whole whenever any part of it is sent -- clearing "Apt 2" has to be
   // possible, and COALESCE can't express "set this back to empty".
   const address = addressFromBody(b);
+  // The row as it was, so the Xero push can send only what this edit
+  // changed (services/xeroSync.js's pushCustomerToXero).
+  const { rows: before } = await query('SELECT * FROM customers WHERE id = $1', [req.params.id]);
+  if (!before[0]) throw notFound('Customer not found');
   const { rows } = await query(
     `UPDATE customers SET
        name = COALESCE($2, name), email = COALESCE($3, email),
@@ -190,17 +194,25 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   // succeeded and stays that way. Surface the failure to the caller
   // instead so the edit form can show it as a warning alongside the
   // otherwise-successful save.
+  //
+  // xero_pulled lists anything that had been changed in Xero since the last
+  // sync and came back into MC2 with this save (e.g. a name's spelling
+  // fixed in Xero), so the form can say so.
   let xeroPushError = null;
+  let xeroPulled = [];
   if (customer.xero_contact_id) {
     try {
-      await pushCustomerToXero(customer);
-      customer = { ...customer, xero_synced_at: new Date().toISOString() };
+      const pushed = await pushCustomerToXero(customer, before[0]);
+      customer = pushed.customer;
+      xeroPulled = pushed.pulled;
+      // Customer notes go to the contact's History & Notes (migration 099).
+      await pushCustomerNotes(customer);
     } catch (err) {
       xeroPushError = err.message;
     }
   }
 
-  res.json({ ...customer, xero_push_error: xeroPushError });
+  res.json({ ...customer, xero_push_error: xeroPushError, xero_pulled: xeroPulled });
 }));
 
 // Xero's own History & Notes for this customer's linked contact -- read

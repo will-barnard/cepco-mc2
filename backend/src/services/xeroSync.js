@@ -64,6 +64,42 @@ const xero = require('../xero');
 const settings = require('./settings');
 const { pushPendingNotes } = require('./ticketNotes');
 
+// --- Xero dates ---------------------------------------------------------
+
+/**
+ * Xero's JSON dates are Microsoft-style strings, "/Date(1573755038314+0000)/",
+ * not ISO -- `new Date()` on one is an Invalid Date, and every comparison
+ * against an Invalid Date is false. The sync used to do exactly that with
+ * UpdatedDateUTC, so "changed in Xero since the last sync" was never true
+ * for a linked contact: an edit made in Xero (a name's spelling fixed,
+ * shop feedback Nov 2026) was never pulled, and the next MC2 edit pushed
+ * the old value back over it. Returns a Date, or null if unparseable.
+ */
+function xeroDate(value) {
+  if (!value) return null;
+  const m = /\/Date\((-?\d+)/.exec(String(value));
+  const d = m ? new Date(Number(m[1])) : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// A push stamps xero_synced_at a moment *after* Xero has stamped its own
+// UpdatedDateUTC for that same push -- but the two come from different
+// clocks. Without some slack, Xero's clock running a second ahead would
+// make every push read as "changed in Xero" on the next sync. A real edit
+// in Xero within this window of an MC2 push is not a realistic case.
+const CLOCK_SLACK_MS = 15_000;
+
+/** Has the Xero contact changed since `syncedAt` (MC2's last reconcile)? */
+function xeroChangedSince(xc, syncedAt) {
+  if (!syncedAt) return true;
+  const updated = xeroDate(xc.UpdatedDateUTC);
+  if (!updated) {
+    console.warn(`[xero-sync] unreadable UpdatedDateUTC on ${xc.ContactID}: ${xc.UpdatedDateUTC}`);
+    return false;
+  }
+  return updated.getTime() > new Date(syncedAt).getTime() + CLOCK_SLACK_MS;
+}
+
 // --- field mapping -----------------------------------------------------
 
 function phoneFromXero(xc) {
@@ -366,7 +402,7 @@ async function runXeroSync() {
     }
 
     const lastSync = mc.xero_synced_at ? new Date(mc.xero_synced_at) : null;
-    const xeroChanged = !lastSync || new Date(xc.UpdatedDateUTC) > lastSync;
+    const xeroChanged = xeroChangedSince(xc, lastSync);
     const mcChanged = !lastSync || new Date(mc.updated_at) > lastSync;
 
     let action = 'unchanged';
@@ -391,7 +427,7 @@ async function runXeroSync() {
       // which still won't blank out an MC2 field Xero doesn't have.
       action = 'pull';
     } else if (xeroChanged && mcChanged) {
-      action = new Date(xc.UpdatedDateUTC) >= new Date(mc.updated_at) ? 'pull' : 'push';
+      action = (xeroDate(xc.UpdatedDateUTC)?.getTime() ?? 0) >= new Date(mc.updated_at).getTime() ? 'pull' : 'push';
       conflicts.push(
         `${mc.name || xc.Name}: both sides changed since the last sync — kept the `
         + `${action === 'pull' ? 'Xero' : 'MC2'} version (more recently updated).`,
@@ -476,8 +512,17 @@ async function runXeroSync() {
   } catch (err) {
     notes = { error: err.message };
   }
+  // Customer notes (migration 099), same report-don't-throw rule.
+  let customerNotes;
+  try {
+    customerNotes = await pushPendingCustomerNotes();
+  } catch (err) {
+    customerNotes = { error: err.message };
+  }
 
-  return { ...stats, conflicts, notes };
+  return {
+    ...stats, conflicts, notes, customer_notes: customerNotes,
+  };
 }
 
 /**
@@ -576,24 +621,128 @@ async function fillMissingFieldsFromXero() {
   };
 }
 
+// Which customers columns feed which Xero contact fields -- what an MC2
+// edit is allowed to send (pushCustomerToXero), and what it may pull back.
+const FIELD_GROUPS = {
+  name: { columns: ['name'], xeroKeys: ['Name', 'FirstName', 'LastName'] },
+  email: { columns: ['email'], xeroKeys: ['EmailAddress'] },
+  phone: { columns: ['phone'], xeroKeys: ['Phones'] },
+  address: { columns: ADDRESS_FIELDS, xeroKeys: ['Addresses'] },
+};
+const norm = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
 /**
- * Push one customer's current MC2 field values to its linked Xero
- * contact right away, outside the regular sync's own schedule — used by
- * the customer edit form (routes/customers.js's PATCH) so an edit made
- * here reaches Xero immediately rather than waiting for "Sync now" or
- * the nightly run. xero_synced_at is stamped afterwards in a separate
- * statement, same as runXeroSync()'s own push branch (stampLink) — it
- * doesn't need to land in the exact same instant as the edit's own
- * UPDATE, just at or after it, so the next regular sync's mcChanged
- * check (a strict `>` compare) reads this edit as already reconciled
- * rather than pushing it again.
+ * Push an MC2 edit to its linked Xero contact right away (routes/
+ * customers.js's PATCH), so it doesn't wait for "Sync now" or the nightly
+ * run.
+ *
+ * Only the fields the edit actually changed go up (`previous` is the row
+ * before the edit). Sending the whole record used to overwrite anything
+ * fixed in Xero that hadn't synced back yet -- a name's spelling corrected
+ * in Xero was put back the moment someone edited that customer's phone in
+ * MC2 (shop feedback, Nov 2026).
+ *
+ * And if the contact *has* changed in Xero since the last sync, the fields
+ * this edit didn't touch are pulled into MC2 in the same step, so the two
+ * end up fully in agreement and xero_synced_at can honestly be stamped.
+ * Stamping without that pull would mark Xero's edit as reconciled and the
+ * next sync would never bring it over.
+ *
+ * Without `previous` (no before-row available) the whole record is pushed,
+ * the old behaviour. Returns { customer, pulled: [group names] }.
  */
-async function pushCustomerToXero(customer) {
+async function pushCustomerToXero(customer, previous = null) {
   if (!customer.xero_contact_id) throw new Error('Customer is not linked to Xero');
-  // Read it first so a Primary person set by hand in Xero survives the push.
+  // Read it first: for the change check, and so a Primary person set by
+  // hand in Xero survives the push.
   const existing = await xero.getContact(customer.xero_contact_id);
-  await xero.updateContact(customer.xero_contact_id, xeroPayloadFromMc(customer, existing));
-  await query('UPDATE customers SET xero_synced_at = now() WHERE id = $1', [customer.id]);
+  const full = xeroPayloadFromMc(customer, existing);
+
+  const edited = previous
+    ? Object.keys(FIELD_GROUPS).filter((g) => FIELD_GROUPS[g].columns.some((c) => norm(previous[c]) !== norm(customer[c])))
+    : Object.keys(FIELD_GROUPS);
+  const payload = {};
+  for (const g of edited) {
+    for (const key of FIELD_GROUPS[g].xeroKeys) if (key in full) payload[key] = full[key];
+  }
+  if (Object.keys(payload).length) await xero.updateContact(customer.xero_contact_id, payload);
+
+  const pulled = [];
+  const fromXero = mcFieldsFromXero(existing);
+  if (previous && existing && xeroChangedSince(existing, customer.xero_synced_at)) {
+    for (const g of Object.keys(FIELD_GROUPS)) {
+      if (edited.includes(g)) continue; // eslint-disable-line no-continue
+      if (g === 'address' && !hasAddress(fromXero)) continue; // eslint-disable-line no-continue
+      if (FIELD_GROUPS[g].columns.some((c) => norm(customer[c]) !== norm(fromXero[c]))) pulled.push(g);
+    }
+  }
+  const columns = pulled.flatMap((g) => FIELD_GROUPS[g].columns);
+  const sets = columns.map((c, i) => `${c} = $${i + 2}`);
+  const { rows } = await query(
+    `UPDATE customers SET ${[...sets, 'xero_synced_at = now()'].join(', ')} WHERE id = $1 RETURNING *`,
+    [customer.id, ...columns.map((c) => fromXero[c])],
+  );
+  return { customer: rows[0], pulled };
+}
+
+const CUSTOMER_NOTE_PREFIX = '[MC2 Customer notes] '; // '[MC2' -> hidden from ticket read-back (ticketNotes.js)
+const CUSTOMER_NOTE_MAX = 2000; // same cap as ticket notes
+
+/**
+ * Post a linked customer's notes to their Xero contact's History & Notes
+ * when they've changed since the last post (migration 099). Xero entries
+ * can't be edited or deleted, so each change is a new entry, and clearing
+ * the notes posts nothing. Throws on a Xero failure; nothing is recorded,
+ * so the next sync's catch-up tries again.
+ */
+async function pushCustomerNotes(customer) {
+  if (!customer.xero_contact_id) return { posted: false };
+  const current = norm(customer.notes) || null;
+  if (current === (norm(customer.xero_notes_pushed) || null)) return { posted: false };
+  if (current) {
+    const room = CUSTOMER_NOTE_MAX - CUSTOMER_NOTE_PREFIX.length;
+    const body = current.length > room ? `${current.slice(0, room - 1)}…` : current;
+    await xero.addContactNote(customer.xero_contact_id, `${CUSTOMER_NOTE_PREFIX}${body}`);
+  }
+  // Recording this bumps updated_at (touch trigger), which on its own
+  // would read as "changed in MC2" next sync. Re-stamp xero_synced_at in
+  // the same statement -- but only if the row was already in sync, so an
+  // unrelated unsynced edit isn't masked.
+  await query(
+    `UPDATE customers SET xero_notes_pushed = $2,
+            xero_synced_at = CASE WHEN xero_synced_at IS NOT NULL AND xero_synced_at >= updated_at
+                                  THEN now() ELSE xero_synced_at END
+      WHERE id = $1`,
+    [customer.id, current],
+  );
+  return { posted: Boolean(current) };
+}
+
+// Xero allows 60 calls a minute; a first sync after migration 099 may have
+// a backlog of customers with notes. Post at most this many per run and
+// leave the rest for the next one.
+const NOTES_PER_RUN = 40;
+
+/** The sync's catch-up for customer notes that haven't reached Xero. */
+async function pushPendingCustomerNotes() {
+  const { rows } = await query(
+    `SELECT * FROM customers
+      WHERE xero_contact_id IS NOT NULL
+        AND COALESCE(btrim(notes), '') <> COALESCE(btrim(xero_notes_pushed), '')
+      ORDER BY id`,
+  );
+  const stats = { posted: 0, failed: 0, waiting: 0 };
+  for (const c of rows) {
+    if (stats.posted + stats.failed >= NOTES_PER_RUN) { stats.waiting += 1; continue; } // eslint-disable-line no-continue
+    try {
+      const r = await pushCustomerNotes(c); // eslint-disable-line no-await-in-loop
+      if (r.posted) stats.posted += 1;
+    } catch (err) {
+      stats.failed += 1;
+      if (err.status === 429) { stats.waiting += rows.length - rows.indexOf(c) - 1; break; }
+    }
+  }
+  return stats;
 }
 
 /**
@@ -608,10 +757,17 @@ async function pushCustomerToXero(customer) {
 async function createCustomerInXero(customer) {
   if (customer.xero_contact_id) throw new Error('Customer is already linked to Xero');
   const created = await xero.createContact(xeroPayloadFromMc(customer));
-  await query(
-    'UPDATE customers SET xero_contact_id = $1, xero_synced_at = now() WHERE id = $2',
+  const { rows } = await query(
+    'UPDATE customers SET xero_contact_id = $1, xero_synced_at = now() WHERE id = $2 RETURNING *',
     [created.ContactID, customer.id],
   );
+  // The contact exists either way; a notes failure here is retried by the
+  // next sync's catch-up rather than reported as a failed create.
+  try {
+    await pushCustomerNotes(rows[0]);
+  } catch (err) {
+    console.warn(`[xero] customer ${customer.id}: notes not posted yet: ${err.message}`);
+  }
   return created.ContactID;
 }
 
@@ -685,5 +841,7 @@ module.exports = {
   structuredAddressFromXero,
   fillMissingFieldsFromXero,
   pushCustomerToXero,
+  pushCustomerNotes,
   createCustomerInXero,
+  xeroDate,
 };

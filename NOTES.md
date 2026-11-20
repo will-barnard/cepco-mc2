@@ -4837,6 +4837,48 @@ them.
 - Not included: menu links per place, collecting individual orders, who's
   paying, dietary notes.
 
+### 2.114 Fix: Xero edits never synced back; customer notes never reached Xero (migration 099)
+
+**Shop reports.** (1) A customer's notes typed in MC2 didn't show in Xero.
+(2) A name created in MC2, then corrected in Xero, stayed misspelled in MC2
+after a sync.
+
+**(2) Cause: date parsing.** Xero's JSON dates are `/Date(1573755038314+0000)/`,
+and the sync did `new Date(xc.UpdatedDateUTC)` on that, which gives an
+Invalid Date. Every comparison against an Invalid Date is false, so "changed
+in Xero since the last sync" was never true for a linked contact. Xero-side
+edits were never pulled, and a conflict always resolved to MC2.
+`xeroDate()` / `xeroChangedSince()` in `services/xeroSync.js` parse the
+real format, with a 15s allowance for the two servers' clocks. *First sync
+after deploy:* any linked contact edited in Xero since its last sync gets
+pulled now, so check that sync's summary.
+
+**Related gap, fixed too.** Saving a customer in MC2 pushed the *whole*
+record to Xero immediately, which overwrote a Xero fix that hadn't synced
+back yet. For example, a name corrected in Xero was put back as soon as
+someone edited that customer's phone in MC2. `pushCustomerToXero(customer,
+previous)` now sends only the fields the edit changed. If the contact *was*
+edited in Xero since the last sync, the fields this edit didn't touch are
+pulled back into MC2 in the same save, and the form says "Also picked up
+the name changed in Xero." That way stamping `xero_synced_at` is honest.
+
+**(1) Cause: notes were never sent at all.** Xero's API has no notes field
+on a contact. Customer notes now go to the contact's **History & Notes**
+as `[MC2 Customer notes] ...`, the same place ticket notes go, and they're
+hidden from the ticket page's Xero read-back by the `[MC2` prefix. They're
+posted on create, on edit, and by a sync catch-up
+(`customers.xero_notes_pushed` records what was last posted, so each change
+goes up once). Xero entries can't be edited or deleted, so each notes edit
+adds a new entry, and clearing notes posts nothing. *First sync after
+deploy* posts the backlog for every linked customer who has notes, at most
+40 per run (Xero allows 60 calls a minute). The rest wait for the next run,
+and a 429 stops the run early. The sync summary shows posted / failed /
+waiting counts.
+
+**Not changed:** notes typed in Xero don't come back into the customer's
+MC2 notes field. They already show on the ticket page from Xero's history,
+and Xero's history mixes in its own audit entries.
+
 ## 4. Suggested first moves after deploy
 
 
