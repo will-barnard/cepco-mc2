@@ -4758,11 +4758,23 @@ suggesting -> reviewing -> voting -> closed (or cancelled at any point).
 - **Voting**: tap to rank 1-3. Ballots can be changed or withdrawn until
   close. "X of Y have voted" counts active employees.
 - **Tally** (`services/lunchTally.js`, pure, `test/lunchTally.mjs`):
-  instant-runoff, where a majority means more than half of the ballots
-  still counting. Ties for last: fewer total mentions on any ballot goes
-  out first, then random, and the result says which was used. Zero-vote
-  places drop together. The round-by-round result is frozen on
-  `lunch_rounds.result` at close, so it's never recomputed.
+  points, 1st = 3 / 2nd = 2 / 3rd = 1, most points wins. Ties on points go
+  to more 1st-choice votes, then more 2nd-choice votes, then random, and the
+  result says which settled it. The standings are frozen on
+  `lunch_rounds.result` at close (`method: 'points'`), so they're never
+  recomputed.
+  *Changed after the first week:* the vote started as instant-runoff ranked
+  choice. People expected 2nd and 3rd picks to count, and under IRV a
+  2nd-only place shows 0 and often drops out before those picks are ever
+  looked at. Rounds closed under IRV keep their stored result (no
+  `method`, has `rounds`), and `LunchResults.vue` still renders those as
+  the round-by-round table they were decided by, with an admin **Recount
+  with points** button (`POST /lunch/rounds/:id/recount`). The recount runs
+  on the stored ballots, keeps `closed_at`, and records `recounted_at` plus
+  the old winner in the result. It re-sends the winner email only if the
+  winner changed, and refuses rounds that are already points-counted, so a
+  random tie can't be re-rolled. Migration 094's comments
+  still say "ranked choice"; it was already applied, so it wasn't edited.
 - **Shortcuts**: one place on the list -> it wins when voting "opens", no
   vote. An empty list can't open voting.
 - **Emails** to all active staff: suggestions open, voting open, winner.

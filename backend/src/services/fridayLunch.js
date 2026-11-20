@@ -13,11 +13,12 @@
 const config = require('../config');
 const { query, withTransaction } = require('../db');
 const { badRequest, notFound, conflict } = require('../middleware/errors');
-const { tally } = require('./lunchTally');
+const { tally, POINTS_BY_RANK } = require('./lunchTally');
 const { notifyAll } = require('./fridayLunchEmail');
 
 const MAX_SUGGESTIONS = 2;
-const MAX_RANKS = 3;
+// One rank per points value (3/2/1) -- see services/lunchTally.js.
+const MAX_RANKS = POINTS_BY_RANK.length;
 const MAX_NAME_LENGTH = 80;
 
 // Which admin moves are allowed from where. voting -> reviewing is left out
@@ -219,7 +220,13 @@ async function setPhase({ roundId, to }) {
                   winner_place_id = $2, result = $3
             WHERE id = $1`,
           [round.id, rows[0].id, {
-            winner_place_id: rows[0].id, total_ballots: 0, mentions: {}, rounds: [], reason: 'single_place',
+            method: 'points',
+            points_by_rank: POINTS_BY_RANK,
+            winner_place_id: rows[0].id,
+            total_ballots: 0,
+            standings: [],
+            tie_break: null,
+            reason: 'single_place',
           }],
         );
         return 'closed';
@@ -239,6 +246,39 @@ async function setPhase({ roundId, to }) {
   });
 
   if (emailKind) notifyAll(roundId, emailKind);
+}
+
+/**
+ * Re-runs the current tally on a closed round's stored ballots. Exists for
+ * rounds closed under the original ranked-choice count (result has no
+ * `method`), so they can be re-decided by points. Points rounds are refused:
+ * recounting one changes nothing except re-rolling a random tie-break.
+ *
+ * closed_at is left alone (that's when voting actually closed); the result
+ * records when and from what it was recounted. The winner email goes out
+ * again only if the winner changed -- otherwise nobody needs to hear it.
+ */
+async function recountRound({ roundId }) {
+  const outcome = await withTransaction(async (client) => {
+    const round = await lockRound(client, roundId);
+    requirePhase(round, ['closed'], 'Only a closed round can be recounted');
+    if (round.result?.method === 'points') throw conflict('This round was already counted with points');
+    if (round.result?.reason === 'single_place') throw conflict('Only one place was on the list; there is nothing to recount');
+
+    const { rows: places } = await client.query('SELECT id FROM lunch_places WHERE round_id = $1', [round.id]);
+    const { rows: ballots } = await client.query('SELECT choices FROM lunch_ballots WHERE round_id = $1', [round.id]);
+    const result = tally({ placeIds: places.map((p) => p.id), ballots: ballots.map((b) => b.choices) });
+    result.recounted_at = new Date().toISOString();
+    result.recounted_from = { method: 'ranked_choice', winner_place_id: round.winner_place_id };
+
+    await client.query(
+      'UPDATE lunch_rounds SET winner_place_id = $2, result = $3 WHERE id = $1',
+      [round.id, result.winner_place_id, result],
+    );
+    return { changed: result.winner_place_id !== round.winner_place_id };
+  });
+  if (outcome.changed) notifyAll(roundId, 'closed');
+  return outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +466,7 @@ module.exports = {
   history,
   openRound,
   setPhase,
+  recountRound,
   addPlace,
   renamePlace,
   mergePlace,

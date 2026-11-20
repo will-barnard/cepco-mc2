@@ -176,6 +176,33 @@ async function openPast(row) {
   error.value = '';
   try { pastState.value = await api.get(`/lunch/rounds/${row.id}`); } catch (err) { error.value = err.message; }
 }
+// --- admin: recount rounds closed under the old ranked-choice count -------
+const canRecount = (st) => auth.isAdmin && st?.round.phase === 'closed'
+  && st.round.result?.method !== 'points' && st.round.result?.reason !== 'single_place';
+const recountNotice = ref('');
+
+async function recount(st) {
+  if (!confirm('Recount this round with points (1st = 3, 2nd = 2, 3rd = 1) using the ballots people cast? '
+    + 'If the winner changes, everyone gets an email with the new result.')) return;
+  error.value = '';
+  recountNotice.value = '';
+  busy.value = true;
+  try {
+    const next = await api.post(`/lunch/rounds/${st.round.id}/recount`);
+    const winner = next.places.find((p) => p.id === next.round.winner_place_id)?.name || 'no winner';
+    recountNotice.value = next.winner_changed
+      ? `Recounted with points. The winner is now ${winner}, and everyone's been emailed.`
+      : `Recounted with points. ${winner} still wins, so no email went out.`;
+    if (state.value?.round.id === next.round.id) state.value = next;
+    if (pastState.value?.round.id === next.round.id) pastState.value = next;
+    loadHistory();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    busy.value = false;
+  }
+}
+
 // A close moves this week into history.
 watch(phase, (p, prev) => { if (prev && p !== prev && ['closed', 'cancelled'].includes(p)) loadHistory(); });
 
@@ -196,6 +223,7 @@ onMounted(() => { load(); loadHistory(); });
     </div>
 
     <div v-if="error" class="alert" style="margin-bottom: 16px">{{ error }}</div>
+    <div v-if="recountNotice" class="alert ok" style="margin-bottom: 16px">{{ recountNotice }}</div>
 
     <div v-if="loading" class="empty">Loading…</div>
 
@@ -265,8 +293,9 @@ onMounted(() => { load(); loadHistory(); });
           <!-- voting -->
           <template v-else-if="phase === 'voting'">
             <p class="muted small" style="margin-top: 0">
-              Tap places in order: your favourite first. Rank 1 to {{ limits.ranks }}.
-              Tap a ranked place again to take it off. You can change your vote until voting closes.
+              Tap places in order: your favourite first. 1st gets 3 points, 2nd gets 2, 3rd gets 1,
+              and the most points wins. Tap a ranked place again to take it off.
+              You can change your vote until voting closes.
             </p>
             <div class="lunch-ballot">
               <button
@@ -293,7 +322,13 @@ onMounted(() => { load(); loadHistory(); });
           </template>
 
           <!-- closed -->
-          <LunchResults v-else-if="phase === 'closed'" :state="state" />
+          <template v-else-if="phase === 'closed'">
+            <LunchResults :state="state" />
+            <div v-if="canRecount(state)" class="row" style="margin-top: 14px">
+              <button class="small" :disabled="busy" @click="recount(state)">Recount with points</button>
+              <span class="muted small">This round was counted with ranked choice.</span>
+            </div>
+          </template>
 
           <!-- cancelled -->
           <p v-else-if="phase === 'cancelled'" class="muted" style="margin: 0">
@@ -393,6 +428,9 @@ onMounted(() => { load(); loadHistory(); });
           </button>
           <div v-if="pastState?.round.id === h.id && h.phase === 'closed'" style="padding: 8px 0 14px">
             <LunchResults :state="pastState" />
+            <button v-if="canRecount(pastState)" class="small" style="margin-top: 12px" :disabled="busy" @click="recount(pastState)">
+              Recount with points
+            </button>
           </div>
         </div>
       </div>

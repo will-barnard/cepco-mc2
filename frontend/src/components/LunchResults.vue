@@ -1,9 +1,12 @@
 <script setup>
 /**
- * Round-by-round ranked-choice result for one Friday Lunch round. Reads the
- * frozen lunch_rounds.result (services/lunchTally.js) -- never recomputes,
- * so what's shown is exactly what decided it. Counts only; no names of who
- * voted for what exist anywhere in the API.
+ * Result for one Friday Lunch round. Reads the frozen lunch_rounds.result
+ * (services/lunchTally.js) -- never recomputes, so what's shown is exactly
+ * what decided it. Counts only; who voted for what isn't in the API at all.
+ *
+ * Two shapes: `method: 'points'` (3/2/1, current) shows a standings table;
+ * anything older is a ranked-choice result from before the switch (Nov
+ * 2026) and keeps its round-by-round table, since that's how it was decided.
  */
 import { computed } from 'vue';
 
@@ -49,6 +52,32 @@ const notes = computed(() => rounds.value
   })
   .filter(Boolean));
 
+// --- points (current) ------------------------------------------------------
+const isPoints = computed(() => result.value.method === 'points');
+const pointsByRank = computed(() => result.value.points_by_rank || [3, 2, 1]);
+const RANK_LABEL = ['1st', '2nd', '3rd'];
+// Standings arrive sorted best-first; places added to the result before
+// any ballots (none today) would just be missing, so fall back to the list.
+const standings = computed(() => {
+  const list = result.value.standings || [];
+  const seen = new Set(list.map((s) => s.place_id));
+  const missing = props.state.places
+    .filter((p) => !seen.has(p.id))
+    .map((p) => ({ place_id: p.id, points: 0, ranks: pointsByRank.value.map(() => 0) }));
+  return [...list, ...missing];
+});
+const pointsNote = computed(() => {
+  const tb = result.value.tie_break;
+  if (!tb) return null;
+  const among = listNames(tb.among);
+  const winner = nameOf.value[winnerId.value] || '?';
+  if (tb.method === 'rank_count') {
+    return `${among} tied on points. ${winner} had more ${RANK_LABEL[tb.rank - 1]}-choice votes, so it won.`;
+  }
+  return `${among} tied on points and on every choice count. ${winner} was picked at random.`;
+});
+
+// --- ranked choice (results stored before the switch) ---------------------
 const totalExhausted = computed(() => rounds.value[rounds.value.length - 1]?.exhausted || 0);
 </script>
 
@@ -61,24 +90,59 @@ const totalExhausted = computed(() => rounds.value[rounds.value.length - 1]?.exh
         <template v-if="result.reason === 'single_place'">Only one place was on the list, so there was no vote.</template>
         <template v-else-if="result.reason === 'no_ballots'">Nobody voted this week.</template>
         <template v-else-if="result.reason === 'no_places'">Nothing was on the list.</template>
+        <template v-else-if="isPoints">
+          {{ result.total_ballots }} ballot{{ result.total_ballots === 1 ? '' : 's' }}
+          · {{ standings[0]?.points || 0 }} points
+        </template>
         <template v-else>
           {{ result.total_ballots }} ballot{{ result.total_ballots === 1 ? '' : 's' }}
-          · decided in {{ rounds.length }} round{{ rounds.length === 1 ? '' : 's' }}
+          · ranked choice, decided in {{ rounds.length }} round{{ rounds.length === 1 ? '' : 's' }}
         </template>
       </div>
     </div>
 
-    <div v-if="rounds.length" class="lunch-results-table-wrap">
+    <div v-if="isPoints && result.total_ballots" class="lunch-results-table-wrap">
       <table class="lunch-results-table">
         <thead>
           <tr>
             <th>Place</th>
+            <th class="right">Points</th>
+            <th v-for="(p, i) in pointsByRank" :key="i" class="right">{{ RANK_LABEL[i] }} ({{ p }} pt{{ p === 1 ? '' : 's' }})</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="s in standings" :key="s.place_id" :class="{ winner: s.place_id === winnerId }">
+            <td>{{ nameOf[s.place_id] || '?' }}</td>
+            <td class="right"><strong>{{ s.points }}</strong></td>
+            <td v-for="(n, i) in s.ranks" :key="i" class="right" :class="{ muted: !n }">{{ n }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted small" style="margin: 8px 0 0">
+        Each ballot gives {{ pointsByRank.join(' / ') }} points to its 1st / 2nd / 3rd choice.
+        The rank columns are how many people put a place there.
+      </p>
+      <p v-if="pointsNote" class="small" style="margin: 6px 0 0">{{ pointsNote }}</p>
+      <p v-if="result.recounted_at" class="muted small" style="margin: 6px 0 0">
+        Recounted with points on {{ new Date(result.recounted_at).toLocaleString() }}. It was first counted with ranked choice{{
+          result.recounted_from?.winner_place_id && result.recounted_from.winner_place_id !== winnerId
+            ? `, which picked ${nameOf[result.recounted_from.winner_place_id] || '?'}` : '' }}.
+      </p>
+    </div>
+
+    <div v-else-if="rounds.length" class="lunch-results-table-wrap">
+      <table class="lunch-results-table">
+        <thead>
+          <tr>
+            <th>Place</th>
+            <th class="right" title="Ballots that ranked this place anywhere: 1st, 2nd or 3rd">On ballots</th>
             <th v-for="(r, i) in rounds" :key="i" class="right">Round {{ i + 1 }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id" :class="{ winner: row.id === winnerId }">
             <td>{{ row.name }}</td>
+            <td class="right muted">{{ result.mentions?.[row.id] ?? 0 }}</td>
             <td v-for="(r, i) in rounds" :key="i" class="right">
               <template v-if="r.counts[row.id] !== undefined">
                 <span :class="{ 'lunch-out': (r.eliminated || []).includes(row.id) }">{{ r.counts[row.id] }}</span>
@@ -88,13 +152,17 @@ const totalExhausted = computed(() => rounds.value[rounds.value.length - 1]?.exh
           </tr>
           <tr v-if="totalExhausted" class="muted">
             <td>Ballots with no choices left</td>
+            <td />
             <td v-for="(r, i) in rounds" :key="i" class="right">{{ r.exhausted }}</td>
           </tr>
         </tbody>
       </table>
       <p class="muted small" style="margin: 8px 0 0">
-        Each round, every ballot counts for its highest-ranked place still in the running.
-        Struck-through numbers were last that round and went out.
+        <strong>On ballots</strong> is how many people ranked a place at all (1st, 2nd or 3rd).
+        The round columns are different: each ballot counts once per round, for its highest-ranked
+        place still in the running. Round 1 is first choices only, so a place lots of people ranked
+        2nd can show 0 there. Its votes count once the places ranked above it are out.
+        Struck-through numbers were last that round and went out; · means already out.
         <template v-if="totalExhausted">
           A ballot stops counting once all of its picks are out.
         </template>

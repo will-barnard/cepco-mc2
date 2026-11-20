@@ -1,30 +1,26 @@
 'use strict';
 
 /**
- * Ranked-choice (instant-runoff) tally for Friday Lunch. Pure: no database,
- * no clock -- services/fridayLunch.js feeds it the frozen place list and
- * every ballot at close, and stores what it returns on lunch_rounds.result.
+ * Points tally for Friday Lunch (shop decision, Nov 2026, replacing the
+ * first-week ranked-choice count -- people expected 2nd and 3rd choices to
+ * count for something, and under instant-runoff they often never do).
+ * Pure: services/fridayLunch.js feeds it the frozen place list and every
+ * ballot at close, and stores what it returns on lunch_rounds.result.
  *
- * Each round, every ballot counts for its highest-ranked place still in the
- * running. A place with more than half of the ballots still counting wins.
- * Otherwise the last-place place is eliminated and its ballots move to their
- * next choice. A ballot whose choices have all been eliminated is
- * "exhausted" and stops counting -- with only three ranks allowed that will
- * happen, and the result reports how many.
+ * Scoring: 1st choice 3 points, 2nd 2, 3rd 1 (POINTS_BY_RANK). A ballot that
+ * only ranks one place still gives it 3 -- ranking fewer places never
+ * weakens your top pick. Most points wins.
  *
- * Ties for last (shop decision, Nov 2026): eliminate whichever of the tied
- * places appears on fewer ballots at any rank ("count-back"); if that's still
- * tied, pick at random and say so in the result. A 50/50 final round is the
- * same case -- the two finalists are tied for last -- so it needs no rule of
- * its own.
+ * Ties on points: more 1st-choice votes wins, then more 2nd-choice votes,
+ * then random -- and the result says which settled it.
  *
- * Every place with zero votes in a round is dropped together rather than one
- * per round (they can't affect anyone else's count), which keeps the
- * round-by-round table short when a lot got suggested.
+ * Results stored before the switch have no `method` and a `rounds` array;
+ * components/LunchResults.vue still renders those as they were counted.
  */
 
 const crypto = require('crypto');
 
+const POINTS_BY_RANK = [3, 2, 1];
 const defaultRandomIndex = (n) => crypto.randomInt(n);
 
 /**
@@ -32,72 +28,68 @@ const defaultRandomIndex = (n) => crypto.randomInt(n);
  * @param {number[]} input.placeIds   every place on the frozen list
  * @param {number[][]} input.ballots  ranked place ids, best first
  * @param {(n:number)=>number} [input.randomIndex] 0 <= result < n; injectable for tests
- * @returns {{winner_place_id:number|null, total_ballots:number,
- *            mentions:Object<string,number>, rounds:object[], reason?:string}}
  */
 function tally({ placeIds, ballots, randomIndex = defaultRandomIndex }) {
   const known = new Set(placeIds);
-  // Defensive: drop ids that aren't on the list and repeats within a ballot.
-  // The ballot endpoint already rejects both; this just means a bad row can
-  // never crash a close.
+  // Defensive: drop unknown ids and repeats, and anything past the scored
+  // ranks. The ballot endpoint already rejects all three.
   const clean = ballots
-    .map((b) => [...new Set((b || []).filter((id) => known.has(id)))])
+    .map((b) => [...new Set((b || []).filter((id) => known.has(id)))].slice(0, POINTS_BY_RANK.length))
     .filter((b) => b.length);
 
-  const mentions = Object.fromEntries(placeIds.map((id) => [id, 0]));
-  for (const b of clean) for (const id of b) mentions[id] += 1;
+  const byId = new Map(placeIds.map((id) => [id, {
+    place_id: id, points: 0, ranks: POINTS_BY_RANK.map(() => 0),
+  }]));
+  for (const b of clean) {
+    b.forEach((id, i) => {
+      const s = byId.get(id);
+      s.points += POINTS_BY_RANK[i];
+      s.ranks[i] += 1;
+    });
+  }
 
-  const base = { total_ballots: clean.length, mentions, rounds: [] };
+  // Best first: points, then 1st-choice count, then 2nd, ... Places still
+  // level after all that stay adjacent; only a tie *for first* needs
+  // breaking, and that happens below.
+  const cmp = (a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    for (let i = 0; i < POINTS_BY_RANK.length; i += 1) {
+      if (b.ranks[i] !== a.ranks[i]) return b.ranks[i] - a.ranks[i];
+    }
+    return 0;
+  };
+  const standings = [...byId.values()].sort((a, b) => cmp(a, b) || a.place_id - b.place_id);
+
+  const base = {
+    method: 'points', points_by_rank: POINTS_BY_RANK, total_ballots: clean.length, standings, tie_break: null,
+  };
   if (!placeIds.length) return { ...base, winner_place_id: null, reason: 'no_places' };
   if (!clean.length) return { ...base, winner_place_id: null, reason: 'no_ballots' };
 
-  const active = new Set(placeIds);
+  const top = standings[0];
+  const tiedOnPoints = standings.filter((s) => s.points === top.points);
+  if (tiedOnPoints.length === 1) return { ...base, winner_place_id: top.place_id };
 
-  for (;;) {
-    const counts = Object.fromEntries([...active].map((id) => [id, 0]));
-    let exhausted = 0;
-    for (const b of clean) {
-      const top = b.find((id) => active.has(id));
-      if (top === undefined) exhausted += 1;
-      else counts[top] += 1;
-    }
-    const continuing = clean.length - exhausted;
-    const round = { counts, exhausted, continuing, eliminated: [], tie_break: null };
-    base.rounds.push(round);
-
-    const ranked = [...active].sort((a, b) => counts[b] - counts[a]);
-    const leader = ranked[0];
-    if (counts[leader] * 2 > continuing || active.size === 1) {
-      return { ...base, winner_place_id: leader };
-    }
-
-    const zeros = [...active].filter((id) => counts[id] === 0);
-    let out;
-    if (zeros.length && zeros.length < active.size) {
-      out = zeros;
-    } else {
-      const min = Math.min(...[...active].map((id) => counts[id]));
-      let tied = [...active].filter((id) => counts[id] === min);
-      if (tied.length > 1) {
-        const fewest = Math.min(...tied.map((id) => mentions[id]));
-        const byMentions = tied.filter((id) => mentions[id] === fewest);
-        if (byMentions.length === 1) {
-          round.tie_break = { method: 'mentions', among: tied };
-          tied = byMentions;
-        } else {
-          // Sorted first so the same random draw always means the same place
-          // regardless of Set iteration order -- makes tests deterministic.
-          byMentions.sort((a, b) => a - b);
-          round.tie_break = { method: 'random', among: byMentions };
-          tied = [byMentions[randomIndex(byMentions.length)]];
-        }
-      }
-      out = tied;
-    }
-
-    round.eliminated = out;
-    for (const id of out) active.delete(id);
+  // Which rank's count first separated the leader from the rest of the
+  // points tie (0 = 1st choices, 1 = 2nd ...), if any did.
+  const fullyTied = tiedOnPoints.filter((s) => cmp(s, top) === 0);
+  if (fullyTied.length === 1) {
+    const runnerUp = tiedOnPoints[1];
+    const decidedAt = top.ranks.findIndex((n, i) => n !== runnerUp.ranks[i]);
+    return {
+      ...base,
+      winner_place_id: top.place_id,
+      tie_break: { method: 'rank_count', rank: decidedAt + 1, among: tiedOnPoints.map((s) => s.place_id) },
+    };
   }
+
+  // Sorted by id above, so the same draw always means the same place.
+  const pick = fullyTied[randomIndex(fullyTied.length)];
+  return {
+    ...base,
+    winner_place_id: pick.place_id,
+    tie_break: { method: 'random', among: fullyTied.map((s) => s.place_id) },
+  };
 }
 
-module.exports = { tally };
+module.exports = { tally, POINTS_BY_RANK };

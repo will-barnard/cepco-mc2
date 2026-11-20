@@ -77,6 +77,14 @@ router.post('/rounds/:id/phase', requireAdmin, asyncHandler(async (req, res) => 
   res.json(await lunch.roundState(roundId, req.user));
 }));
 
+// Re-decide a round closed under the old ranked-choice count by points.
+// Answers with the round's refreshed state plus whether the winner changed.
+router.post('/rounds/:id/recount', requireAdmin, asyncHandler(async (req, res) => {
+  const roundId = id(req.params.id);
+  const { changed } = await lunch.recountRound({ roundId });
+  res.json({ ...(await lunch.roundState(roundId, req.user)), winner_changed: changed });
+}));
+
 router.post('/rounds/:id/places', requireAdmin, asyncHandler(async (req, res) => {
   const roundId = id(req.params.id);
   await lunch.addPlace({ roundId, name: req.body?.name });

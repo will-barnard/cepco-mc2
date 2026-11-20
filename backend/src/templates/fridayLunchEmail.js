@@ -59,15 +59,25 @@ function body({ kind, round, places }) {
       subject: `Friday Lunch: voting is open for ${date}`,
       heading: 'Time to vote on Friday Lunch',
       content: `<p style="margin:0 0 12px;font-size:14px;color:#16181d;line-height:1.5;">
-          Rank up to three of these. Votes are anonymous, and you can change yours until voting closes.
+          Rank up to three of these: 1st gets 3 points, 2nd gets 2, 3rd gets 1. Votes are anonymous, and you can change yours until voting closes.
         </p>
         <ul style="margin:0;padding-left:20px;font-size:14px;color:#16181d;line-height:1.7;">
           ${places.map((p) => `<li>${escapeHtml(p.name)}</li>`).join('')}
         </ul>${button('Cast your vote')}`,
     };
   }
-  // closed
+  // closed (or a recount that changed the winner -- see services/fridayLunch.js)
   const winner = round.winner_name;
+  if (round.result?.recounted_at) {
+    return {
+      subject: winner ? `Friday Lunch recount: it's ${winner}` : 'Friday Lunch recount',
+      heading: winner ? `Recount: Friday Lunch is ${escapeHtml(winner)}` : 'Friday Lunch recount',
+      content: `<p style="margin:0;font-size:14px;color:#16181d;line-height:1.5;">
+          We recounted the votes for ${escapeHtml(date)} with points (1st = 3, 2nd = 2, 3rd = 1),
+          so 2nd and 3rd choices count. That changed the result.
+        </p>${button('See the results')}`,
+    };
+  }
   return {
     subject: winner ? `Friday Lunch: it's ${winner}` : 'Friday Lunch: voting closed',
     heading: winner ? `Friday Lunch is ${escapeHtml(winner)}` : 'Friday Lunch voting closed',
