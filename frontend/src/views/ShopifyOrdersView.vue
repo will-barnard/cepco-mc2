@@ -8,6 +8,9 @@
  *     X". Items without a matching rule get the default shipping ticket,
  *     whose category is still Settings -> Shop configuration's "Default
  *     category for Shopify orders".
+ *   - Restoration sales (migration 100): who reviews them, and every one
+ *     that's come in. A "restoration" tag rule sends an item there instead
+ *     of onto a ticket; the reviewers set it up from the homepage.
  *   - The order log: every order received and what each step did, with
  *     Re-run for anything that failed or needs a person.
  *
@@ -16,9 +19,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import api from '../api';
-import { useSettings } from '../stores';
+import { useSettings, useRefData } from '../stores';
 
 const settings = useSettings();
+const refData = useRefData();
 
 const loading = ref(true);
 const error = ref('');
@@ -29,6 +33,20 @@ const rules = ref([]);
 const connection = ref({});
 const testResult = ref(null);
 const testing = ref(false);
+
+const restorations = ref([]);
+const reviewerInfo = ref({ ids: [], effective: [], fallback: true });
+// Anyone active can be picked, admins first -- the ask was "an assigned
+// admin", but a senior tech who runs restorations shouldn't be ruled out.
+const reviewerOptions = computed(() => [...refData.employees]
+  .filter((e) => e.active)
+  .sort((a, b) => (a.role === 'admin' ? 0 : 1) - (b.role === 'admin' ? 0 : 1) || a.name.localeCompare(b.name)));
+const RESTO_STATUS = {
+  pending: { label: 'Waiting for review', color: 'amber' },
+  done: { label: 'Set up', color: 'green' },
+  dismissed: { label: 'Dismissed', color: 'slate' },
+  cancelled: { label: 'Order cancelled', color: 'slate' },
+};
 
 const orders = ref([]);
 const onlyProblems = ref(false);
@@ -79,6 +97,28 @@ async function loadSettings() {
   connection.value = data.connection;
 }
 
+async function loadRestorations() {
+  const [recent, info] = await Promise.all([
+    api.get('/restoration-intake/recent'),
+    api.get('/restoration-intake/reviewers'),
+  ]);
+  restorations.value = recent;
+  reviewerInfo.value = info;
+}
+
+async function toggleReviewer(id, on) {
+  error.value = '';
+  const ids = new Set(intake.value.restoration_reviewer_ids || []);
+  if (on) ids.add(id); else ids.delete(id);
+  try {
+    const data = await api.patch('/shopify-orders/settings', { restoration_reviewer_ids: [...ids] });
+    intake.value = data.intake;
+    reviewerInfo.value = await api.get('/restoration-intake/reviewers');
+  } catch (err) {
+    error.value = err.message;
+  }
+}
+
 async function loadOrders() {
   orders.value = await api.get('/shopify-orders/orders', { problems: onlyProblems.value ? '1' : '' });
 }
@@ -87,7 +127,7 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    await Promise.all([loadSettings(), loadOrders(), settings.load()]);
+    await Promise.all([loadSettings(), loadOrders(), loadRestorations(), settings.load(), refData.load()]);
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -321,6 +361,7 @@ onBeforeUnmount(() => clearInterval(timer));
                   <select :value="rule.action" @change="saveRule(rule, { action: $event.target.value })">
                     <option value="no_ticket">No ticket</option>
                     <option value="ticket">Own ticket in…</option>
+                    <option value="restoration">Restoration sale (set up from homepage)</option>
                   </select>
                 </td>
                 <td>
@@ -362,6 +403,7 @@ onBeforeUnmount(() => clearInterval(timer));
             <select v-model="newRule.action">
               <option value="no_ticket">No ticket</option>
               <option value="ticket">Own ticket in…</option>
+              <option value="restoration">Restoration sale (set up from homepage)</option>
             </select>
           </div>
           <div v-if="newRule.action === 'ticket'" class="field">
@@ -387,6 +429,72 @@ onBeforeUnmount(() => clearInterval(timer));
               Add rule
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------ restoration sales -->
+      <div class="card">
+        <h2>Restoration sales</h2>
+        <p class="muted small" style="margin-top: -6px">
+          Items matching a <strong>Restoration sale</strong> rule (the <code>restoration</code> tag) get no ticket when
+          the order comes in. They show on the homepage of the people below, who confirm which inventory piece
+          was sold and pick the queue — Mission Control then records the sale to the buyer and opens the
+          restoration ticket at the back of that queue. They're emailed when one comes in.
+        </p>
+        <div class="field">
+          <label>Reviewers</label>
+          <div class="row" style="flex-wrap: wrap; gap: 4px 16px">
+            <label v-for="e in reviewerOptions" :key="e.id" class="checkbox" style="margin: 0">
+              <input
+                type="checkbox" :checked="(intake.restoration_reviewer_ids || []).includes(e.id)"
+                @change="toggleReviewer(e.id, $event.target.checked)"
+              />
+              {{ e.name }} <span v-if="e.role !== 'admin'" class="muted small">({{ e.role }})</span>
+            </label>
+          </div>
+          <p v-if="reviewerInfo.fallback" class="muted small" style="margin: 6px 0 0">
+            Nobody picked (or nobody picked is still active), so every admin sees them:
+            {{ reviewerInfo.effective.map((e) => e.name).join(', ') || 'no active admins' }}.
+          </p>
+        </div>
+
+        <div v-if="!restorations.length" class="empty" style="padding: 16px">No restoration sales yet.</div>
+        <div v-else class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Order</th><th>Listing</th><th>Buyer</th><th>Status</th><th>Instrument</th><th>Ticket</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in restorations" :key="r.id">
+                <td class="nowrap">
+                  <strong>{{ r.order.name || r.order.shopify_order_id }}</strong>
+                  <div class="muted small">{{ r.order.date }}</div>
+                </td>
+                <td>
+                  {{ r.item.title }}
+                  <div v-if="r.item.deposit_label" class="muted small">
+                    {{ r.item.deposit_label }} deposit<span v-if="r.item.full_price_label"> · {{ r.item.full_price_label }} full</span>
+                  </div>
+                </td>
+                <td>{{ r.customer ? r.customer.name : '—' }}</td>
+                <td>
+                  <span class="pill" :class="RESTO_STATUS[r.status].color">{{ RESTO_STATUS[r.status].label }}</span>
+                  <div v-if="r.order_cancelled_at" class="small" style="color: var(--red)">Order cancelled after setup</div>
+                  <div v-if="r.resolved_by_name" class="muted small">{{ r.resolved_by_name }} · {{ fmtWhen(r.resolved_at) }}</div>
+                </td>
+                <td>
+                  <RouterLink v-if="r.instrument_id" :to="{ name: 'instrument', params: { id: r.instrument_id } }">
+                    {{ r.instrument_label || `#${r.instrument_id}` }}
+                  </RouterLink>
+                  <span v-else class="muted">—</span>
+                </td>
+                <td class="nowrap">
+                  <RouterLink v-if="r.ticket_id" :to="{ name: 'ticket', params: { id: r.ticket_id } }">#{{ r.ticket_id }}</RouterLink>
+                  <span v-else class="muted">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

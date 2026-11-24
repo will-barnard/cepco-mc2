@@ -24,7 +24,7 @@ const form = ref({
   price: '',
   purchase_date: new Date().toISOString().slice(0, 10),
   notes: '',
-  open_ticket: true,
+  open_ticket: false,
   send_receipt: !!props.item.owner?.email,
   seller_name: '',
   consignment_rate: '',

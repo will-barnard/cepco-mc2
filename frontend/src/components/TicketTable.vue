@@ -187,6 +187,7 @@ const statusDiffers = (t) => t.queue_section_status_key && t.status_key !== t.qu
             >{{ priorityLabel(t) }}</span>
             <span v-if="t.fast_track" class="tag fast-track-tag">Lite</span>
             <span v-if="t.custom_shop" class="tag custom-shop-tag">Custom Shop</span>
+            <span v-if="t.instrument_in_inventory" class="tag inventory-tag" title="Shop stock — restored for sale">Inventory</span>
             <span v-if="t.shipping_direction" class="tag direction-tag">{{ t.shipping_direction === 'inbound' ? 'Inbound' : 'Outbound' }}</span>
             <span v-if="rowProgress(t) !== null" class="small progress-pct" style="margin-left: 6px">{{ rowProgress(t) }}%</span>
             <span

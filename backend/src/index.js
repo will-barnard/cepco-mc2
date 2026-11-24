@@ -52,6 +52,7 @@ app.use('/api/shopify', require('./routes/shopifyWebhooks'));
 // Settings -> Shopify orders. Its own prefix, not /api/shopify/*: that
 // router HMAC-checks every request as a webhook.
 app.use('/api/shopify-orders', require('./routes/shopifyOrders'));
+app.use('/api/restoration-intake', require('./routes/restorationIntake'));
 // Before /api/tickets: see routes/ticketNotes.js's header.
 app.use('/api/tickets/:ticketId/notes', require('./routes/ticketNotes'));
 app.use('/api/tickets', require('./routes/tickets'));

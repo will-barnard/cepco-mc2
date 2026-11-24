@@ -214,7 +214,8 @@ async function fleetQcSweep() {
         // as the template loop below.
         await withTransaction(async (client) => {
           const resolved = await resolveNewTicketFields({
-            category_key: await settings.defaultKeyPreferring('ticket_category', 'inventory_restoration'),
+            // One restoration queue (migration 101); the instrument marks it as stock.
+            category_key: await settings.defaultKeyPreferring('ticket_category', 'repairs_restoration'),
             priority_key: await settings.defaultKeyPreferring('priority_tier', 'standard_priority'),
           });
           const label = [instrument.nickname, instrument.model || instrument.family]

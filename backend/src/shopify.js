@@ -179,6 +179,42 @@ async function productTags(productIds) {
   return out;
 }
 
+/**
+ * The custom.full_value metafield (the restoration's full price; the
+ * listing itself is priced at the deposit) for a set of products, by
+ * numeric product id. Returns Map<string id, number>; products without one
+ * aren't in it. Accepts a money metafield ({"amount": "7750.0", ...}) or a
+ * plain number.
+ */
+async function productFullValues(productIds) {
+  const ids = [...new Set(productIds.filter(Boolean).map(String))];
+  const out = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    // eslint-disable-next-line no-await-in-loop
+    const data = await graphql(
+      `query ProductFullValues($ids: [ID!]!) {
+         nodes(ids: $ids) { ... on Product { id metafield(namespace: "custom", key: "full_value") { value } } }
+       }`,
+      { ids: chunk.map((id) => `gid://shopify/Product/${id}`) },
+    );
+    for (const node of data.nodes || []) {
+      const raw = node && node.metafield && node.metafield.value;
+      if (!raw) continue;
+      let amount = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        amount = parsed && typeof parsed === 'object' ? parsed.amount : parsed;
+      } catch (err) {
+        // a bare number string
+      }
+      const n = Number(amount);
+      if (Number.isFinite(n) && n > 0) out.set(node.id.split('/').pop(), n);
+    }
+  }
+  return out;
+}
+
 /** Cheap "are the credentials right" check for Settings -> Shopify orders. */
 async function shopInfo() {
   const data = await graphql('{ shop { name myshopifyDomain } }');
@@ -186,5 +222,5 @@ async function shopInfo() {
 }
 
 module.exports = {
-  verifyWebhookHmac, adminApiRequest, graphql, productTags, shopInfo, adminApiMode,
+  verifyWebhookHmac, adminApiRequest, graphql, productTags, productFullValues, shopInfo, adminApiMode,
 };

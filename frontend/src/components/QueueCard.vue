@@ -107,6 +107,7 @@ const boltW = computed(() => `${Math.max(settings.priorityBoltMax, 1) * 10}px`);
       >{{ priorityLabel }}</span>
       <span v-if="ticket.fast_track" class="tag fast-track-tag" title="Lite">Lite</span>
       <span v-if="ticket.custom_shop" class="tag custom-shop-tag" title="Custom Shop">Custom Shop</span>
+      <span v-if="ticket.instrument_in_inventory" class="tag inventory-tag" title="Shop stock — restored for sale">Inventory</span>
       <span
         v-if="ticket.shipping_direction" class="tag direction-tag"
         :title="ticket.shipping_direction === 'inbound' ? 'Inbound shipment' : 'Outbound shipment'"

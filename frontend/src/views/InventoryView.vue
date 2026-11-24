@@ -2,8 +2,9 @@
 /**
  * Inventory — everything the shop holds, in one place (migration 072).
  *
- * The old Fleet page is this page filtered to "Not for sale"; the old
- * Inventory Restorations queue is the third tab. Layout follows the CEPCo
+ * The old Fleet page is this page filtered to "Not for sale". Stock
+ * restorations used to have their own queue tab here; since migration 101
+ * they're in the one Repairs & Restoration queue, tagged "Inventory". Layout follows the CEPCo
  * Inventory Log sheets the bosses already use: grouped by family and sheet
  * section, condition grades in columns, price / serial / web at a glance.
  * Editing happens on the detail page (InventoryDetailView.vue) — this page
@@ -20,7 +21,6 @@ import api from '../api';
 import {
   useAuth, useRefData, useSettings, canonicalFamily,
 } from '../stores';
-import TicketTable from '../components/TicketTable.vue';
 import InventoryParts from '../components/InventoryParts.vue';
 import ReservedParts from '../components/ReservedParts.vue';
 import InstrumentModelPicker from '../components/InstrumentModelPicker.vue';
@@ -41,7 +41,6 @@ const TABS = [
   { key: 'parts', label: 'Parts & Accessories' },
   // Parts set aside for a piece, not installed yet (migration 078).
   { key: 'reserved', label: 'Reserved parts' },
-  { key: 'restorations', label: 'Restoration queue' },
 ];
 const STATUS_OPTIONS = [
   { key: 'active', label: 'In stock' },
@@ -343,31 +342,15 @@ function downloadCsv() {
   URL.revokeObjectURL(a.href);
 }
 
-// --- restoration queue tab (was InventoryRestorationsView.vue) -----------
-const restorationTickets = ref([]);
-const restorationsLoading = ref(false);
-async function loadRestorations() {
-  restorationsLoading.value = true;
-  try {
-    // A single category makes GET /tickets return that category's
-    // admin-reorderable queue order (category_queue_position).
-    restorationTickets.value = await api.get('/tickets', { category: 'inventory_restoration' });
-  } finally {
-    restorationsLoading.value = false;
-  }
-}
-
 watch(status, () => { if (tab.value === 'instruments') load(); });
 watch(tab, (t) => {
   if (t === 'instruments' && !items.value.length) load();
-  if (t === 'restorations') loadRestorations();
 });
 
 onMounted(async () => {
   refData.load();
   meta.value = await api.get('/inventory/meta');
   if (tab.value === 'instruments') load();
-  if (tab.value === 'restorations') loadRestorations();
 });
 </script>
 
@@ -393,7 +376,7 @@ onMounted(async () => {
     <form v-if="adding" class="card" style="margin-bottom: 16px" @submit.prevent="submitAdd">
       <p class="muted small" style="margin-top: 0">
         For something bought from a person, use <RouterLink :to="{ name: 'inventory-purchase-new' }">Record a
-        purchase</RouterLink> instead — it also logs the seller and opens a restoration ticket.
+        purchase</RouterLink> instead — it also logs the seller (and can open a restoration ticket).
       </p>
       <div class="field-row">
         <div class="field">
@@ -682,18 +665,6 @@ onMounted(async () => {
 
       <!-- Reserved parts -------------------------------------------------- -->
       <ReservedParts v-else-if="tab === 'reserved'" />
-
-      <!-- Restoration queue ---------------------------------------------- -->
-      <template v-else>
-        <p class="muted small" style="margin-top: 0">
-          Restoration tickets for inventory pieces — admins can reorder with ↑/↓.
-        </p>
-        <div v-if="restorationsLoading" class="empty">Loading…</div>
-        <TicketTable
-          v-else :tickets="restorationTickets" queue="category"
-          empty-text="Nothing in the restoration queue." @reordered="loadRestorations"
-        />
-      </template>
     </div>
   </div>
 </template>

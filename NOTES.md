@@ -4904,6 +4904,107 @@ would leave the newer value in MC2, and an admin can see which is right.
 Pulling only re-stamps `xero_synced_at` if the row was otherwise in sync.
 Run it once after deploy; after that it should come back empty.
 
+### 2.116 Restoration sales from Shopify; purchases stop opening tickets (migration 100)
+
+**Ask (Nov 2026):** a Shopify order for a restoration pre-order (tag
+`restoration`, listing priced at the 50% deposit, one listing per
+inventory piece) should land on an assigned reviewer's homepage, get
+matched to the instrument in MC2 inventory, and turn into the restoration
+ticket at the back of a queue, carrying the customer from the order.
+
+**Purchases no longer open a ticket.** `POST /purchases` and
+`POST /instruments/:id/acquire` only open a restoration ticket with
+`open_ticket: true` ("Restore it now" on the purchase form, unticked by
+default). Most stock sells as-is; a ticket exists once the piece sells as a
+restoration or someone decides to restore it on spec (instrument page ->
+New ticket). With no ticket there's no Purchase card to send the seller's
+receipt from, so the purchase form sends it (checkbox, on by default) and
+ownership history has a "send receipt" link for ticketless purchases.
+
+**Order time.** A tag rule's new action `restoration` (Settings -> Shopify
+orders) takes the item off every ticket and writes a
+`shopify_restoration_intake` row instead, with the deposit (line value),
+the listing's `custom.full_value` metafield as the full price, and a
+suggested instrument. It runs before the shipping/POS checks, so an
+in-store deposit still gets set up. Reviewers are emailed. The order's
+other tickets list it as "restoration sale — set up from the homepage", and
+the Xero note marks the line "(restoration deposit)".
+
+**Matching** (`services/restorationIntake.js suggest`), re-run live on the
+card: the instrument linked to the listing (`instruments.shopify_product_id`),
+else the quoted nickname in the title (or the end of a `…-RESTO-NAME` SKU)
+against in-stock nicknames, else the only in-stock piece of that family
+(and year). There's always a search box too. Confirming links the listing
+to the piece, so the next sale of it is exact. The link can also be set by
+hand on the instrument page (Shopify listing field: admin URL, gid or id).
+
+**Homepage card** (`RestorationIntakePanel.vue`, reviewers only): buyer
+details from the order, deposit and full price (editable; becomes the sale
+price; balance shown), instrument choice, the type (Repairs & Restoration
+or a sub-category like Custom Shop; defaults to the last one used), then
+the ticket. If the piece already has a stock restoration ticket (restored
+on spec), the default is to use it: the buyer and order go on it and it
+keeps its place in line. "Open a new ticket" instead archives it as
+replaced. Confirm = one transaction: sale recorded via the ownership ledger
+(consignment -> payout ticket, like Mark sold), listing linked, ticket
+opened (back of the queue) or reused, with the customer, instrument and
+order on it (group key `restoration:<line item>`), and an authorless note
+with deposit / full price / balance / customer note (authorless so it isn't
+posted to Xero twice). "Nothing to set up…" dismisses it.
+
+**Reviewers:** `shop_config.shopify_orders.meta.restoration_reviewer_ids`.
+Empty, or nobody picked still active = every active admin. Admins can always
+act; only reviewers see the card.
+
+**Cancelled orders.** Not set up yet: the row just closes. Set up already:
+the order's new ticket is archived as usual, but a reused on-spec ticket is
+detached from the order instead and stays open. The sale stays recorded
+and the card comes back asking "Undo the sale" (back to stock; a reused
+ticket loses the customer and is "Inventory — ..." again) or "Keep the
+sale" (new ticket un-archived).
+
+### 2.117 One restoration queue: Inventory Restorations retired (migration 101)
+
+**Ask (Nov 2026):** the separate Inventory Restorations category / queue /
+Inventory tab was confusing, and the New Ticket form filed it a second way
+(Repairs & Restoration + an Inventory Restorations sub-category) that the
+tab never showed. One queue; stock work should just read "Inventory — ...".
+
+**What marks stock work now is the instrument**, not a category or a
+title: a ticket whose instrument is shop-owned or on consignment.
+- Queue / tables show an **Inventory** tag (`instrument_in_inventory`, already
+  on GET /tickets; the customer column already said "CEPCo inventory").
+- `composeTicketTitle` prefixes **"Inventory — "** for a Repairs & Restoration
+  ticket (`extra.categoryKey`) on a stock piece with no customer, so the
+  standardized template still names it ("Inventory — Wurlitzer 200A (1972)
+  \"Blitzen\""). With a customer on it, the template's `{customer}` takes
+  over. Overrides `extra.customerName` / `extra.stock` / `extra.db` are for
+  callers inside a transaction the pool can't see yet.
+- Both drop off by themselves when the piece sells.
+
+**Migration 101:** every inventory_restoration ticket (and form-made ones
+with it as the sub-category) becomes plain Repairs & Restoration. Open ones
+are slotted into the R&R queue by date: just ahead of the first ticket, in
+the current queue order, whose Date of Order/Queue (else entry date) is
+later; the existing hand-made order is untouched; then the queue is
+renumbered. Recurring templates, estimates, tag rules and the default
+Shopify category are re-pointed and the category retired. The Inventory
+page's Restoration queue tab is gone (old `?tab=restorations` links land
+on Instruments). Purchases, the instrument page's New ticket and the
+recurring Inventory QC tickets all open in Repairs & Restoration now.
+
+**Selling** (`restorationIntake.js handoverStockTickets`): Mark sold and the
+Shopify setup card no longer move anything between queues. The piece's
+stock restoration tickets (R&R, nobody on them or the consignor; not the
+"Inventory QC — ..." checks) either get the buyer (title follows, place in
+line kept) or are archived (sold as-is / replaced by a new ticket). Mark
+sold asks which when there is one.
+
+**Not done:** undoing a sale from the ownership history doesn't take the
+buyer back off the ticket (the Shopify card's undo does). The Inventory QC
+tickets now sit in the restoration queue; they're found by title, so a
+renamed one isn't recognised as QC.
+
 ## 4. Suggested first moves after deploy
 
 

@@ -35,13 +35,8 @@ const SETTINGS = [
   // Repairs & Restoration (N2b) — the merge target for the old Servicing
   // category.
   ['ticket_category', 'repairs_restoration', 'Repairs & Restoration', 30, {}],
-  // Inventory Restorations survives the reshuffle as a *child* of Repairs
-  // & Restoration rather than retiring into the flat merge like Servicing
-  // did — frontend/src/views/InventoryRestorationsView.vue depends on this
-  // exact key for its own dedicated "instruments we bought to flip" queue
-  // (a finding put back to the boss separately; see migration 029).
-  ['ticket_category', 'inventory_restoration', 'Inventory Restorations', 10,
-    { internal_only: true, parent_key: 'repairs_restoration' }],
+  // Inventory Restorations retired in migration 101 (one restoration queue;
+  // the instrument marks stock work) -- left out, same as Servicing.
   // Custom Shop (N2b) — used to be a priority tier (see the retired
   // priority_tier list below); now it's a sub-category of Repairs &
   // Restoration instead, since a job's type and its urgency are different

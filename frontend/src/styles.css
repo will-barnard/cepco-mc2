@@ -693,6 +693,15 @@ tbody tr.row-highlight:hover  { background-color: var(--surface-2); }
   font-weight: 600; vertical-align: middle;
 }
 
+/* Inventory (migration 101): the ticket's instrument is shop stock or a
+   consignment -- the shop's own restoration-for-sale, in the one Repairs &
+   Restoration queue. Comes from the instrument, so it drops off by itself
+   when the piece sells. Green to sit apart from Custom Shop's blue. */
+.tag.inventory-tag {
+  margin-left: 6px; background: rgba(16, 185, 129, 0.15); color: var(--green);
+  font-weight: 600; vertical-align: middle;
+}
+
 /* --- Lite (migration 063; shown as "Fast Track" until Nov 2026) ----------- */
 /* Accent-tinted so it reads as distinct from the plain grey .tag used for
    photo counts etc. Shared by QueueCard.vue and TicketTable.vue. The class

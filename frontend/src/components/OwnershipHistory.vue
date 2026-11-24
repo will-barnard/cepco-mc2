@@ -53,6 +53,22 @@ const unlinkedSale = computed(() => {
 
 const error = ref('');
 const busy = ref(false);
+
+// A purchase with no ticket has no Purchase card to send its receipt from.
+const receiptBusy = ref(null);
+async function sendReceipt(h) {
+  error.value = '';
+  receiptBusy.value = h.purchase_id;
+  try {
+    await api.post(`/purchases/${h.purchase_id}/send-receipt`);
+    h.receipt_sent_at = new Date().toISOString();
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    receiptBusy.value = null;
+  }
+}
+
 async function patchPeriod(h, body) {
   error.value = '';
   busy.value = true;
@@ -141,6 +157,9 @@ async function undoSale() {
           <template v-else>{{ h.seller_name }}</template>
           on {{ day(h.purchase_date) }}<template v-if="h.purchase_price !== undefined && h.purchase_price !== null"> for {{ formatPrice(h.purchase_price) }}</template>
           <template v-if="h.receipt_sent_at"> · receipt sent</template>
+          <template v-else-if="!h.purchase_ticket_id && auth.isAdmin">
+            · <a href="#" @click.prevent="sendReceipt(h)">{{ receiptBusy === h.purchase_id ? 'sending…' : 'send receipt' }}</a>
+          </template>
           <RouterLink v-if="h.purchase_ticket_id" :to="{ name: 'ticket', params: { id: h.purchase_ticket_id } }"> · ticket #{{ h.purchase_ticket_id }}</RouterLink>
         </div>
         <div v-else-if="h.end_reason === 'purchase'" class="small">Sold to CEPCo</div>

@@ -387,7 +387,8 @@ const moneyOrNull = (v, field) => {
 router.post('/:id/acquire', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!['buy', 'consign'].includes(b.mode)) throw badRequest('mode must be buy or consign');
-  const openTicket = b.mode === 'buy' && b.open_ticket !== false;
+  // Opt-in: buying a piece isn't a decision to restore it.
+  const openTicket = b.mode === 'buy' && b.open_ticket === true;
   const resolved = openTicket ? await purchases().restorationTicketFields(b.priority_key) : null;
 
   const out = await withTransaction(async (client) => {

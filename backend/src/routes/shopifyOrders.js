@@ -53,7 +53,9 @@ router.post('/test-connection', asyncHandler(async (req, res) => {
 async function validateRule(b) {
   const tag = String(b.tag || '').trim();
   if (!tag) throw badRequest('tag is required');
-  if (!['no_ticket', 'ticket'].includes(b.action)) throw badRequest("action must be 'no_ticket' or 'ticket'");
+  if (!['no_ticket', 'ticket', 'restoration'].includes(b.action)) {
+    throw badRequest("action must be 'no_ticket', 'ticket' or 'restoration'");
+  }
   let categoryKey = null;
   let subcategoryKey = null;
   if (b.action === 'ticket') {

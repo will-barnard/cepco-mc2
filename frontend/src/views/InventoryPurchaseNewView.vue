@@ -21,6 +21,12 @@ const seller = ref({
 const price = ref('');
 const purchaseDate = ref(shopToday);
 const notes = ref('');
+// Off by default: most stock sells as-is. A restoration ticket gets opened
+// when it sells as a restoration (Shopify) or someone decides to restore it.
+const openTicket = ref(false);
+// The receipt used to be sent from the ticket's Purchase card; with no
+// ticket by default, offer it here.
+const sendReceipt = ref(true);
 
 const error = ref('');
 const busy = ref(false);
@@ -53,9 +59,20 @@ async function submit() {
       price: price.value,
       purchase_date: purchaseDate.value,
       notes: notes.value || null,
+      open_ticket: openTicket.value,
     });
     purchaseDraft.stop();
-    router.push({ name: 'ticket', params: { id: result.ticket.id } });
+    if (sendReceipt.value && result.purchase) {
+      try {
+        await api.post(`/purchases/${result.purchase.id}/send-receipt`);
+      } catch (err) {
+        // The purchase is saved; the receipt can be re-sent from the
+        // instrument's ownership history.
+        console.warn('purchase receipt failed', err);
+      }
+    }
+    if (result.ticket) router.push({ name: 'ticket', params: { id: result.ticket.id } });
+    else router.push({ name: 'instrument', params: { id: result.instrument.id } });
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -68,8 +85,9 @@ async function submit() {
   <div class="page" style="max-width: 780px">
     <div class="page-head"><h1>Add instrument purchase</h1></div>
     <p class="muted small" style="margin-top: -12px; margin-bottom: 20px">
-      Records the instrument and what was paid for it, adds it to inventory
-      (for sale), and drops it into the restoration queue as a new ticket.
+      Records the instrument and what was paid for it and adds it to inventory
+      (for sale). It only goes into the restoration queue if you tick the box
+      below — otherwise a ticket is opened when it sells as a restoration.
     </p>
 
     <form class="card" @submit.prevent="submit">
@@ -141,6 +159,13 @@ async function submit() {
         <label>Notes</label>
         <textarea v-model="notes" placeholder="Anything else worth flagging for the restoration" />
       </div>
+
+      <label class="checkbox" style="margin-bottom: 14px">
+        <input v-model="openTicket" type="checkbox" /> Restore it now (open an Inventory Restorations ticket)
+      </label>
+      <label class="checkbox" style="margin-bottom: 14px">
+        <input v-model="sendReceipt" type="checkbox" /> Email the seller the purchase receipt
+      </label>
 
       <div v-if="error" class="alert" style="margin-bottom: 14px">{{ error }}</div>
 

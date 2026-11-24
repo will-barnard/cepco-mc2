@@ -56,6 +56,7 @@ const detail = require('../services/instrumentDetail');
 const ownership = require('../services/ownership');
 const payouts = require('../services/consignmentPayouts');
 const { createZipWriter } = require('../services/zipStream');
+const { parseProductId, handoverStockTickets } = require('../services/restorationIntake');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -194,6 +195,9 @@ const FIELDS = {
   // Google Drive photo folder from the old Inventory Log sheet (migration
   // 082), or any album link added since.
   photo_album_url: webUrl('photo_album_url'),
+  // Its Shopify listing (migration 100): a restoration sale of that listing
+  // matches this piece exactly. Takes the id, a gid or an admin link.
+  shopify_product_id: parseProductId,
   est_hours: (v) => {
     if (v === null || v === '') return null;
     const n = Number(v);
@@ -275,6 +279,7 @@ router.get('/meta', (req, res) => {
     attributes: inv.ATTRIBUTES,
     nfs_reason_presets: inv.NFS_REASON_PRESETS,
     photo_set_presets: inv.PHOTO_SET_PRESETS,
+    shopify_shop_domain: config.shopify.shopDomain || null,
   });
 });
 
@@ -1061,6 +1066,16 @@ router.post('/:id/sell', asyncHandler(async (req, res) => {
     // inventory importer and 087's backfill also record sales through that
     // function, and years-old sales shouldn't each open a ticket.
     if (old.ownership === 'consignment') await payouts.openForSale(client, salePeriodId, req.user.id);
+    // A piece that was being restored for sale: that ticket becomes the
+    // buyer's restoration (same place in the queue; the buyer goes on it)
+    // -- or is archived when it sold as-is (migration 101).
+    await handoverStockTickets(client, old.id, {
+      action: b.restoration_ticket_action === 'archive' ? 'archive' : 'keep',
+      customerId: buyerId,
+      customerName: buyerName,
+      consignorId: old.ownership === 'consignment' ? old.customer_id : null,
+      reason: `Sold to ${buyerName}`,
+    });
     return old.id;
   });
   res.json(await detail.loadDetail(id, req.user));

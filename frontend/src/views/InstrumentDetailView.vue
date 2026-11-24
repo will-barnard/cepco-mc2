@@ -56,7 +56,7 @@ const EDITABLE = [
   'ownership', 'sale_status', 'nfs_reason', 'hold_for', 'asking_price', 'price_note', 'on_website',
   'customer_id', 'consignor_name', 'consignment_rate', 'consignment_status', 'consignment_terms',
   'qc_notes', 'last_qc_at', 'qc_interval_months',
-  'cost_paid', 'cost_note', 'est_hours',
+  'cost_paid', 'cost_note', 'est_hours', 'shopify_product_id',
 ];
 // A customer's instrument edits only its details (PATCH /instruments/:id);
 // everything else on the form is the inventory side.
@@ -286,7 +286,9 @@ async function createTicket() {
     const pris = settings.active('priority_tier');
     const ticket = await api.post('/tickets', {
       title: `Inventory — ${[item.value.nickname, item.value.model || refData.familyLabel(item.value.family)].filter(Boolean).join(' ')}`,
-      category_key: cats.find((c) => c.key === 'inventory_restoration')?.key || cats[0]?.key,
+      // One restoration queue (migration 101); a stock piece's ticket is
+      // titled "Inventory — …" by the server.
+      category_key: cats.find((c) => c.key === 'repairs_restoration')?.key || cats[0]?.key,
       priority_key: pris.find((p) => p.key === 'standard_priority')?.key || pris[0]?.key,
       instrument_id: item.value.id,
       customer_id: item.value.ownership === 'consignment' ? item.value.customer_id || null : null,
@@ -649,6 +651,20 @@ watch(() => props.id, () => { loading.value = true; load(); });
             <label class="checkbox" style="margin-bottom: 12px">
               <input v-model="form.on_website" type="checkbox" /> Listed on the website
             </label>
+            <!-- Migration 100: a restoration sale of this listing matches
+                 this piece exactly. Paste the product's Shopify admin link
+                 (or its id); confirming a sale from the homepage fills it in. -->
+            <div class="field">
+              <label>Shopify listing <span class="muted">(admin link or product id)</span></label>
+              <div class="row" style="flex-wrap: nowrap">
+                <input v-model="form.shopify_product_id" placeholder="https://admin.shopify.com/…/products/…" style="flex: 1; min-width: 0" />
+                <a
+                  v-if="item.shopify_product_id && meta?.shopify_shop_domain"
+                  :href="`https://${meta.shopify_shop_domain}/admin/products/${item.shopify_product_id}`"
+                  target="_blank" rel="noopener" class="btn small nowrap"
+                >Open ↗</a>
+              </div>
+            </div>
             <!-- A sale makes the piece its buyer's instrument (migration 087):
                  its own action, saved on its own, not through the Save bar. -->
             <button v-if="!showSell" type="button" class="primary" :disabled="dirty" @click="showSell = true">

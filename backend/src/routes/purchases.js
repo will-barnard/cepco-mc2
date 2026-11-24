@@ -10,7 +10,9 @@ const { FAMILIES } = require('./instruments');
 const settings = require('../services/settings');
 const catalog = require('../services/instrumentCatalog');
 const ownership = require('../services/ownership');
-const { resolveNewTicketFields, insertTicketRow } = require('./tickets');
+const {
+  resolveNewTicketFields, insertTicketRow, composeTicketTitle, namingFor,
+} = require('./tickets');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -22,7 +24,9 @@ router.use(requireAuth);
 // through settings.defaultKeyPreferring() below rather than straight to
 // resolveActive(). Same for the category key just below.
 const PREFERRED_PRIORITY_KEY = 'standard_priority'; // N4b replaced the old tiers
-const PREFERRED_CATEGORY_KEY = 'inventory_restoration';
+// One restoration queue (migration 101): stock restorations are Repairs &
+// Restoration tickets, marked as stock by the instrument.
+const PREFERRED_CATEGORY_KEY = 'repairs_restoration';
 
 function validPrice(value) {
   const n = Number(value);
@@ -44,11 +48,16 @@ async function restorationTicketFields(priorityKey) {
 }
 
 async function insertPurchase(client, {
-  instrumentRow, seller, sellerCustomerId = null, price, purchaseDate, notes, resolved, openTicket = true, userId,
+  instrumentRow, seller, sellerCustomerId = null, price, purchaseDate, notes, resolved, openTicket = false, userId,
 }) {
   let ticket = null;
   if (openTicket) {
-    const title = `Inventory — ${instrumentRow.family}${instrumentRow.model ? ` ${instrumentRow.model}` : ''}`;
+    // "Inventory — <the category's usual title>", read on this transaction
+    // so the brand-new (or just-bought) piece is seen as stock.
+    const naming = namingFor(resolved.category, resolved.subcategory);
+    const title = await composeTicketTitle(null, instrumentRow.id, naming.template, {
+      categoryLabel: resolved.category.label, categoryKey: resolved.category.key, db: client, stock: true,
+    }) || `Inventory — ${instrumentRow.family}${instrumentRow.model ? ` ${instrumentRow.model}` : ''}`;
     ticket = await insertTicketRow(client, { title, notes: notes || null, instrument_id: instrumentRow.id }, resolved, userId);
   }
   const { rows: purchaseRows } = await client.query(
@@ -78,8 +87,11 @@ async function insertPurchase(client, {
 }
 
 // ---------------------------------------------------------------------------
-// Create — instrument + inventory_restoration ticket + purchase record, all
-// in one transaction. insertTicketRow (from routes/tickets.js) is called
+// Create — instrument + purchase record (+ an Inventory Restorations ticket
+// only when open_ticket is true), all in one transaction. Buying a piece is
+// not a decision to restore it: most stock sells as-is, so a ticket only
+// exists once it's sold as a restoration (services/restorationIntake.js) or
+// someone decides by hand to restore it on spec. insertTicketRow (from routes/tickets.js) is called
 // directly on this transaction's client rather than through POST /tickets,
 // so a failure partway through can't leave an orphaned instrument or ticket
 // with no purchase behind it.
@@ -98,7 +110,8 @@ router.post('/', asyncHandler(async (req, res) => {
   if (price === null) throw badRequest('price must be a non-negative number');
   if (!b.purchase_date) throw badRequest('purchase_date is required');
 
-  const resolved = await restorationTicketFields(b.priority_key);
+  const openTicket = b.open_ticket === true;
+  const resolved = openTicket ? await restorationTicketFields(b.priority_key) : null;
 
   const result = await withTransaction(async (client) => {
     // Its ownership history starts with this purchase (migration 087).
@@ -130,7 +143,7 @@ router.post('/', asyncHandler(async (req, res) => {
     );
     const instrumentRow = instRows[0];
     const { ticket, purchase } = await insertPurchase(client, {
-      instrumentRow, seller, price, purchaseDate: b.purchase_date, notes: b.notes, resolved, userId: req.user.id,
+      instrumentRow, seller, price, purchaseDate: b.purchase_date, notes: b.notes, resolved, openTicket, userId: req.user.id,
     });
     return { instrument: instrumentRow, ticket, purchase };
   });

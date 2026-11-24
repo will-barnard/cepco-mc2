@@ -905,6 +905,20 @@ function modelLeaf(model) {
 // restorations, inventory purchases, Shopify orders, the
 // create-shipping-ticket route) keep supplying their own explicit titles
 // completely unaffected, exactly as the boss-list scope doc asked.
+// Migration 101: one restoration queue. A Repairs & Restoration ticket on a
+// stock piece (shop-owned or consigned) with nobody on it is the shop's own
+// restoration-for-sale, and says so: "Inventory — <the usual title>". Once
+// a buyer is on it the template's {customer} takes over. Callers pass the
+// ticket's category as extra.categoryKey; without it nothing changes.
+//
+// Two overrides for callers inside a transaction whose changes the pool
+// can't see yet (a sale being recorded, a piece being bought):
+//   extra.customerName  the name to use when there's no customer record
+//   extra.stock         true/false instead of reading the instrument's owner
+//   extra.db            a transaction client to read the instrument through
+const STOCK_TITLE_CATEGORY_KEYS = new Set(['repairs_restoration']);
+const STOCK_TITLE_PREFIX = 'Inventory — ';
+
 async function composeTicketTitle(customerId, instrumentId, template, extra = {}) {
   let customerName = '';
   if (customerId) {
@@ -916,11 +930,13 @@ async function composeTicketTitle(customerId, instrumentId, template, extra = {}
   let year = '';
   let familyLabel = '';
   let leaf = '';
+  let stock = false;
   if (instrumentId) {
-    const { rows } = await query(
-      'SELECT nickname, model, year, family FROM instruments WHERE id = $1', [instrumentId],
+    const { rows } = await (extra.db || { query }).query(
+      'SELECT nickname, model, year, family, ownership FROM instruments WHERE id = $1', [instrumentId],
     );
     if (rows[0]) {
+      stock = rows[0].ownership !== 'customer';
       nickname = rows[0].nickname || '';
       year = rows[0].year ? String(rows[0].year).trim() : '';
       familyLabel = rows[0].family ? (FAMILY_LABELS[rows[0].family] || rows[0].family) : '';
@@ -933,7 +949,9 @@ async function composeTicketTitle(customerId, instrumentId, template, extra = {}
   // `extra` at all (there were only two before this: POST /tickets and
   // quotes.js's createTicketsForEstimate) renders exactly as it always
   // has, {category}/{ticket_name} included only for callers that opt in.
-  return renderNamingTemplate(template, {
+  if (!customerName && extra.customerName) customerName = String(extra.customerName);
+  if (typeof extra.stock === 'boolean') stock = extra.stock;
+  const title = renderNamingTemplate(template, {
     customerName,
     nickname,
     year,
@@ -942,6 +960,10 @@ async function composeTicketTitle(customerId, instrumentId, template, extra = {}
     categoryLabel: extra.categoryLabel || '',
     ticketName: extra.ticketName || '',
   });
+  if (stock && !customerName && title && STOCK_TITLE_CATEGORY_KEYS.has(extra.categoryKey)) {
+    return `${STOCK_TITLE_PREFIX}${title}`;
+  }
+  return title;
 }
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -1003,7 +1025,7 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!title) {
     title = await composeTicketTitle(
       b.customer_id || null, b.instrument_id || null, naming.template,
-      { categoryLabel: category.label, ticketName },
+      { categoryLabel: category.label, ticketName, categoryKey: category.key },
     );
   }
   if (!title) throw badRequest('title is required');
@@ -1187,7 +1209,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       if (!regenerate) {
         const currentGenerated = await composeTicketTitle(
           existing.customer_id, existing.instrument_id, naming.template,
-          { categoryLabel: namingCategory.label, ticketName: existing.ticket_name || '' },
+          { categoryLabel: namingCategory.label, ticketName: existing.ticket_name || '', categoryKey: namingCategory.key },
         );
         regenerate = currentGenerated === existing.title;
       }
@@ -1198,7 +1220,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
         const effectiveTicketName = ticketNameOverride !== null ? ticketNameOverride : (existing.ticket_name || '');
         titleOverride = await composeTicketTitle(
           effectiveCustomerId, effectiveInstrumentId, naming.template,
-          { categoryLabel: namingCategory.label, ticketName: effectiveTicketName },
+          { categoryLabel: namingCategory.label, ticketName: effectiveTicketName, categoryKey: namingCategory.key },
         ) || titleOverride;
       }
     }
@@ -1403,7 +1425,7 @@ async function suggestedTitleFor(ticket) {
   const naming = namingFor(category, subcategory);
   return composeTicketTitle(
     ticket.customer_id, ticket.instrument_id, naming.template,
-    { categoryLabel: category.label, ticketName: ticket.ticket_name || '' },
+    { categoryLabel: category.label, ticketName: ticket.ticket_name || '', categoryKey: category.key },
   );
 }
 

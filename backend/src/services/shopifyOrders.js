@@ -17,7 +17,10 @@
  *                    Items tagged "no ticket", items that don't ship, and
  *                    (by setting) POS sales are left off. An order with no
  *                    ticketed items gets no ticket. By setting, an unpaid
- *                    order waits for orders/paid.
+ *                    order waits for orders/paid. Items matching a
+ *                    "restoration" rule get no ticket here: they go to
+ *                    services/restorationIntake.js, which waits for a
+ *                    reviewer on the homepage (migration 100).
  *   4. xero_note     "Shopify order #1234 placed Nov 16, 2026: ..." on the
  *                    customer's Xero History & Notes
  *
@@ -31,6 +34,7 @@
  */
 
 const { query, withTransaction } = require('../db');
+const { badRequest } = require('../middleware/errors');
 const config = require('../config');
 const xero = require('../xero');
 const shopify = require('../shopify');
@@ -38,6 +42,7 @@ const settings = require('./settings');
 const { insertNote } = require('./ticketNotes');
 const { createCustomerInXero, ADDRESS_FIELDS } = require('./xeroSync');
 const { linkCustomerToXero } = require('./xeroBackfill');
+const restorationIntake = require('./restorationIntake');
 const {
   resolveNewTicketFields, insertTicketRow, renderNamingTemplate, namingFor,
   activeSubcategoryKey, SHOPIFY_SUBCATEGORY_KEY,
@@ -89,6 +94,9 @@ async function intakeSettings() {
   for (const key of Object.keys(DEFAULT_INTAKE)) {
     if (typeof meta[key] === 'boolean') out[key] = meta[key];
   }
+  // Migration 100: who sets up restoration sales (empty = every admin).
+  out.restoration_reviewer_ids = Array.isArray(meta.restoration_reviewer_ids)
+    ? meta.restoration_reviewer_ids.map(Number).filter(Number.isInteger) : [];
   return out;
 }
 
@@ -96,6 +104,16 @@ async function updateIntakeSettings(patch) {
   const clean = {};
   for (const key of Object.keys(DEFAULT_INTAKE)) {
     if (typeof patch[key] === 'boolean') clean[key] = patch[key];
+  }
+  if (Array.isArray(patch.restoration_reviewer_ids)) {
+    const ids = [...new Set(patch.restoration_reviewer_ids.map(Number).filter(Number.isInteger))];
+    if (ids.length) {
+      const { rows } = await query('SELECT id FROM employees WHERE id = ANY($1::int[]) AND active = TRUE', [ids]);
+      if (rows.length !== ids.length) {
+        throw badRequest('Pick active staff members as restoration reviewers');
+      }
+    }
+    clean.restoration_reviewer_ids = ids;
   }
   // Upsert rather than assume migration 093's seed row is there -- a row
   // deleted by hand shouldn't make this screen unusable.
@@ -206,13 +224,16 @@ function lineLabel(li) {
   return `${li.quantity}× ${li.title}${li.variant_title ? ` (${li.variant_title})` : ''}`;
 }
 
-function xeroNoteText(order) {
+function xeroNoteText(order, depositLineIds = new Set()) {
   const currency = order.currency || order.presentment_currency;
   const items = (order.line_items || [])
     .filter((li) => Number(li.quantity) > 0)
     .map((li) => {
       const v = lineValue(li);
-      return `${lineLabel(li)}${v === null ? '' : ` ${money(v, currency)}`}`;
+      // A restoration listing is priced at the deposit, so say so -- read
+      // as a plain sale it would look like the whole price.
+      const deposit = depositLineIds.has(String(li.id)) ? ' (restoration deposit)' : '';
+      return `${lineLabel(li)}${v === null ? '' : ` ${money(v, currency)}`}${deposit}`;
     });
   const head = `Shopify order ${orderNumber(order)} placed ${shopDate(order.processed_at || order.created_at)}`;
   const tail = `Order total ${money(order.total_price, currency)}`;
@@ -483,7 +504,9 @@ async function stepXeroContact(row, cfg) {
 
 /**
  * Split the order's items into ticket groups. Returns
- * { groups: Map<groupKey, { rule|null, items[] }>, leftOff: [{ li, reason }] }.
+ * { groups: Map<groupKey, { rule|null, items[] }>, leftOff: [{ li, reason }],
+ *   restoration: [li] } -- restoration items are also in leftOff, so the
+ * order's other tickets list them as "not on this ticket".
  */
 async function groupItems(order, cfg) {
   const items = (order.line_items || []).filter((li) => Number(li.quantity) > 0);
@@ -494,6 +517,7 @@ async function groupItems(order, cfg) {
 
   const groups = new Map();
   const leftOff = [];
+  const restoration = [];
   const add = (key, rule, li) => {
     if (!groups.has(key)) groups.set(key, { rule, items: [] });
     groups.get(key).items.push(li);
@@ -504,6 +528,11 @@ async function groupItems(order, cfg) {
     const rule = rules.find((r) => tags.includes(String(r.tag).trim().toLowerCase()));
     if (rule && rule.action === 'no_ticket') {
       leftOff.push({ li, reason: `tagged "${rule.tag}"` });
+    } else if (rule && rule.action === 'restoration') {
+      // Before the shipping / POS checks: an in-store restoration deposit
+      // still needs its restoration set up.
+      restoration.push(li);
+      leftOff.push({ li, reason: 'restoration sale — set up from the homepage', restoration: true });
     } else if (rule) {
       add(`rule:${rule.id}`, rule, li);
     } else if (li.requires_shipping === false) {
@@ -515,7 +544,7 @@ async function groupItems(order, cfg) {
       add('default', null, li);
     }
   }
-  return { groups, leftOff };
+  return { groups, leftOff, restoration };
 }
 
 async function ensureGroupTicket(row, order, groupKey, group, allGroups, leftOff) {
@@ -596,9 +625,16 @@ async function stepTickets(row, order, cfg) {
     return { status: 'waiting', message: `Waiting for payment (${order.financial_status || 'unknown'})` };
   }
 
-  const { groups, leftOff } = await groupItems(order, cfg);
-  const leftOffText = leftOff.map(({ li, reason }) => `${lineLabel(li)} — ${reason}`).join('; ');
+  const { groups, leftOff, restoration } = await groupItems(order, cfg);
+  const leftOffText = leftOff.filter((x) => !x.restoration)
+    .map(({ li, reason }) => `${lineLabel(li)} — ${reason}`).join('; ');
+  const restorationText = await restorationIntake.recordItems(
+    row, order, restoration.map((li) => ({ li, deposit: lineValue(li) })),
+  );
   if (!groups.size) {
+    if (restorationText) {
+      return { status: 'done', message: `${restorationText}${leftOffText ? `. Left off: ${leftOffText}` : ''}` };
+    }
     return { status: 'skipped', message: `No ticket needed: ${leftOffText || 'no items'}` };
   }
 
@@ -612,7 +648,8 @@ async function stepTickets(row, order, cfg) {
   }
   return {
     status: 'done',
-    message: `Ticket ${made.join(', ')}${leftOffText ? `. Left off: ${leftOffText}` : ''}`,
+    message: `Ticket ${made.join(', ')}${leftOffText ? `. Left off: ${leftOffText}` : ''}`
+      + `${restorationText ? `. ${restorationText}` : ''}`,
     patch: { ticket_ids: [...ids] },
   };
 }
@@ -631,7 +668,7 @@ async function stepXeroNote(row, order, cfg) {
     // Sent automatically once the customer gets linked (the sweep checks).
     return { status: 'waiting', message: "Customer isn't linked to a Xero contact yet" };
   }
-  const text = xeroNoteText(order);
+  const text = xeroNoteText(order, await restorationIntake.depositLineIds(order.id));
   await xero.addContactNote(customer.xero_contact_id, text);
   return { status: 'done', message: text };
 }
@@ -671,6 +708,9 @@ async function runSteps(initial) {
   const order = row.payload;
 
   if (row.cancelled && !row.cancel_handled_at) {
+    // First, so a restoration ticket someone opened on spec is detached
+    // from the order instead of archived with it (migration 100).
+    await restorationIntake.onOrderCancelled(String(order.id));
     await archiveOrderTickets(String(order.id));
     row = await saveRow(row.id, { cancel_handled_at: new Date() });
   }

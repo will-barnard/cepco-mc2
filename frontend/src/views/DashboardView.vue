@@ -7,6 +7,7 @@ import TicketTable from '../components/TicketTable.vue';
 import { progressOf, progressStyle } from '../progress';
 import PartsOrdersPanel from '../components/PartsOrdersPanel.vue';
 import ShopifyBadge from '../components/ShopifyBadge.vue';
+import RestorationIntakePanel from '../components/RestorationIntakePanel.vue';
 
 const auth = useAuth();
 const settings = useSettings();
@@ -220,6 +221,10 @@ onMounted(async () => {
     <div v-if="loading" class="empty">Loading…</div>
 
     <template v-else>
+      <!-- Restoration sales from Shopify waiting on a reviewer (migration
+           100). Renders nothing unless you're a reviewer with work to do. -->
+      <RestorationIntakePanel />
+
       <div
         v-if="auth.isAdmin && departing.length" class="card"
         style="margin-bottom: 24px; border-color: var(--amber)"

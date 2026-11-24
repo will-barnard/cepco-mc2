@@ -47,7 +47,7 @@ async function loadDetail(id0, user, db = { query }) {
 
   const [tickets, rentals, purchases, sets, photos, ticketPhotos, events, soldTo, logged] = await Promise.all([
     db.query(
-      `SELECT t.id, t.title, t.status_key, t.archived, t.updated_at, t.category_key,
+      `SELECT t.id, t.title, t.status_key, t.archived, t.updated_at, t.category_key, t.customer_id,
               s.label AS status_label
          FROM tickets t
          LEFT JOIN settings s ON s.category = 'ticket_status' AND s.key = t.status_key

@@ -5,6 +5,11 @@
  * it's on their page from now on (and every future ticket finds it there);
  * a buyer known only by name can be linked later from the ownership
  * history. Emits `done` with the whole instrument page after the sale.
+ *
+ * A piece that was being restored for sale (an open Repairs & Restoration
+ * ticket, migration 101): the form asks whether that ticket becomes the
+ * buyer's restoration (they go on it; it keeps its place) or is archived
+ * because the piece sold as-is.
  */
 import { ref, computed } from 'vue';
 import api from '../api';
@@ -19,6 +24,7 @@ const form = ref({
   sold_price: props.item.asking_price !== null && props.item.asking_price !== undefined ? String(Number(props.item.asking_price)) : '',
   sold_to_customer_id: '',
   sold_to_name: '',
+  restoration_ticket_action: 'keep',
 });
 const busy = ref(false);
 const error = ref('');
@@ -33,6 +39,13 @@ const payoutAssignee = computed(() => {
   const id = settings.active('ticket_category').find((c) => c.key === 'consignment_payout')?.meta?.default_assignee_id;
   return id ? refData.employees.find((e) => e.id === id && e.active)?.name : null;
 });
+
+// Stock restoration tickets: nobody on them, or the consignor (the same
+// set the server hands over -- restorationIntake.js stockTickets).
+const forSaleTickets = computed(() => (props.item.tickets || [])
+  .filter((t) => !t.archived && t.category_key === 'repairs_restoration'
+    && !/^(Inventory|Fleet) QC —/i.test(t.title || '')
+    && (!t.customer_id || (isConsignment.value && t.customer_id === props.item.customer_id))));
 
 function onBuyer(row) {
   if (row) form.value.sold_to_name = row.name;
@@ -51,6 +64,7 @@ async function submit() {
       sold_price: form.value.sold_price === '' ? null : form.value.sold_price,
       sold_to_customer_id: form.value.sold_to_customer_id || null,
       sold_to_name: form.value.sold_to_name.trim() || null,
+      restoration_ticket_action: forSaleTickets.value.length ? form.value.restoration_ticket_action : undefined,
     }));
   } catch (err) {
     error.value = err.message;
@@ -74,6 +88,16 @@ async function submit() {
     <div class="field">
       <label>Buyer's name <span class="muted">(if they have no customer record yet)</span></label>
       <input v-model="form.sold_to_name" />
+    </div>
+    <div v-if="forSaleTickets.length" class="field">
+      <label>
+        Its restoration ticket{{ forSaleTickets.length > 1 ? 's' : '' }}
+        <span class="muted">({{ forSaleTickets.map((t) => `#${t.id}`).join(', ') }})</span>
+      </label>
+      <select v-model="form.restoration_ticket_action">
+        <option value="keep">Keep — it's the buyer's restoration now</option>
+        <option value="archive">Archive — sold as-is</option>
+      </select>
     </div>
     <p class="muted small" style="margin-top: -4px">
       It becomes the buyer's instrument<template v-if="form.sold_to_customer_id"> and shows on their customer page</template>.
